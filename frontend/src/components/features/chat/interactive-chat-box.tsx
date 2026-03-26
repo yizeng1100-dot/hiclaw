@@ -17,7 +17,6 @@ import type { AgentInfo } from "#/api/custom-skill-service/agent-service.api";
 import { TaskService } from "#/api/custom-skill-service/task-service.api";
 import { useCreateConversation } from "#/hooks/mutation/use-create-conversation";
 import { PerfAnalysisInlinePanel } from "#/components/features/custom/skill-management/perf-analysis-inline-panel";
-import { KernelDiffInlinePanel } from "#/components/features/custom/skill-management/kernel-diff-inline-panel";
 // >>> END CUSTOM <<<
 
 interface InteractiveChatBoxProps {
@@ -37,6 +36,7 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
     addImageLoading,
     removeImageLoading,
     subConversationTaskId,
+    setShouldHideSuggestions,
   } = useConversationStore();
 
   // >>> CUSTOM: HiClaw — Agent selection <<<
@@ -44,8 +44,8 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
     null,
   );
   const [agentStarting, setAgentStarting] = React.useState(false);
-  const [showPanelType, setShowPanelType] = React.useState<string | null>(null);
-  const [panelAgentId, setPanelAgentId] = React.useState<string | null>(null);
+  const [showPerfPanel, setShowPerfPanel] = React.useState(false);
+  const [perfAgentId, setPerfAgentId] = React.useState<string | null>(null);
   const { mutateAsync: createConversation } = useCreateConversation();
 
   const handleSelectAgent = React.useCallback(
@@ -58,10 +58,11 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
         /* ignore */
       }
 
-      // Agents with inline panels: show panel in chat box
-      if (agentType === "perf-analysis" || agentType === "kernel-diff") {
-        setPanelAgentId(agent.id);
-        setShowPanelType(agentType);
+      // Perf-analysis agent: show inline panel in chat box
+      if (agentType === "perf-analysis") {
+        setPerfAgentId(agent.id);
+        setShowPerfPanel(true);
+        setShouldHideSuggestions(true);
         return;
       }
 
@@ -88,28 +89,24 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
         setActiveAgentName(null);
       }
     },
-    [navigate, createConversation],
+    [navigate, createConversation, setShouldHideSuggestions],
   );
 
-  // Panel submit: send analysis message in current conversation
-  const handlePanelSubmit = React.useCallback(
-    (message: string) => {
+  // Perf panel: submit analysis in current conversation
+  const handlePerfPanelSubmit = React.useCallback(
+    (_tracePath: string, message: string) => {
       // Track HiClaw task in background (non-blocking)
-      if (panelAgentId) {
-        TaskService.createTask({ agent_id: panelAgentId }).catch(() => {});
+      if (perfAgentId) {
+        TaskService.createTask({ agent_id: perfAgentId }).catch(() => {});
       }
       // Submit message to current conversation
       onSubmit(message, [], []);
-      setShowPanelType(null);
-      setPanelAgentId(null);
+      setShowPerfPanel(false);
+      setPerfAgentId(null);
+      setShouldHideSuggestions(false);
     },
-    [panelAgentId, onSubmit],
+    [perfAgentId, onSubmit, setShouldHideSuggestions],
   );
-
-  const dismissPanel = React.useCallback(() => {
-    setShowPanelType(null);
-    setPanelAgentId(null);
-  }, []);
   // >>> END CUSTOM <<<
 
   const { curAgentState } = useAgentState();
@@ -235,18 +232,15 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
 
   return (
     <div data-testid="interactive-chat-box">
-      {/* >>> CUSTOM: HiClaw — Agent inline panels <<< */}
-      {showPanelType === "perf-analysis" && (
+      {/* >>> CUSTOM: HiClaw — Perf analysis inline panel <<< */}
+      {showPerfPanel && (
         <PerfAnalysisInlinePanel
-          onSubmit={(_trace, msg) => handlePanelSubmit(msg)}
-          onDismiss={dismissPanel}
-          disabled={agentStarting}
-        />
-      )}
-      {showPanelType === "kernel-diff" && (
-        <KernelDiffInlinePanel
-          onSubmit={handlePanelSubmit}
-          onDismiss={dismissPanel}
+          onSubmit={handlePerfPanelSubmit}
+          onDismiss={() => {
+            setShowPerfPanel(false);
+            setPerfAgentId(null);
+            setShouldHideSuggestions(false);
+          }}
           disabled={agentStarting}
         />
       )}

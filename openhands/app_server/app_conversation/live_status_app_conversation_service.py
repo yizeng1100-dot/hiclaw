@@ -1175,10 +1175,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         else:
             agent = Agent(
                 llm=llm,
-                tools=get_default_tools(enable_browser=True),
+                tools=get_default_tools(enable_browser=False),
                 system_prompt_kwargs={'cli_mode': False},
                 condenser=condenser,
-                mcp_config=mcp_config,
             )
 
         # Prepare system message suffix based on agent type

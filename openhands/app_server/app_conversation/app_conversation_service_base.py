@@ -137,7 +137,7 @@ class AppConversationServiceBase(AppConversationService, ABC):
                 project_dir=project_dir,
                 org_config=org_config,
                 sandbox_config=sandbox_config,
-                load_public=True,
+                load_public=False,
                 load_user=True,
                 load_project=True,
                 load_org=True,
