@@ -68,6 +68,10 @@ class V1ConversationService {
     trigger?: ConversationTrigger,
     parent_conversation_id?: string,
     agent_type?: "default" | "plan",
+    // >>> CUSTOM: HiClaw <<<
+    remote_agent_url?: string,
+    remote_session_api_key?: string,
+    // >>> END CUSTOM <<<
   ): Promise<V1AppConversationStartTask> {
     const body: V1AppConversationStartRequest = {
       selected_repository: selectedRepository,
@@ -78,6 +82,10 @@ class V1ConversationService {
       trigger,
       parent_conversation_id: parent_conversation_id || null,
       agent_type,
+      // >>> CUSTOM: HiClaw <<<
+      remote_agent_url: remote_agent_url || null,
+      remote_session_api_key: remote_session_api_key || null,
+      // >>> END CUSTOM <<<
     };
 
     // suggested_task implies the backend will construct the initial_message

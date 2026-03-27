@@ -245,6 +245,13 @@ class LLM(RetryMixin, DebugMixin):
         )
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper for the litellm completion function. Logs the input and output of the completion function."""
+            # >>> CUSTOM: HiClaw — dynamic CoMagic headers <<<
+            try:
+                from custom.comagic_hook import inject_comagic_headers
+                kwargs = inject_comagic_headers(self.config, kwargs)
+            except ImportError:
+                pass
+            # >>> END CUSTOM <<<
             from openhands.io import json
 
             messages_kwarg: (

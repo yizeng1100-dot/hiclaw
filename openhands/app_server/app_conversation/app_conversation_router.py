@@ -104,7 +104,7 @@ class AgentServerContext:
     """Context for accessing the agent server for a conversation."""
 
     conversation: AppConversationInfo
-    sandbox: SandboxInfo
+    sandbox: SandboxInfo | None  # None for remote workers
     sandbox_spec: SandboxSpecInfo
     agent_server_url: str
     session_api_key: str | None
@@ -139,6 +139,20 @@ async def _get_agent_server_context(
             status_code=status.HTTP_404_NOT_FOUND,
             content={'error': f'Conversation {conversation_id} not found'},
         )
+
+    # >>> CUSTOM: HiClaw — remote worker shortcut <<<
+    if (conversation.sandbox_id and conversation.sandbox_id.startswith('remote-')
+            and conversation.remote_agent_url):
+        # For remote workers, use the stored remote_agent_url directly
+        sandbox_spec = await sandbox_spec_service.get_default_sandbox_spec()
+        return AgentServerContext(
+            conversation=conversation,
+            sandbox=None,
+            sandbox_spec=sandbox_spec,
+            agent_server_url=conversation.remote_agent_url,
+            session_api_key='',
+        )
+    # >>> END CUSTOM <<<
 
     # Get the sandbox info
     sandbox = await sandbox_service.get_sandbox(conversation.sandbox_id)

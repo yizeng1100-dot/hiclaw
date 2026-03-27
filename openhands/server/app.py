@@ -109,4 +109,10 @@ if server_config.app_mode == AppMode.OPENHANDS:
 if server_config.enable_v1:
     app.include_router(v1_router.router)
 app.include_router(trajectory_router)
+# >>> CUSTOM: HiClaw <<<
+from openhands.server.routes.runtime_proxy import router as runtime_proxy_router
+from openhands.server.routes.hiclaw_skills import router as hiclaw_skills_router
+app.include_router(runtime_proxy_router)
+app.include_router(hiclaw_skills_router)
+# >>> END CUSTOM <<<
 add_health_endpoints(app)

@@ -6,6 +6,9 @@ import { Provider } from "#/types/settings";
 import { CreateMicroagent, Conversation } from "#/api/open-hands.types";
 import { useTracking } from "#/hooks/use-tracking";
 import { useSettings } from "#/hooks/query/use-settings";
+// >>> CUSTOM: HiClaw <<<
+import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
+// >>> END CUSTOM <<<
 
 interface CreateConversationVariables {
   query?: string;
@@ -35,6 +38,10 @@ export const useCreateConversation = () => {
   const queryClient = useQueryClient();
   const { trackConversationCreated } = useTracking();
   const { data: settings } = useSettings();
+  // >>> CUSTOM: HiClaw <<<
+  const remoteEnabled = useRemoteWorkerStore((s) => s.enabled);
+  const proxyUrl = useRemoteWorkerStore((s) => s.proxyUrl);
+  // >>> END CUSTOM <<<
 
   return useMutation({
     mutationKey: ["create-conversation"],
@@ -51,10 +58,13 @@ export const useCreateConversation = () => {
         agentType,
       } = variables;
 
+      // >>> CUSTOM: HiClaw — use proxyUrl from store (machine already provisioned) <<<
+      const remoteAgentUrl = remoteEnabled && proxyUrl ? proxyUrl : undefined;
+      // >>> END CUSTOM <<<
+
       const useV1 = !!settings?.v1_enabled && !createMicroagent;
 
       if (useV1) {
-        // Use V1 API - creates a conversation start task
         const startTask = await V1ConversationService.createConversation(
           repository?.name,
           repository?.gitProvider,
@@ -62,14 +72,14 @@ export const useCreateConversation = () => {
           repository?.branch,
           conversationInstructions,
           suggestedTask,
-          undefined, // trigger - set by backend when applicable
+          undefined,
           parentConversationId,
           agentType,
+          // >>> CUSTOM: HiClaw <<<
+          remoteAgentUrl,
+          // >>> END CUSTOM <<<
         );
 
-        // Return a special task ID that the frontend will recognize
-        // Format: "task-{uuid}" so the conversation screen can poll the task
-        // Once the task is ready, it will navigate to the actual conversation ID
         return {
           conversation_id: `task-${startTask.id}`,
           session_api_key: null,

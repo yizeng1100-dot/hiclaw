@@ -91,6 +91,10 @@ class AppConversationInfo(BaseModel):
 
     public: bool | None = None
 
+    # >>> CUSTOM: HiClaw <<<
+    remote_agent_url: str | None = None
+    # >>> END CUSTOM <<<
+
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -160,6 +164,14 @@ class AppConversationStartRequest(OpenHandsModel):
     pr_number: list[int] = Field(default_factory=list)
     parent_conversation_id: OpenHandsUUID | None = None
     agent_type: AgentType = Field(default=AgentType.DEFAULT)
+
+    # >>> CUSTOM: HiClaw — remote worker support <<<
+    remote_agent_url: str | None = Field(
+        default=None,
+        description='External agent-server URL (from Agent Worker Manager). When set, skips local sandbox creation.',
+    )
+    remote_session_api_key: str | None = Field(default=None)
+    # >>> END CUSTOM <<<
 
     public: bool | None = None
 

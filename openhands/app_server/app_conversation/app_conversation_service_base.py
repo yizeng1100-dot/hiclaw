@@ -93,7 +93,7 @@ class AppConversationServiceBase(AppConversationService, ABC):
 
     async def load_and_merge_all_skills(
         self,
-        sandbox: SandboxInfo,
+        sandbox: SandboxInfo | None,
         selected_repository: str | None,
         project_dir: str,
         agent_server_url: str,
@@ -128,12 +128,12 @@ class AppConversationServiceBase(AppConversationService, ABC):
             org_config = await build_org_config(selected_repository, self.user_context)
 
             # Build sandbox config (exposed URLs)
-            sandbox_config = build_sandbox_config(sandbox)
+            sandbox_config = build_sandbox_config(sandbox) if sandbox else None
 
             # Single API call to agent-server for ALL skills
             all_skills = await load_skills_from_agent_server(
                 agent_server_url=agent_server_url,
-                session_api_key=sandbox.session_api_key,
+                session_api_key=sandbox.session_api_key if sandbox else '',
                 project_dir=project_dir,
                 org_config=org_config,
                 sandbox_config=sandbox_config,

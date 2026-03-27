@@ -100,6 +100,9 @@ class StoredConversationMetadata(Base):  # type: ignore
     sandbox_id = Column(String, nullable=True, index=True)
     parent_conversation_id = Column(String, nullable=True, index=True)
     public = Column(Boolean, nullable=True, index=True)
+    # >>> CUSTOM: HiClaw <<<
+    remote_agent_url = Column(String, nullable=True)
+    # >>> END CUSTOM <<<
 
 
 @dataclass
@@ -356,6 +359,9 @@ class SQLAppConversationInfoService(AppConversationInfoService):
                 else None
             ),
             public=info.public,
+            # >>> CUSTOM: HiClaw <<<
+            remote_agent_url=info.remote_agent_url,
+            # >>> END CUSTOM <<<
         )
 
         await self.db_session.merge(stored)
@@ -543,6 +549,9 @@ class SQLAppConversationInfoService(AppConversationInfoService):
             ),
             sub_conversation_ids=sub_conversation_ids or [],
             public=stored.public,
+            # >>> CUSTOM: HiClaw <<<
+            remote_agent_url=getattr(stored, 'remote_agent_url', None),
+            # >>> END CUSTOM <<<
             created_at=created_at,
             updated_at=updated_at,
         )

@@ -31,6 +31,7 @@ import { Messages as V1Messages } from "#/components/v1/chat";
 // >>> CUSTOM: HiClaw <<<
 import { useSkillInputStore } from "#/stores/skill-input-store";
 import { SkillInputCard } from "#/components/features/custom/skill-management/skill-input-card";
+import { SkillsCommitBar } from "#/components/features/custom/skills-commit-bar";
 // >>> END CUSTOM <<<
 import { useUnifiedUploadFiles } from "#/hooks/mutation/use-unified-upload-files";
 import { useConfig } from "#/hooks/query/use-config";
@@ -412,6 +413,9 @@ export function ChatInterface() {
             />
           )}
 
+          {/* >>> CUSTOM: HiClaw — skills commit bar <<< */}
+          <SkillsCommitBar />
+          {/* >>> END CUSTOM <<< */}
           <InteractiveChatBox onSubmit={handleSendMessage} />
         </div>
 
