@@ -60,13 +60,13 @@ export const useUnifiedVSCodeUrl = () => {
             try {
               const machinesResp = await fetch("/runtime/manager/api/machines");
               const machines = await machinesResp.json();
-              const machine = machines.find((m: { code_server_port: number; host: string; status: string }) =>
+              const machine = machines.find((m: { code_server_port: number; host: string; workspace: string; status: string }) =>
                 m.code_server_port > 0 && m.status === "ready"
               );
               if (machine?.code_server_port && machine?.host) {
                 // Direct connect to remote code-server (port opened on remote machine)
                 return {
-                  url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent("/root/workspace")}`,
+                  url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(machine.workspace || "/root/workspace")}`,
                   error: null,
                 };
               }
