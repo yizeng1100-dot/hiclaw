@@ -45,9 +45,12 @@ else
 fi
 
 # ─── 2. Gitea ───
+RELEASE_URL="https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1"
+
 echo "[2/5] Setting up Gitea..."
 if ! command -v gitea &>/dev/null; then
-    echo "  Installing Gitea..."
+    echo "  Installing Gitea (from GitHub Release)..."
+    curl -fSL "$RELEASE_URL/gitea" -o /tmp/gitea || \
     wget -q -O /tmp/gitea https://dl.gitea.com/gitea/1.22.6/gitea-1.22.6-linux-amd64
     chmod +x /tmp/gitea
     sudo mv /tmp/gitea /usr/local/bin/gitea
@@ -72,8 +75,7 @@ MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
 if [ ! -d "$MANAGER_DIR/deps/wheels" ]; then
     echo "  Building offline dependency bundle..."
     mkdir -p "$MANAGER_DIR/deps"
-    # Download from GitHub Release if available
-    RELEASE_URL="https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1"
+    # Download from GitHub Release
     for f in code-server.tar.gz python3-standalone.tar.gz; do
         if [ ! -f "$MANAGER_DIR/deps/$f" ]; then
             echo "  Downloading $f from GitHub Release..."

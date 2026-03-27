@@ -1616,7 +1616,21 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             from openhands.server.routes.hiclaw_skill_loader import load_hiclaw_skills, format_skills_for_prompt
             hiclaw_skills = load_hiclaw_skills()
             if hiclaw_skills:
-                skills_prompt = format_skills_for_prompt(hiclaw_skills)
+                # Use the actual remote workspace path (from request), not the internal /workspace/project
+                actual_workspace = getattr(request, 'workspace', None) or working_dir
+                if actual_workspace == '/workspace/project' and hasattr(request, 'remote_agent_url') and request.remote_agent_url:
+                    # For remote workers, try to get the real workspace from Worker Manager
+                    try:
+                        import httpx as _httpx
+                        _resp = await self.httpx_client.get('http://localhost:9090/api/machines', timeout=3)
+                        _machines = _resp.json()
+                        for _m in _machines:
+                            if _m.get('status') == 'ready':
+                                actual_workspace = _m.get('workspace', working_dir)
+                                break
+                    except Exception:
+                        pass
+                skills_prompt = format_skills_for_prompt(hiclaw_skills, workspace=actual_workspace)
                 if system_message_suffix:
                     system_message_suffix = f'{system_message_suffix}\n\n{skills_prompt}'
                 else:

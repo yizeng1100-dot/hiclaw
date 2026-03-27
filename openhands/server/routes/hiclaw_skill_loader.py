@@ -72,14 +72,24 @@ def load_hiclaw_skills() -> list[HiClawSkill]:
     return skills
 
 
-def format_skills_for_prompt(skills: list[HiClawSkill]) -> str:
+def format_skills_for_prompt(skills: list[HiClawSkill], workspace: str = '/root/workspace') -> str:
     """Format skills into a system prompt suffix."""
     if not skills:
         return ''
 
+    skills_dir = f'{workspace}/.hiclaw/skills'
+
     parts = [
         '<hiclaw_skills>',
-        'The following HiClaw skills are available. '
+        f'HiClaw skills are stored at: {skills_dir}/',
+        'Each skill is a folder with a SKILL.md file and optional scripts/ directory.',
+        '',
+        'You CAN and SHOULD edit these skill files when the user asks you to:',
+        f'- To read a skill: cat {skills_dir}/{{skill-name}}/SKILL.md',
+        f'- To edit a skill: edit {skills_dir}/{{skill-name}}/SKILL.md',
+        f'- To create a new skill: mkdir {skills_dir}/{{name}} && write SKILL.md',
+        f'- To add a script: write to {skills_dir}/{{name}}/scripts/{{script}}',
+        '',
         'When the user message matches a skill\'s trigger keywords, '
         'follow that skill\'s instructions.',
         '',
