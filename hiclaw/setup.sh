@@ -12,11 +12,44 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 HICLAW_DIR="/opt/hiclaw"
 DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
+PYTHON_ENV_BUNDLE="$SCRIPT_DIR/hiclaw-python-env.tar.gz"
 MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
 
 echo "=== HiClaw Setup ==="
 echo "Project: $PROJECT_DIR"
 echo ""
+
+# ─── 0. Offline Python environment (if bundle exists) ───
+if [ -f "$PYTHON_ENV_BUNDLE" ]; then
+    echo "[0] Found Python environment bundle, installing offline..."
+    PYENV_TMP=$(mktemp -d)
+    tar xzf "$PYTHON_ENV_BUNDLE" -C "$PYENV_TMP"
+
+    # Install Python standalone if system doesn't have 3.12
+    if ! python3 -c "import sys; exit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
+        if [ -f "$PYENV_TMP/python3-standalone.tar.gz" ]; then
+            echo "  Installing Python 3.12 standalone..."
+            tar xzf "$PYENV_TMP/python3-standalone.tar.gz" -C /usr/local/
+            ln -sf /usr/local/python/bin/python3.12 /usr/local/bin/python3.12
+            ln -sf /usr/local/python/bin/python3.12 /usr/local/bin/python3
+            ln -sf /usr/local/python/bin/pip3.12 /usr/local/bin/pip3
+        fi
+    fi
+
+    # Create venv and install all deps offline
+    echo "  Creating venv and installing packages offline (380+ packages)..."
+    python3 -m venv /opt/hiclaw/venv 2>/dev/null || python3.12 -m venv /opt/hiclaw/venv
+    /opt/hiclaw/venv/bin/pip install --no-index \
+        --find-links "$PYENV_TMP/wheels/" \
+        -r "$PYENV_TMP/requirements-clean.txt" 2>&1 | tail -3
+
+    # Make the venv available for poetry
+    echo "  Python env installed: $(/opt/hiclaw/venv/bin/python --version), $(ls $PYENV_TMP/wheels/ | wc -l) packages"
+    export PATH="/opt/hiclaw/venv/bin:$PATH"
+
+    rm -rf "$PYENV_TMP"
+    echo ""
+fi
 
 # ─── Prerequisites check ───
 echo "[Pre] Checking prerequisites..."

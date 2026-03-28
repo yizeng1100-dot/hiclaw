@@ -8,6 +8,16 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 HICLAW_DIR="/opt/hiclaw"
 MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
 
+# Use offline venv if available, otherwise use system Python
+if [ -d "$HICLAW_DIR/venv/bin" ]; then
+    export PATH="$HICLAW_DIR/venv/bin:$PATH"
+    PYTHON="$HICLAW_DIR/venv/bin/python3"
+    UVICORN="$HICLAW_DIR/venv/bin/uvicorn"
+else
+    PYTHON="python3"
+    UVICORN="uvicorn"
+fi
+
 echo "=== Starting HiClaw Services ==="
 
 # 1. Gitea
@@ -25,7 +35,7 @@ fi
 # 2. Worker Manager
 if ! ss -tlnp | grep -q ":9090 "; then
     echo "[2/3] Starting Worker Manager (port 9090)..."
-    cd "$MANAGER_DIR" && python3 run.py > /tmp/manager.log 2>&1 &
+    cd "$MANAGER_DIR" && $PYTHON run.py > /tmp/manager.log 2>&1 &
     disown
     cd "$PROJECT_DIR"
     sleep 2
@@ -36,7 +46,7 @@ fi
 # 3. OpenHands App Server
 if ! ss -tlnp | grep -q ":3000 "; then
     echo "[3/3] Starting OpenHands App Server (port 3000)..."
-    cd "$PROJECT_DIR" && uvicorn openhands.server.listen:app \
+    cd "$PROJECT_DIR" && $UVICORN openhands.server.listen:app \
         --host 0.0.0.0 --port 3000 \
         > ~/openhands.log 2>&1 &
     disown
