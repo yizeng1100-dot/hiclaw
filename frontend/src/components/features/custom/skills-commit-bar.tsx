@@ -7,6 +7,8 @@ import { cn } from "#/utils/utils";
 import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
 import axios from "axios";
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+
 interface SkillFile {
   status: string;
   path: string;
@@ -19,16 +21,14 @@ interface DiffResult {
 }
 
 export function SkillsCommitBar() {
-  const { enabled, machineStatus } = useRemoteWorkerStore();
   const workerManagerUrl = useRemoteWorkerStore((s) => s.workerManagerUrl);
   const [diffResult, setDiffResult] = React.useState<DiffResult | null>(null);
   const [showDiff, setShowDiff] = React.useState(false);
   const [committing, setCommitting] = React.useState(false);
   const [committed, setCommitted] = React.useState(false);
 
-  // Poll for skill changes every 10 seconds
+  // Poll for skill changes every 10 seconds — always check, don't depend on store state
   React.useEffect(() => {
-    if (!enabled || machineStatus !== "ready") return;
 
     const checkDiff = async () => {
       try {
@@ -52,7 +52,7 @@ export function SkillsCommitBar() {
     checkDiff();
     const interval = setInterval(checkDiff, 10000);
     return () => clearInterval(interval);
-  }, [enabled, machineStatus]);
+  }, [workerManagerUrl]);
 
   const handleCommit = async () => {
     setCommitting(true);
@@ -78,7 +78,6 @@ export function SkillsCommitBar() {
   };
 
   // Don't render if no changes or not remote
-  if (!enabled || machineStatus !== "ready") return null;
   if (!diffResult?.has_changes && !committed) return null;
 
   // Just committed — show success briefly

@@ -18,6 +18,72 @@ echo "=== HiClaw Setup ==="
 echo "Project: $PROJECT_DIR"
 echo ""
 
+# ─── Prerequisites check ───
+echo "[Pre] Checking prerequisites..."
+MISSING=""
+
+check_cmd() {
+    if ! command -v "$1" &>/dev/null; then
+        echo "  ✗ $1 not found"
+        MISSING="$MISSING $1"
+    else
+        echo "  ✓ $1 ($($1 --version 2>&1 | head -1))"
+    fi
+}
+
+check_cmd python3
+check_cmd pip3
+check_cmd git
+check_cmd node
+check_cmd npm
+
+# Check Python version >= 3.12
+if command -v python3 &>/dev/null; then
+    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    if python3 -c "import sys; exit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
+        echo "  ✓ Python version $PY_VER (>= 3.12)"
+    else
+        echo "  ✗ Python $PY_VER too old, need >= 3.12"
+        MISSING="$MISSING python3.12"
+    fi
+fi
+
+if [ -n "$MISSING" ]; then
+    echo ""
+    echo "Missing dependencies:$MISSING"
+    echo ""
+    echo "Install on Ubuntu/Debian:"
+    echo "  sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv python3-pip git nodejs npm"
+    echo "  pip3 install poetry"
+    echo ""
+    read -p "Try to install automatically? [y/N] " REPLY
+    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        echo "Installing..."
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq python3.12 python3.12-venv python3-pip git 2>/dev/null || true
+        # Node.js via NodeSource if not available
+        if ! command -v node &>/dev/null; then
+            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
+            sudo apt-get install -y -qq nodejs 2>/dev/null || true
+        fi
+        pip3 install poetry 2>/dev/null || true
+        echo "Dependencies installed. Re-checking..."
+        for cmd in python3 pip3 git node npm; do
+            if command -v "$cmd" &>/dev/null; then
+                echo "  ✓ $cmd"
+            else
+                echo "  ✗ $cmd still missing — please install manually"
+                exit 1
+            fi
+        done
+    else
+        echo "Please install the missing dependencies and re-run setup."
+        exit 1
+    fi
+fi
+
+echo ""
+
 # ─── 0. Extract deps bundle ───
 if [ -f "$DEPS_BUNDLE" ]; then
     echo "[0/5] Extracting deps bundle..."
