@@ -16,17 +16,23 @@ from .ssh_client import SSHClient
 
 logger = logging.getLogger(__name__)
 
+# Remote machine paths — configurable via environment variables
+REMOTE_VENV_PATH = os.environ.get('HICLAW_REMOTE_VENV', '/opt/agent-venv')
+REMOTE_DEPS_PATH = os.environ.get('HICLAW_REMOTE_DEPS', '/opt/agent-deps')
+REMOTE_CODE_SERVER_PATH = os.environ.get('HICLAW_REMOTE_CODE_SERVER', '/usr/local/lib/code-server')
+REMOTE_PYTHON_INSTALL_PATH = os.environ.get('HICLAW_REMOTE_PYTHON_PATH', '/usr/local')
+
 # Template-specific config
 TEMPLATES = {
     "openhands": {
-        "venv_path": "/opt/agent-venv",
+        "venv_path": REMOTE_VENV_PATH,
         "pip_package": "openhands-agent-server==1.14 openhands-sdk==1.14 openhands-tools==1.14",
-        "binary": "/opt/agent-venv/bin/agent-server",
+        "binary": f"{REMOTE_VENV_PATH}/bin/agent-server",
         "health_check": "/health",
     },
 }
 
-# Offline bundle paths
+# Offline bundle paths (on app-server)
 DEPS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "deps")
 BUNDLE_PATH = os.path.join(DEPS_DIR, "agent-deps-bundle.tar.gz")
 
@@ -75,9 +81,9 @@ class Provisioner:
             python_tar = os.path.join(DEPS_DIR, "python3-standalone.tar.gz")
             if os.path.exists(python_tar):
                 await self.ssh.upload_file(python_tar, "/tmp/python3-standalone.tar.gz")
-                await self.ssh.run("tar xzf /tmp/python3-standalone.tar.gz -C /usr/local/ && rm /tmp/python3-standalone.tar.gz", timeout=60)
-                await self.ssh.run("ln -sf /usr/local/python/bin/python3 /usr/local/bin/python3", timeout=5)
-                await self.ssh.run("ln -sf /usr/local/python/bin/pip3 /usr/local/bin/pip3", timeout=5)
+                await self.ssh.run(f"tar xzf /tmp/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm /tmp/python3-standalone.tar.gz", timeout=60)
+                await self.ssh.run(f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3 /usr/local/bin/python3", timeout=5)
+                await self.ssh.run(f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/pip3 /usr/local/bin/pip3", timeout=5)
                 _, _, ec = await self.ssh.run("python3 --version", timeout=5)
                 if ec == 0:
                     yield _evt(ProvisionStep.INSTALL_PYTHON, "completed")
@@ -155,7 +161,7 @@ class Provisioner:
 
                 await self.ssh.upload_file(wheels_archive, "/tmp/agent-wheels.tar.gz",
                                            progress_callback=_on_progress)
-                await self.ssh.run("mkdir -p /opt/agent-deps && tar xzf /tmp/agent-wheels.tar.gz -C /opt/agent-deps/", timeout=60)
+                await self.ssh.run(f"mkdir -p {REMOTE_DEPS_PATH} && tar xzf /tmp/agent-wheels.tar.gz -C {REMOTE_DEPS_PATH}/", timeout=60)
                 await self.ssh.run("rm -f /tmp/agent-wheels.tar.gz", timeout=5)
                 os.remove(wheels_archive)
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
@@ -167,7 +173,7 @@ class Provisioner:
                 )
                 await self.ssh.run(f"python3 -m venv {venv}", timeout=30)
                 _, stderr, ec = await self.ssh.run(
-                    f"{venv}/bin/pip install --no-index --find-links /opt/agent-deps/wheels/ "
+                    f"{venv}/bin/pip install --no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"{self.tmpl['pip_package']}",
                     timeout=300,
                 )
@@ -203,9 +209,9 @@ class Provisioner:
                     if ec == 0:
                         # Extract and install
                         await self.ssh.run(
-                            f"mkdir -p /usr/local/lib/code-server && "
-                            f"tar xzf /tmp/{CS_FILE} -C /usr/local/lib/code-server --strip-components=1 && "
-                            f"ln -sf /usr/local/lib/code-server/bin/code-server /usr/local/bin/code-server && "
+                            f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
+                            f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
+                            f"ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server /usr/local/bin/code-server && "
                             f"rm -f /tmp/{CS_FILE}",
                             timeout=60,
                         )
@@ -241,9 +247,9 @@ class Provisioner:
                     await self.ssh.upload_file(cs_tar, f"/tmp/{CS_FILE}",
                                                progress_callback=_cs_progress)
                     await self.ssh.run(
-                        f"mkdir -p /usr/local/lib/code-server && "
-                        f"tar xzf /tmp/{CS_FILE} -C /usr/local/lib/code-server --strip-components=1 && "
-                        f"ln -sf /usr/local/lib/code-server/bin/code-server /usr/local/bin/code-server && "
+                        f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
+                        f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
+                        f"ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server /usr/local/bin/code-server && "
                         f"rm -f /tmp/{CS_FILE}",
                         timeout=60,
                     )
