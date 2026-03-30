@@ -94,6 +94,14 @@ class LLM(RetryMixin, DebugMixin):
         self.model_info: ModelInfo | None = None
         self._function_calling_active: bool = False
         self.retry_listener = retry_listener
+
+        # >>> CUSTOM: HiClaw — enable raw request/response logging via env var <<<
+        if os.environ.get('HICLAW_LLM_DEBUG', '').lower() in ('1', 'true', 'yes'):
+            import litellm as _litellm
+            _litellm.log_raw_request_response = True
+            _litellm.set_verbose = True
+        # >>> END CUSTOM <<<
+
         if self.config.log_completions:
             if self.config.log_completions_folder is None:
                 raise RuntimeError(
