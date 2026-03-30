@@ -3,8 +3,9 @@ import React from "react";
 
 export default function SkillManagement() {
   // Use proxy through app-server to avoid X-Frame-Options blocking
+  // Gitea repo path - admin user configured during setup
   const giteaUrl = "/runtime/gitea/hiclaw-admin/skills";
-  const directUrl = `${window.location.protocol}//${window.location.hostname}:3300/hiclaw-admin/skills`;
+  const directUrl = `${window.location.protocol}//${window.location.hostname}:3300/hiclaw-admin/skills`  // TODO: make configurable;
 
   return (
     <div className="w-full h-full flex flex-col">

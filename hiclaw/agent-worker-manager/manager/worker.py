@@ -22,7 +22,7 @@ TEMPLATES = {
             "health_check": "/health",
         },
         "host": {
-            "command": "/opt/agent-venv/bin/agent-server --port {port}",
+            "command": "{REMOTE_VENV_PATH}/bin/agent-server --port {port}",
             "port": 8000,
             "health_check": "/health",
         },

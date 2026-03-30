@@ -293,8 +293,8 @@ class MachineManager:
 
         # Set dark theme to match container VS Code
         await ssh.run(
-            "mkdir -p /root/.local/share/code-server/User && "
-            "cat > /root/.local/share/code-server/User/settings.json << 'VSEOF'\n"
+            "mkdir -p ~/.local/share/code-server/User && "
+            "cat > ~/.local/share/code-server/User/settings.json << 'VSEOF'\n"
             '{"workbench.colorTheme":"Default Dark Modern","workbench.startupEditor":"none","telemetry.telemetryLevel":"off"}\n'
             "VSEOF",
             timeout=5,

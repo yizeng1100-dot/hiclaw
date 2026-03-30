@@ -29,7 +29,7 @@ router = APIRouter(prefix='/runtime')
 async def proxy_gitea(path: str, request: Request):
     """Proxy requests to the local Gitea instance for skills management.
 
-    Gitea is configured with ROOT_URL=http://localhost:3000/runtime/gitea/
+    Gitea ROOT_URL should match: http://{APP_HOST}:{APP_PORT}/runtime/gitea/
     so it generates all internal links with the /runtime/gitea/ prefix.
     We strip X-Frame-Options to allow iframe embedding.
     """
