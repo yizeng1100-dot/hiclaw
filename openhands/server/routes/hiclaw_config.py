@@ -35,3 +35,7 @@ GITEA_REPO_AUTH_URL = f'http://{GITEA_ADMIN_USER}:{GITEA_ADMIN_PASSWORD}@localho
 
 # ─── Defaults ───
 DEFAULT_WORKSPACE = os.environ.get('HICLAW_DEFAULT_WORKSPACE', '/root/workspace')
+
+# App server IP reachable from remote machines (for MCP URL replacement)
+# MUST be set in internal networks where icanhazip.com is not accessible
+APP_IP = os.environ.get('HICLAW_APP_IP', '')

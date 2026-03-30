@@ -1640,19 +1640,22 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             _logger.warning(f'Failed to load HiClaw skills: {e}')
         # >>> END CUSTOM — remote workers can't reach host.docker.internal <<<
         if is_remote_worker:
-            # Replace host.docker.internal with app-server's public IP
+            # Replace host.docker.internal with app-server IP reachable from remote
             import socket
-            try:
-                import urllib.request
-                public_ip = urllib.request.urlopen('https://icanhazip.com', timeout=3).read().decode().strip()
-            except Exception:
-                public_ip = socket.gethostbyname(socket.gethostname())
+            # Priority: env var > icanhazip > hostname
+            app_ip = os.environ.get('HICLAW_APP_IP', '')
+            if not app_ip:
+                try:
+                    import urllib.request
+                    app_ip = urllib.request.urlopen('https://icanhazip.com', timeout=3).read().decode().strip()
+                except Exception:
+                    app_ip = socket.gethostbyname(socket.gethostname())
             mcp_servers = mcp_config.get('mcpServers', {})
             for name, cfg in mcp_servers.items():
                 url = cfg.get('url', '') or ''
                 if 'host.docker.internal' in url:
-                    cfg['url'] = url.replace('host.docker.internal', public_ip)
-                    _logger.info(f'Replaced MCP server {name!r} URL with public IP: {cfg["url"]}')
+                    cfg['url'] = url.replace('host.docker.internal', app_ip)
+                    _logger.info(f'Replaced MCP server {name!r} URL with {app_ip}: {cfg["url"]}')
         # >>> END CUSTOM <<<
         agent = self._create_agent_with_context(
             llm,
