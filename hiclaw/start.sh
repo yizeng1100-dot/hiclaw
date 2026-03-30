@@ -69,7 +69,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-HICLAW_DIR="${HICLAW_DIR:-/opt/hiclaw}"
+HICLAW_DIR="${HICLAW_DIR:-$HOME/.hiclaw}"
 GITEA_PORT="${HICLAW_GITEA_PORT:-3300}"
 MANAGER_PORT="${HICLAW_MANAGER_PORT:-9090}"
 APP_PORT="${HICLAW_APP_PORT:-3000}"
@@ -103,8 +103,10 @@ echo ""
 
 # 1. Gitea (Skills 管理 UI)
 if ! ss -tlnp | grep -q ":$GITEA_PORT "; then
+    GITEA_BIN="${HICLAW_DIR}/bin/gitea"
+    [ ! -f "$GITEA_BIN" ] && GITEA_BIN="$(which gitea 2>/dev/null || echo gitea)"
     echo "[1/3] Starting Gitea (port $GITEA_PORT)..."
-    GITEA_WORK_DIR="$HICLAW_DIR/gitea" gitea web \
+    GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
         --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
         > "$HICLAW_DIR/gitea/log/startup.log" 2>&1 &
     disown

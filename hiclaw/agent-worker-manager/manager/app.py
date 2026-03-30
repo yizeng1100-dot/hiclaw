@@ -8,7 +8,7 @@ import os
 from contextlib import asynccontextmanager
 
 # Configurable via environment variables
-HICLAW_DIR = os.environ.get('HICLAW_DIR', '/opt/hiclaw')
+HICLAW_DIR = os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))
 SKILLS_REPO_PATH = os.path.join(HICLAW_DIR, 'skills-repo.git')
 GITEA_PORT = int(os.environ.get('HICLAW_GITEA_PORT', '3300'))
 GITEA_ADMIN_USER = os.environ.get('HICLAW_GITEA_USER', 'hiclaw-admin')

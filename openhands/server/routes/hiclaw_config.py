@@ -9,7 +9,7 @@ NEVER hardcode these values in other files — always import from here.
 import os
 
 # ─── Paths ───
-HICLAW_DIR = os.environ.get('HICLAW_DIR', '/opt/hiclaw')
+HICLAW_DIR = os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))
 SKILLS_REPO_PATH = os.path.join(HICLAW_DIR, 'skills-repo.git')
 GITEA_DIR = os.path.join(HICLAW_DIR, 'gitea')
 VENV_DIR = os.path.join(HICLAW_DIR, 'venv')

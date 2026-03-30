@@ -1,160 +1,62 @@
 #!/bin/bash
-# HiClaw One-Click Setup
+# ═══════════════════════════════════════════════════════════════════════════
+# HiClaw One-Click Setup (No sudo required)
+# ═══════════════════════════════════════════════════════════════════════════
 #
 # Usage:
 #   1. git clone -b test https://github.com/yizeng1100-dot/hiclaw.git && cd hiclaw
-#   2. Put hiclaw-deps.tar.gz in hiclaw/ directory (same level as this script)
+#   2. Put these files in hiclaw/ directory:
+#      - hiclaw-runtime.tar.gz  (478MB) — App Server: Python 3.12 + all deps
+#      - hiclaw-deps.tar.gz     (283MB) — Remote terminal deps + Gitea
 #   3. bash hiclaw/setup.sh
 #   4. bash hiclaw/start.sh
+#
+# All files installed to $HICLAW_DIR (default: ~/.hiclaw), NO sudo needed.
+# ═══════════════════════════════════════════════════════════════════════════
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-HICLAW_DIR="/opt/hiclaw"
+HICLAW_DIR="${HICLAW_DIR:-$HOME/.hiclaw}"
 GITEA_PORT="${HICLAW_GITEA_PORT:-3300}"
 GITEA_USER="${HICLAW_GITEA_USER:-hiclaw-admin}"
 GITEA_PASS="${HICLAW_GITEA_PASSWORD:-HiClaw2026!}"
-DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
-PYTHON_ENV_BUNDLE="$SCRIPT_DIR/hiclaw-python-env.tar.gz"
 MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
 
 echo "=== HiClaw Setup ==="
-echo "Project: $PROJECT_DIR"
+echo "  Install dir: $HICLAW_DIR"
+echo "  Project dir: $PROJECT_DIR"
 echo ""
 
-# ─── 0. Python environment ───
+mkdir -p "$HICLAW_DIR"
+
+# ─── 0. Python Runtime ───
 RUNTIME_BUNDLE="$SCRIPT_DIR/hiclaw-runtime.tar.gz"
 RUNTIME_DIR="$HICLAW_DIR/runtime"
 
 if [ -d "$RUNTIME_DIR/bin" ]; then
-    echo "[0] Self-contained runtime already installed at $RUNTIME_DIR/"
+    echo "[0/5] Runtime already installed"
+    echo "  Python: $($RUNTIME_DIR/bin/hiclaw-python --version 2>&1)"
 elif [ -f "$RUNTIME_BUNDLE" ]; then
-    echo "[0] Installing self-contained runtime (hiclaw-runtime.tar.gz)..."
-    echo "  This includes Python 3.12 + all 380+ packages. No system Python needed."
+    echo "[0/5] Installing self-contained runtime..."
     mkdir -p "$RUNTIME_DIR"
     tar xzf "$RUNTIME_BUNDLE" -C "$RUNTIME_DIR"
-    echo "  Python: $($RUNTIME_DIR/bin/hiclaw-python --version)"
-    echo "  Packages: $($RUNTIME_DIR/bin/hiclaw-python -c 'import pkg_resources; print(len(list(pkg_resources.working_set)))' 2>/dev/null || echo '380+')"
-elif [ -f "$PYTHON_ENV_BUNDLE" ]; then
-    echo "[0] Installing Python env from hiclaw-python-env.tar.gz..."
-    PYENV_TMP=$(mktemp -d)
-    tar xzf "$PYTHON_ENV_BUNDLE" -C "$PYENV_TMP"
-    if ! python3 -c "import sys; exit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
-        if [ -f "$PYENV_TMP/python3-standalone.tar.gz" ]; then
-            tar xzf "$PYENV_TMP/python3-standalone.tar.gz" -C /usr/local/
-            ln -sf /usr/local/python/bin/python3.12 /usr/local/bin/python3
-        fi
-    fi
-    python3 -m venv "$HICLAW_DIR/venv"
-    "$HICLAW_DIR/venv/bin/pip" install --no-index \
-        --find-links "$PYENV_TMP/wheels/" \
-        -r "$PYENV_TMP/requirements-clean.txt" 2>&1 | tail -3
-    rm -rf "$PYENV_TMP"
-    echo ""
-fi
-
-# ─── Prerequisites check ───
-echo "[Pre] Checking prerequisites..."
-MISSING=""
-
-check_cmd() {
-    if ! command -v "$1" &>/dev/null; then
-        echo "  ✗ $1 not found"
-        MISSING="$MISSING $1"
-    else
-        echo "  ✓ $1 ($($1 --version 2>&1 | head -1))"
-    fi
-}
-
-check_cmd python3
-check_cmd pip3
-check_cmd git
-check_cmd node
-check_cmd npm
-
-# Check Python version >= 3.12
-if command -v python3 &>/dev/null; then
-    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-    if python3 -c "import sys; exit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
-        echo "  ✓ Python version $PY_VER (>= 3.12)"
-    else
-        echo "  ✗ Python $PY_VER too old, need >= 3.12"
-        MISSING="$MISSING python3.12"
-    fi
-fi
-
-if [ -n "$MISSING" ]; then
-    echo ""
-    echo "Missing dependencies:$MISSING"
-    echo ""
-    echo "Install on Ubuntu/Debian:"
-    echo "  sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv python3-pip git nodejs npm"
-    echo "  pip3 install poetry"
-    echo ""
-    read -p "Try to install automatically? [y/N] " REPLY
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        echo "Installing..."
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq python3.12 python3.12-venv python3-pip git 2>/dev/null || true
-        # Node.js via NodeSource if not available
-        if ! command -v node &>/dev/null; then
-            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
-            sudo apt-get install -y -qq nodejs 2>/dev/null || true
-        fi
-        pip3 install poetry 2>/dev/null || true
-        echo "Dependencies installed. Re-checking..."
-        for cmd in python3 pip3 git node npm; do
-            if command -v "$cmd" &>/dev/null; then
-                echo "  ✓ $cmd"
-            else
-                echo "  ✗ $cmd still missing — please install manually"
-                exit 1
-            fi
-        done
-    else
-        echo "Please install the missing dependencies and re-run setup."
-        exit 1
-    fi
-fi
-
-echo ""
-
-# ─── 0. Extract deps bundle ───
-if [ -f "$DEPS_BUNDLE" ]; then
-    echo "[0/5] Extracting deps bundle..."
-    DEPS_TMP=$(mktemp -d)
-    tar xzf "$DEPS_BUNDLE" -C "$DEPS_TMP"
-
-    # Install Gitea
-    if [ -f "$DEPS_TMP/gitea" ] && ! command -v gitea &>/dev/null; then
-        echo "  Installing Gitea from bundle..."
-        chmod +x "$DEPS_TMP/gitea"
-        sudo mv "$DEPS_TMP/gitea" /usr/local/bin/gitea
-    fi
-
-    # Setup agent deps
-    if [ -d "$DEPS_TMP/agent-deps" ]; then
-        echo "  Setting up agent deps..."
-        mkdir -p "$MANAGER_DIR/deps"
-        cp "$DEPS_TMP/agent-deps/code-server.tar.gz" "$MANAGER_DIR/deps/" 2>/dev/null || true
-        cp "$DEPS_TMP/agent-deps/python3-standalone.tar.gz" "$MANAGER_DIR/deps/" 2>/dev/null || true
-        if [ -f "$DEPS_TMP/agent-deps/wheels.tar.gz" ]; then
-            tar xzf "$DEPS_TMP/agent-deps/wheels.tar.gz" -C "$MANAGER_DIR/deps/"
-        fi
-    fi
-
-    rm -rf "$DEPS_TMP"
-    echo "  Deps extracted"
+    echo "  Python: $($RUNTIME_DIR/bin/hiclaw-python --version 2>&1)"
+    echo "  No system Python needed — fully self-contained"
 else
-    echo "[0/5] No deps bundle found at $DEPS_BUNDLE"
-    echo "  Will try to download from internet..."
+    echo "[0/5] ERROR: hiclaw-runtime.tar.gz not found in $SCRIPT_DIR/"
+    echo "  This file contains Python 3.12 + all dependencies."
+    echo "  Place it in the hiclaw/ directory and re-run setup."
+    exit 1
 fi
+
+# Set PATH for rest of setup
+PYTHON="$RUNTIME_DIR/bin/hiclaw-python"
+export LD_LIBRARY_PATH="$RUNTIME_DIR/python/lib:$LD_LIBRARY_PATH"
+export PATH="$RUNTIME_DIR/venv/bin:$RUNTIME_DIR/bin:$PATH"
 
 # ─── 1. Skills Git Repo ───
 echo "[1/5] Setting up Skills Git repo..."
-sudo mkdir -p "$HICLAW_DIR"
-sudo chown "$(whoami)" "$HICLAW_DIR"
-
 if [ ! -d "$HICLAW_DIR/skills-repo.git" ]; then
     git init --bare "$HICLAW_DIR/skills-repo.git"
     TMPDIR=$(mktemp -d)
@@ -174,62 +76,77 @@ else
 fi
 
 # ─── 2. Gitea ───
-RELEASE_URL="https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1"
-
 echo "[2/5] Setting up Gitea..."
-if ! command -v gitea &>/dev/null; then
-    echo "  Downloading Gitea..."
-    curl -fSL "$RELEASE_URL/gitea" -o /tmp/gitea 2>/dev/null || \
-    wget -q -O /tmp/gitea https://dl.gitea.com/gitea/1.22.6/gitea-1.22.6-linux-amd64
-    chmod +x /tmp/gitea
-    sudo mv /tmp/gitea /usr/local/bin/gitea
+GITEA_BIN="$HICLAW_DIR/bin/gitea"
+
+if [ ! -f "$GITEA_BIN" ]; then
+    # Extract from deps bundle
+    DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
+    if [ -f "$DEPS_BUNDLE" ]; then
+        echo "  Extracting Gitea from deps bundle..."
+        DEPS_TMP=$(mktemp -d)
+        tar xzf "$DEPS_BUNDLE" -C "$DEPS_TMP"
+        mkdir -p "$HICLAW_DIR/bin"
+        if [ -f "$DEPS_TMP/gitea" ]; then
+            mv "$DEPS_TMP/gitea" "$GITEA_BIN"
+            chmod +x "$GITEA_BIN"
+        fi
+        # Also extract agent deps for remote provisioning
+        if [ -d "$DEPS_TMP/agent-deps" ]; then
+            mkdir -p "$MANAGER_DIR/deps"
+            cp "$DEPS_TMP/agent-deps/"* "$MANAGER_DIR/deps/" 2>/dev/null || true
+            if [ -f "$MANAGER_DIR/deps/wheels.tar.gz" ]; then
+                tar xzf "$MANAGER_DIR/deps/wheels.tar.gz" -C "$MANAGER_DIR/deps/"
+                rm -f "$MANAGER_DIR/deps/wheels.tar.gz"
+            fi
+        fi
+        rm -rf "$DEPS_TMP"
+    else
+        echo "  Downloading Gitea..."
+        mkdir -p "$HICLAW_DIR/bin"
+        RELEASE_URL="https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1"
+        curl -fSL "$RELEASE_URL/gitea" -o "$GITEA_BIN" 2>/dev/null || \
+        curl -fSL "https://dl.gitea.com/gitea/1.22.6/gitea-1.22.6-linux-amd64" -o "$GITEA_BIN"
+        chmod +x "$GITEA_BIN"
+    fi
 fi
 
+# Gitea config
 mkdir -p "$HICLAW_DIR/gitea/custom/conf" "$HICLAW_DIR/gitea/data" "$HICLAW_DIR/gitea/repos" "$HICLAW_DIR/gitea/log"
+if [ -f "$SCRIPT_DIR/gitea-config/app.ini" ]; then
+    cp "$SCRIPT_DIR/gitea-config/app.ini" "$HICLAW_DIR/gitea/custom/conf/app.ini"
+fi
 
-# Fix SSH dir permissions (Gitea needs this)
+# Fix SSH dir (Gitea needs it)
 mkdir -p ~/.ssh 2>/dev/null && touch ~/.ssh/authorized_keys 2>/dev/null || true
 
-cp "$SCRIPT_DIR/gitea-config/app.ini" "$HICLAW_DIR/gitea/custom/conf/app.ini"
-
+# Create admin user if DB doesn't exist
 if [ ! -f "$HICLAW_DIR/gitea/data/gitea.db" ]; then
     echo "  Creating Gitea admin user..."
-    GITEA_WORK_DIR="$HICLAW_DIR/gitea" gitea admin user create \
+    GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
         --username "$GITEA_USER" --password "$GITEA_PASS" \
         --email admin@hiclaw.local --admin \
         --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>/dev/null || true
 fi
-echo "  Gitea ready (login: $GITEA_USER / $GITEA_PASS)"
+echo "  Gitea ready ($GITEA_USER / $GITEA_PASS)"
 
 # ─── 3. Worker Manager deps ───
 echo "[3/5] Setting up Worker Manager..."
 if [ ! -d "$MANAGER_DIR/deps/wheels" ] && [ ! -f "$MANAGER_DIR/deps/code-server.tar.gz" ]; then
-    echo "  No deps found, downloading..."
-    mkdir -p "$MANAGER_DIR/deps"
-    for f in code-server.tar.gz python3-standalone.tar.gz; do
-        curl -fSL "$RELEASE_URL/$f" -o "$MANAGER_DIR/deps/$f" 2>/dev/null || \
-        echo "  Warning: failed to download $f"
-    done
-    if [ ! -d "$MANAGER_DIR/deps/wheels" ]; then
-        pip download openhands-agent-server==1.14 openhands-sdk==1.14 openhands-tools==1.14 \
-            --dest "$MANAGER_DIR/deps/wheels/" 2>/dev/null || echo "  Warning: wheel download failed"
-    fi
-else
-    echo "  Deps already present"
+    echo "  No agent deps found. Remote terminal offline install may not work."
+    echo "  (Will use online install if remote has internet)"
 fi
-
-pip install -q asyncssh httpx fastapi uvicorn pydantic sse-starlette aiosqlite 2>/dev/null || true
 echo "  Worker Manager ready"
 
 # ─── 4. Push skills to Gitea ───
 echo "[4/5] Syncing skills to Gitea..."
-GITEA_WORK_DIR="$HICLAW_DIR/gitea" gitea web \
+GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
     --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
     > "$HICLAW_DIR/gitea/log/startup.log" 2>&1 &
 GITEA_PID=$!
 sleep 15
 
-curl -s -X POST http://localhost:$GITEA_PORT/api/v1/user/repos \
+curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
     -H "Content-Type: application/json" \
     -u "$GITEA_USER:$GITEA_PASS" \
     -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' >/dev/null 2>&1 || true
@@ -248,20 +165,22 @@ echo "  Skills synced to Gitea"
 
 # ─── 5. Build frontend ───
 echo "[5/5] Building frontend..."
-if [ -d "$PROJECT_DIR/frontend" ]; then
+if [ -d "$PROJECT_DIR/frontend" ] && command -v npm &>/dev/null; then
     cd "$PROJECT_DIR/frontend"
     npm install --silent 2>/dev/null || true
-    npm run build 2>/dev/null || echo "  Warning: frontend build failed"
+    npm run build 2>/dev/null || echo "  Warning: frontend build failed (need Node.js)"
     cd "$PROJECT_DIR"
+else
+    echo "  Skipped (no Node.js or no frontend dir)"
 fi
 
 echo ""
 echo "=== Setup Complete ==="
 echo ""
+echo "  Install dir:  $HICLAW_DIR"
+echo "  Runtime:      $RUNTIME_DIR/bin/hiclaw-python"
+echo "  Gitea:        $HICLAW_DIR/bin/gitea"
+echo "  Skills repo:  $HICLAW_DIR/skills-repo.git"
+echo ""
 echo "To start:  bash hiclaw/start.sh"
 echo "To stop:   bash hiclaw/stop.sh"
-echo ""
-echo "Services:"
-echo "  OpenHands  http://localhost:3000"
-echo "  Gitea      http://localhost:$GITEA_PORT  ($GITEA_USER / $GITEA_PASS)"
-echo "  Manager    http://localhost:${HICLAW_MANAGER_PORT:-9090}"

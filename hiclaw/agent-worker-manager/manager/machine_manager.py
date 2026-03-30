@@ -223,7 +223,7 @@ class MachineManager:
         git_daemon = subprocess.Popen(
             ["git", "daemon", "--reuseaddr", f"--port={GIT_PORT}",
              "--export-all", "--enable=receive-pack",
-             f"--base-path={os.environ.get('HICLAW_DIR', '/opt/hiclaw')}", os.environ.get('HICLAW_DIR', '/opt/hiclaw')],
+             f"--base-path={os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))}", os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
 
