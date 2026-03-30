@@ -98,12 +98,27 @@ class SSHClient:
         return pid
 
     async def write_file(self, remote_path: str, content: bytes) -> None:
-        """Write binary content to a file on the remote machine via SFTP."""
+        """Write binary content to a file on the remote machine.
+
+        Tries SFTP first, falls back to piping through shell (cat > file).
+        """
         if self._conn is None:
             raise RuntimeError("Not connected")
-        async with self._conn.start_sftp_client() as sftp:
-            async with sftp.open(remote_path, 'wb') as f:
-                await f.write(content)
+        try:
+            async with self._conn.start_sftp_client() as sftp:
+                async with sftp.open(remote_path, 'wb') as f:
+                    await f.write(content)
+        except Exception:
+            # Fallback: pipe through shell using base64
+            import base64
+            b64 = base64.b64encode(content).decode()
+            # Split into chunks to avoid shell argument length limits
+            chunk_size = 50000
+            await self.run(f"rm -f {remote_path}", timeout=5)
+            for i in range(0, len(b64), chunk_size):
+                chunk = b64[i:i + chunk_size]
+                await self.run(f"echo -n '{chunk}' >> {remote_path}.b64", timeout=10)
+            await self.run(f"base64 -d {remote_path}.b64 > {remote_path} && rm -f {remote_path}.b64", timeout=10)
         logger.debug(f"[{self.host}] Wrote {len(content)} bytes to {remote_path}")
 
     async def upload_file(
@@ -112,24 +127,57 @@ class SSHClient:
         remote_path: str,
         progress_callback: object = None,
     ) -> None:
-        """Upload a local file to remote via SFTP with progress tracking.
+        """Upload a local file to remote machine.
 
-        Args:
-            progress_callback: Optional callable(bytes_sent, total_bytes) called periodically.
+        Tries asyncssh SCP first, falls back to SFTP, then to dd pipe.
+        Supports progress tracking via callback(bytes_sent, total_bytes).
         """
         if self._conn is None:
             raise RuntimeError("Not connected")
         import os
         total = os.path.getsize(local_path)
 
-        def _progress(src_path, dst_path, bytes_sent, total_bytes):
+        # Method 1: Try asyncssh scp (doesn't need SFTP subsystem)
+        try:
+            await asyncssh.scp(local_path, (self._conn, remote_path))
             if progress_callback and callable(progress_callback):
-                progress_callback(bytes_sent, total_bytes)
+                progress_callback(total, total)
+            logger.info(f"[{self.host}] Uploaded via SCP: {local_path} → {remote_path} ({total} bytes)")
+            return
+        except Exception as e:
+            logger.debug(f"[{self.host}] SCP failed ({e}), trying SFTP...")
 
-        async with self._conn.start_sftp_client() as sftp:
-            await sftp.put(local_path, remote_path, progress_handler=_progress, block_size=65536)
+        # Method 2: Try SFTP
+        try:
+            def _progress(src_path, dst_path, bytes_sent, total_bytes):
+                if progress_callback and callable(progress_callback):
+                    progress_callback(bytes_sent, total_bytes)
 
-        logger.info(f"[{self.host}] Uploaded {local_path} → {remote_path} ({total} bytes)")
+            async with self._conn.start_sftp_client() as sftp:
+                await sftp.put(local_path, remote_path, progress_handler=_progress, block_size=65536)
+            logger.info(f"[{self.host}] Uploaded via SFTP: {local_path} → {remote_path} ({total} bytes)")
+            return
+        except Exception as e:
+            logger.debug(f"[{self.host}] SFTP failed ({e}), trying pipe...")
+
+        # Method 3: Pipe through SSH stdin (works even if SFTP is disabled)
+        logger.info(f"[{self.host}] Uploading via pipe: {local_path} ({total} bytes)")
+        chunk_size = 64 * 1024
+        sent = 0
+        process = await self._conn.create_process(f"cat > {remote_path}")
+        with open(local_path, 'rb') as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                process.stdin.write(chunk)
+                await process.stdin.drain()
+                sent += len(chunk)
+                if progress_callback and callable(progress_callback):
+                    progress_callback(sent, total)
+        process.stdin.write_eof()
+        await process.wait()
+        logger.info(f"[{self.host}] Uploaded via pipe: {local_path} → {remote_path} ({total} bytes)")
 
     async def forward_local_port(self, remote_port: int, local_port: int) -> None:
         """Create a local port forward: localhost:local_port → remote:remote_port."""
