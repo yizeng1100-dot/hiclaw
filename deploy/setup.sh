@@ -5,11 +5,11 @@
 #
 # Usage:
 #   1. git clone -b test https://github.com/yizeng1100-dot/hiclaw.git && cd hiclaw
-#   2. Put these files in hiclaw/ directory:
+#   2. Put these files in deploy/ directory:
 #      - hiclaw-runtime.tar.gz  (478MB) — App Server: Python 3.12 + all deps
 #      - hiclaw-deps.tar.gz     (283MB) — Remote terminal deps + Gitea
-#   3. bash hiclaw/setup.sh
-#   4. bash hiclaw/start.sh
+#   3. bash deploy/setup.sh
+#   4. bash deploy/start.sh
 #
 # All files installed to $HICLAW_DIR (default: ~/.hiclaw), NO sudo needed.
 # ═══════════════════════════════════════════════════════════════════════════
@@ -21,7 +21,7 @@ HICLAW_DIR="${HICLAW_DIR:-$HOME/.hiclaw}"
 GITEA_PORT="${HICLAW_GITEA_PORT:-3300}"
 GITEA_USER="${HICLAW_GITEA_USER:-hiclaw-admin}"
 GITEA_PASS="${HICLAW_GITEA_PASSWORD:-HiClaw2026!}"
-MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
+MANAGER_DIR="$PROJECT_DIR/agent-worker-manager"
 
 echo "=== HiClaw Setup ==="
 echo "  Install dir: $HICLAW_DIR"
@@ -63,7 +63,7 @@ elif [ -f "$RUNTIME_BUNDLE" ]; then
 else
     echo "[0/5] ERROR: hiclaw-runtime.tar.gz not found in $SCRIPT_DIR/"
     echo "  This file contains Python 3.12 + all dependencies."
-    echo "  Place it in the hiclaw/ directory and re-run setup."
+    echo "  Place it in the deploy/ directory and re-run setup."
     exit 1
 fi
 
@@ -199,5 +199,5 @@ echo "  Runtime:      $RUNTIME_DIR/bin/hiclaw-python"
 echo "  Gitea:        $HICLAW_DIR/bin/gitea"
 echo "  Skills repo:  $HICLAW_DIR/skills-repo.git"
 echo ""
-echo "To start:  bash hiclaw/start.sh"
-echo "To stop:   bash hiclaw/stop.sh"
+echo "To start:  bash deploy/start.sh"
+echo "To stop:   bash deploy/stop.sh"

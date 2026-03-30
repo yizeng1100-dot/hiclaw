@@ -3,7 +3,7 @@
 # HiClaw — Start all services
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Usage: bash hiclaw/start.sh
+# Usage: bash deploy/start.sh
 #
 # ─── Architecture ───
 #
@@ -75,7 +75,7 @@ MANAGER_PORT="${HICLAW_MANAGER_PORT:-9090}"
 APP_PORT="${HICLAW_APP_PORT:-3000}"
 GITEA_USER="${HICLAW_GITEA_USER:-hiclaw-admin}"
 GITEA_PASS="${HICLAW_GITEA_PASSWORD:-HiClaw2026!}"
-MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
+MANAGER_DIR="$PROJECT_DIR/agent-worker-manager"
 
 # ─── Python 环境 (自包含运行时，不依赖系统 Python) ───
 RUNTIME_DIR="$HICLAW_DIR/runtime"
@@ -92,7 +92,7 @@ elif [ -d "$HICLAW_DIR/venv/bin" ]; then
     export PATH="$HICLAW_DIR/venv/bin:$PATH"
 else
     echo "ERROR: Python environment not found."
-    echo "Put hiclaw-runtime.tar.gz in hiclaw/ and run: bash hiclaw/setup.sh"
+    echo "Put hiclaw-runtime.tar.gz in hiclaw/ and run: bash deploy/setup.sh"
     exit 1
 fi
 
