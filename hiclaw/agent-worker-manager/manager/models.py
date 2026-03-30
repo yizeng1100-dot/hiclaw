@@ -60,7 +60,7 @@ class ConnectMachineRequest(BaseModel):
     private_key: str | None = None
     mode: WorkerMode = WorkerMode.HOST
     template: str = "openhands"
-    workspace: str = "/root/workspace"
+    workspace: str = "/root/workspace"  # User must specify via frontend
     agent_server_port: int = 8000
 
 

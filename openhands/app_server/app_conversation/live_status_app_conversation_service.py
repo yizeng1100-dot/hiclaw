@@ -272,7 +272,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 working_dir = '/workspace/project'  # default fallback
                 try:
                     import httpx as _httpx
-                    _resp = await self.httpx_client.get('http://localhost:9090/api/machines', timeout=3)
+                    from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+                    _resp = await self.httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
                     for _m in _resp.json():
                         if _m.get('status') == 'ready':
                             working_dir = _m.get('workspace', working_dir)

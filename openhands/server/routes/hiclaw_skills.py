@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix='/api/hiclaw/skills', tags=['hiclaw-skills'])
 
-REPO_PATH = '/opt/hiclaw/skills-repo.git'
+from openhands.server.routes.hiclaw_config import SKILLS_REPO_PATH as REPO_PATH
 
 
 def _run_git(cwd: str, *args: str) -> str:

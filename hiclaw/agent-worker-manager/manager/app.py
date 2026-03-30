@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
+
+# Configurable via environment variables
+HICLAW_DIR = os.environ.get('HICLAW_DIR', '/opt/hiclaw')
+SKILLS_REPO_PATH = os.path.join(HICLAW_DIR, 'skills-repo.git')
+GITEA_PORT = int(os.environ.get('HICLAW_GITEA_PORT', '3300'))
+GITEA_ADMIN_USER = os.environ.get('HICLAW_GITEA_USER', 'hiclaw-admin')
+GITEA_ADMIN_PASSWORD = os.environ.get('HICLAW_GITEA_PASSWORD', 'HiClaw2026!')
+GITEA_REPO_NAME = os.environ.get('HICLAW_GITEA_REPO', 'skills')
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -242,7 +251,7 @@ async def skills_commit(machine_id: str, request: Request):
     git_daemon = subprocess.Popen(
         ["git", "daemon", "--reuseaddr", f"--port={GIT_PORT}",
          "--export-all", "--enable=receive-pack",
-         "--base-path=/opt/hiclaw", "/opt/hiclaw"],
+         f"--base-path={HICLAW_DIR}", HICLAW_DIR],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
 
@@ -273,6 +282,21 @@ async def skills_commit(machine_id: str, request: Request):
 
         if ec != 0:
             raise HTTPException(status_code=500, detail=f"Push failed: {stderr[:200]}")
+
+        # Sync bare repo to Gitea
+        try:
+            import subprocess as _sp
+            _tmp = "/tmp/_gitea_sync"
+            _sp.run(f"rm -rf {_tmp} && git clone {SKILLS_REPO_PATH} {_tmp}", shell=True, timeout=10, capture_output=True)
+            _sp.run(
+                f"cd {_tmp} && git remote add gitea http://{GITEA_ADMIN_USER}:{GITEA_ADMIN_PASSWORD}@localhost:{GITEA_PORT}/{GITEA_ADMIN_USER}/{GITEA_REPO_NAME}.git 2>/dev/null; "
+                f"git push gitea master --force",
+                shell=True, timeout=15, capture_output=True,
+            )
+            _sp.run(f"rm -rf {_tmp}", shell=True, timeout=5)
+            logger.info("Skills synced to Gitea")
+        except Exception as e:
+            logger.warning(f"Failed to sync to Gitea: {e}")
 
         return {"status": "committed", "message": message}
     finally:

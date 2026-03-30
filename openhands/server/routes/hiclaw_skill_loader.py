@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-REPO_PATH = '/opt/hiclaw/skills-repo.git'
+from openhands.server.routes.hiclaw_config import SKILLS_REPO_PATH as REPO_PATH
 
 
 @dataclass
@@ -72,7 +72,7 @@ def load_hiclaw_skills() -> list[HiClawSkill]:
     return skills
 
 
-def format_skills_for_prompt(skills: list[HiClawSkill], workspace: str = '/root/workspace') -> str:
+def format_skills_for_prompt(skills: list[HiClawSkill], workspace: str = '') -> str:
     """Format skills into a system prompt suffix."""
     if not skills:
         return ''

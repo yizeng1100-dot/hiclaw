@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 import random
 
@@ -46,6 +47,10 @@ class MachineManager:
             machine = self._machines[machine_id]
             if machine.status == MachineStatus.READY:
                 machine.active_conversations += 1
+                # Update workspace if changed
+                if req.workspace != machine.workspace:
+                    machine.workspace = req.workspace
+                    logger.info(f"Machine {machine_id} workspace updated to {req.workspace}")
                 # Always sync skills on reconnect
                 ssh = self._ssh_clients.get(machine_id)
                 if ssh and ssh.connected:
@@ -218,7 +223,7 @@ class MachineManager:
         git_daemon = subprocess.Popen(
             ["git", "daemon", "--reuseaddr", f"--port={GIT_PORT}",
              "--export-all", "--enable=receive-pack",
-             "--base-path=/opt/hiclaw", "/opt/hiclaw"],
+             f"--base-path={os.environ.get('HICLAW_DIR', '/opt/hiclaw')}", os.environ.get('HICLAW_DIR', '/opt/hiclaw')],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
 
@@ -230,9 +235,9 @@ class MachineManager:
             stdout, _, ec = await ssh.run(f"test -d {skills_dir}/.git && echo YES || echo NO", timeout=5)
 
             if stdout.strip() == "YES":
-                # Pull latest (force reset to handle any local changes)
+                # Pull latest — merge, don't reset (preserve local edits)
                 await ssh.run(
-                    f"cd {skills_dir} && git fetch origin && git reset --hard origin/master",
+                    f"cd {skills_dir} && git pull --rebase origin master 2>/dev/null || git pull origin master || true",
                     timeout=30,
                 )
                 logger.info(f"Skills repo updated on {machine.host}")

@@ -33,7 +33,8 @@ async def proxy_gitea(path: str, request: Request):
     so it generates all internal links with the /runtime/gitea/ prefix.
     We strip X-Frame-Options to allow iframe embedding.
     """
-    target_url = f'http://localhost:3300/{path}'
+    from openhands.server.routes.hiclaw_config import GITEA_PORT
+    target_url = f'http://localhost:{GITEA_PORT}/{path}'
     if request.url.query:
         target_url += f'?{request.url.query}'
 
@@ -69,7 +70,8 @@ async def proxy_gitea(path: str, request: Request):
 )
 async def proxy_manager(path: str, request: Request):
     """Proxy requests to the Worker Manager service."""
-    target_url = f'http://localhost:9090/{path}'
+    from openhands.server.routes.hiclaw_config import WORKER_MANAGER_PORT
+    target_url = f'http://localhost:{WORKER_MANAGER_PORT}/{path}'
     if request.url.query:
         target_url += f'?{request.url.query}'
 

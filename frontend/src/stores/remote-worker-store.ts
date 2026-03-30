@@ -61,7 +61,7 @@ export const useRemoteWorkerStore = create<RemoteMachineStore>((set) => ({
     username: "root",
     password: "",
     mode: "host",
-    workspace: "/root/workspace",
+    workspace: "",
     template: "openhands",
   },
   // Route through app-server proxy so browser doesn't need direct access to 9090
