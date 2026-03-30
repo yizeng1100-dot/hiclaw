@@ -22,34 +22,33 @@ echo "=== HiClaw Setup ==="
 echo "Project: $PROJECT_DIR"
 echo ""
 
-# ─── 0. Offline Python environment (if bundle exists) ───
-if [ -f "$PYTHON_ENV_BUNDLE" ]; then
-    echo "[0] Found Python environment bundle, installing offline..."
+# ─── 0. Python environment ───
+RUNTIME_BUNDLE="$SCRIPT_DIR/hiclaw-runtime.tar.gz"
+RUNTIME_DIR="$HICLAW_DIR/runtime"
+
+if [ -d "$RUNTIME_DIR/bin" ]; then
+    echo "[0] Self-contained runtime already installed at $RUNTIME_DIR/"
+elif [ -f "$RUNTIME_BUNDLE" ]; then
+    echo "[0] Installing self-contained runtime (hiclaw-runtime.tar.gz)..."
+    echo "  This includes Python 3.12 + all 380+ packages. No system Python needed."
+    mkdir -p "$RUNTIME_DIR"
+    tar xzf "$RUNTIME_BUNDLE" -C "$RUNTIME_DIR"
+    echo "  Python: $($RUNTIME_DIR/bin/hiclaw-python --version)"
+    echo "  Packages: $($RUNTIME_DIR/bin/hiclaw-python -c 'import pkg_resources; print(len(list(pkg_resources.working_set)))' 2>/dev/null || echo '380+')"
+elif [ -f "$PYTHON_ENV_BUNDLE" ]; then
+    echo "[0] Installing Python env from hiclaw-python-env.tar.gz..."
     PYENV_TMP=$(mktemp -d)
     tar xzf "$PYTHON_ENV_BUNDLE" -C "$PYENV_TMP"
-
-    # Install Python standalone if system doesn't have 3.12
     if ! python3 -c "import sys; exit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
         if [ -f "$PYENV_TMP/python3-standalone.tar.gz" ]; then
-            echo "  Installing Python 3.12 standalone..."
             tar xzf "$PYENV_TMP/python3-standalone.tar.gz" -C /usr/local/
-            ln -sf /usr/local/python/bin/python3.12 /usr/local/bin/python3.12
             ln -sf /usr/local/python/bin/python3.12 /usr/local/bin/python3
-            ln -sf /usr/local/python/bin/pip3.12 /usr/local/bin/pip3
         fi
     fi
-
-    # Create venv and install all deps offline
-    echo "  Creating venv and installing packages offline (380+ packages)..."
-    python3 -m venv "$HICLAW_DIR/venv" 2>/dev/null || python3.12 -m venv "$HICLAW_DIR/venv"
+    python3 -m venv "$HICLAW_DIR/venv"
     "$HICLAW_DIR/venv/bin/pip" install --no-index \
         --find-links "$PYENV_TMP/wheels/" \
         -r "$PYENV_TMP/requirements-clean.txt" 2>&1 | tail -3
-
-    # Make the venv available for poetry
-    echo "  Python env installed: $("$HICLAW_DIR/venv/bin/python" --version), $(ls $PYENV_TMP/wheels/ | wc -l) packages"
-    export PATH=""$HICLAW_DIR/venv/bin":$PATH"
-
     rm -rf "$PYENV_TMP"
     echo ""
 fi

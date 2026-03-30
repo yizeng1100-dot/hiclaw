@@ -77,16 +77,24 @@ GITEA_USER="${HICLAW_GITEA_USER:-hiclaw-admin}"
 GITEA_PASS="${HICLAW_GITEA_PASSWORD:-HiClaw2026!}"
 MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
 
-# ─── Python 环境 (统一使用 /opt/hiclaw/venv/) ───
-VENV_DIR="$HICLAW_DIR/venv"
-if [ ! -d "$VENV_DIR/bin" ]; then
-    echo "ERROR: Python venv not found at $VENV_DIR/"
-    echo "Run 'bash hiclaw/setup.sh' first to install Python environment."
+# ─── Python 环境 (自包含运行时，不依赖系统 Python) ───
+RUNTIME_DIR="$HICLAW_DIR/runtime"
+if [ -d "$RUNTIME_DIR/bin" ]; then
+    # 自包含运行时 (hiclaw-runtime.tar.gz 解压到 /opt/hiclaw/runtime/)
+    PYTHON="$RUNTIME_DIR/bin/hiclaw-python"
+    UVICORN="$RUNTIME_DIR/bin/hiclaw-uvicorn"
+    export LD_LIBRARY_PATH="$RUNTIME_DIR/python/lib:$LD_LIBRARY_PATH"
+    export PATH="$RUNTIME_DIR/venv/bin:$PATH"
+elif [ -d "$HICLAW_DIR/venv/bin" ]; then
+    # 离线 venv (hiclaw-python-env.tar.gz 安装到 /opt/hiclaw/venv/)
+    PYTHON="$HICLAW_DIR/venv/bin/python3"
+    UVICORN="$HICLAW_DIR/venv/bin/uvicorn"
+    export PATH="$HICLAW_DIR/venv/bin:$PATH"
+else
+    echo "ERROR: Python environment not found."
+    echo "Put hiclaw-runtime.tar.gz in hiclaw/ and run: bash hiclaw/setup.sh"
     exit 1
 fi
-PYTHON="$VENV_DIR/bin/python3"
-UVICORN="$VENV_DIR/bin/uvicorn"
-export PATH="$VENV_DIR/bin:$PATH"
 
 echo "=== Starting HiClaw Services ==="
 echo "  Python: $($PYTHON --version)"
