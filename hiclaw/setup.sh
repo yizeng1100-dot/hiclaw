@@ -41,8 +41,25 @@ elif [ -f "$RUNTIME_BUNDLE" ]; then
     echo "[0/5] Installing self-contained runtime..."
     mkdir -p "$RUNTIME_DIR"
     tar xzf "$RUNTIME_BUNDLE" -C "$RUNTIME_DIR"
+
+    # Fix hardcoded paths — venv was built at /tmp/hiclaw-runtime, rewrite to actual location
+    echo "  Fixing paths..."
+    OLD_PATH="/tmp/hiclaw-runtime"
+    NEW_PATH="$RUNTIME_DIR"
+
+    # Fix pyvenv.cfg
+    sed -i "s|$OLD_PATH|$NEW_PATH|g" "$RUNTIME_DIR/venv/pyvenv.cfg"
+
+    # Fix shebang lines in all venv/bin/ scripts
+    find "$RUNTIME_DIR/venv/bin" -type f -exec grep -l "$OLD_PATH" {} \; 2>/dev/null | while read f; do
+        sed -i "s|$OLD_PATH|$NEW_PATH|g" "$f"
+    done
+
+    # Fix bin/ wrapper scripts
+    sed -i "s|$OLD_PATH|$NEW_PATH|g" "$RUNTIME_DIR/bin/hiclaw-python" "$RUNTIME_DIR/bin/hiclaw-uvicorn" "$RUNTIME_DIR/activate.sh" 2>/dev/null
+
     echo "  Python: $($RUNTIME_DIR/bin/hiclaw-python --version 2>&1)"
-    echo "  No system Python needed — fully self-contained"
+    echo "  Verify: $($RUNTIME_DIR/bin/hiclaw-python -c 'import uvicorn,socketio;print("All imports OK")' 2>&1)"
 else
     echo "[0/5] ERROR: hiclaw-runtime.tar.gz not found in $SCRIPT_DIR/"
     echo "  This file contains Python 3.12 + all dependencies."
