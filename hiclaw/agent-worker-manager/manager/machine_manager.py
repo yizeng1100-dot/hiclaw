@@ -277,9 +277,12 @@ class MachineManager:
         # Ensure workspace exists
         await ssh.run(f"mkdir -p {machine.workspace}")
 
-        # Start in background
+        # Start in background, pass through debug env vars from app-server
         log_file = f"/tmp/agent-server-{machine.id}.log"
-        cmd = f"cd {machine.workspace} && {binary} --port {port}"
+        env_vars = ""
+        if os.environ.get('HICLAW_LLM_DEBUG'):
+            env_vars += "HICLAW_LLM_DEBUG=1 "
+        cmd = f"cd {machine.workspace} && {env_vars}{binary} --port {port}"
         await ssh.run_background(cmd, log_file=log_file)
         logger.info(f"Started agent-server on {machine.host}:{port}")
 
