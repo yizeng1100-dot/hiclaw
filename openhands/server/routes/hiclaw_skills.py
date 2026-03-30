@@ -1,7 +1,7 @@
 """
 >>> CUSTOM: HiClaw — Skills Git management API.
 
-Operates directly on the skills bare repo at /opt/hiclaw/skills-repo.git.
+Operates directly on the skills bare repo (configured via HICLAW_DIR env var).
 Uses a temporary working copy for read/write operations.
 <<<
 """

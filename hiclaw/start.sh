@@ -6,6 +6,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 HICLAW_DIR="/opt/hiclaw"
+GITEA_PORT="${HICLAW_GITEA_PORT:-3300}"
+GITEA_USER="${HICLAW_GITEA_USER:-hiclaw-admin}"
+GITEA_PASS="${HICLAW_GITEA_PASSWORD:-HiClaw2026!}"
 MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
 
 # Use offline venv if available, otherwise use system Python
@@ -76,4 +79,4 @@ echo ""
 echo "URLs:"
 echo "  App:    http://localhost:3000"
 echo "  Skills: http://localhost:3000/skill-management"
-echo "  Gitea:  http://localhost:3300 (hiclaw-admin / HiClaw2026!)"
+echo "  Gitea:  http://localhost:$GITEA_PORT ($GITEA_USER / $GITEA_PASS)"

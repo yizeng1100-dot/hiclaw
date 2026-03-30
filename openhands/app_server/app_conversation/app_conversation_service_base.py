@@ -149,7 +149,7 @@ class AppConversationServiceBase(AppConversationService, ABC):
             )
 
             # >>> CUSTOM: HiClaw — DB skill bridge disabled, skills managed via Git <<<
-            # Database skills migrated to /opt/hiclaw/skills-repo.git
+            # Database skills migrated to Git repo (HICLAW_DIR/skills-repo.git)
             # Skills are now injected via hiclaw_skill_loader.py in system_message_suffix
             # >>> END CUSTOM <<<
 

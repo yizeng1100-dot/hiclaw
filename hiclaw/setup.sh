@@ -11,6 +11,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 HICLAW_DIR="/opt/hiclaw"
+GITEA_PORT="${HICLAW_GITEA_PORT:-3300}"
+GITEA_USER="${HICLAW_GITEA_USER:-hiclaw-admin}"
+GITEA_PASS="${HICLAW_GITEA_PASSWORD:-HiClaw2026!}"
 DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
 PYTHON_ENV_BUNDLE="$SCRIPT_DIR/hiclaw-python-env.tar.gz"
 MANAGER_DIR="$SCRIPT_DIR/agent-worker-manager"
@@ -38,14 +41,14 @@ if [ -f "$PYTHON_ENV_BUNDLE" ]; then
 
     # Create venv and install all deps offline
     echo "  Creating venv and installing packages offline (380+ packages)..."
-    python3 -m venv /opt/hiclaw/venv 2>/dev/null || python3.12 -m venv /opt/hiclaw/venv
-    /opt/hiclaw/venv/bin/pip install --no-index \
+    python3 -m venv "$HICLAW_DIR/venv" 2>/dev/null || python3.12 -m venv "$HICLAW_DIR/venv"
+    "$HICLAW_DIR/venv/bin/pip" install --no-index \
         --find-links "$PYENV_TMP/wheels/" \
         -r "$PYENV_TMP/requirements-clean.txt" 2>&1 | tail -3
 
     # Make the venv available for poetry
-    echo "  Python env installed: $(/opt/hiclaw/venv/bin/python --version), $(ls $PYENV_TMP/wheels/ | wc -l) packages"
-    export PATH="/opt/hiclaw/venv/bin:$PATH"
+    echo "  Python env installed: $("$HICLAW_DIR/venv/bin/python" --version), $(ls $PYENV_TMP/wheels/ | wc -l) packages"
+    export PATH=""$HICLAW_DIR/venv/bin":$PATH"
 
     rm -rf "$PYENV_TMP"
     echo ""
@@ -193,11 +196,11 @@ cp "$SCRIPT_DIR/gitea-config/app.ini" "$HICLAW_DIR/gitea/custom/conf/app.ini"
 if [ ! -f "$HICLAW_DIR/gitea/data/gitea.db" ]; then
     echo "  Creating Gitea admin user..."
     GITEA_WORK_DIR="$HICLAW_DIR/gitea" gitea admin user create \
-        --username hiclaw-admin --password HiClaw2026! \
+        --username "$GITEA_USER" --password "$GITEA_PASS" \
         --email admin@hiclaw.local --admin \
         --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>/dev/null || true
 fi
-echo "  Gitea ready (login: hiclaw-admin / HiClaw2026!)"
+echo "  Gitea ready (login: $GITEA_USER / $GITEA_PASS)"
 
 # ─── 3. Worker Manager deps ───
 echo "[3/5] Setting up Worker Manager..."
@@ -227,15 +230,15 @@ GITEA_WORK_DIR="$HICLAW_DIR/gitea" gitea web \
 GITEA_PID=$!
 sleep 15
 
-curl -s -X POST http://localhost:3300/api/v1/user/repos \
+curl -s -X POST http://localhost:$GITEA_PORT/api/v1/user/repos \
     -H "Content-Type: application/json" \
-    -u "hiclaw-admin:HiClaw2026!" \
+    -u "$GITEA_USER:$GITEA_PASS" \
     -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' >/dev/null 2>&1 || true
 
 TMPDIR=$(mktemp -d)
 git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null
 cd "$TMPDIR/skills"
-git remote add gitea "http://hiclaw-admin:HiClaw2026!@localhost:3300/hiclaw-admin/skills.git" 2>/dev/null || true
+git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
 git push gitea master --force 2>/dev/null || true
 cd "$PROJECT_DIR"
 rm -rf "$TMPDIR"
@@ -261,5 +264,5 @@ echo "To stop:   bash hiclaw/stop.sh"
 echo ""
 echo "Services:"
 echo "  OpenHands  http://localhost:3000"
-echo "  Gitea      http://localhost:3300  (hiclaw-admin / HiClaw2026!)"
-echo "  Manager    http://localhost:9090"
+echo "  Gitea      http://localhost:$GITEA_PORT  ($GITEA_USER / $GITEA_PASS)"
+echo "  Manager    http://localhost:${HICLAW_MANAGER_PORT:-9090}"

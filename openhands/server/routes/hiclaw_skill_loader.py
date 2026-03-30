@@ -1,7 +1,7 @@
 """
 >>> CUSTOM: HiClaw — Load skills from Git repo into agent system prompt.
 
-Reads SKILL.md files from the bare repo at /opt/hiclaw/skills-repo.git
+Reads SKILL.md files from the bare repo (configured via HICLAW_DIR env var)
 and formats them for injection into the agent's system_message_suffix.
 <<<
 """
