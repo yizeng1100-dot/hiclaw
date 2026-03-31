@@ -263,7 +263,13 @@ class MachineManager:
             git_daemon.wait()
 
     async def _start_agent_server(self, ssh: SSHClient, machine: MachineInfo) -> None:
-        """Start agent-server on the remote machine."""
+        """Start agent-server on the remote machine.
+
+        Logic:
+        1. Check if port already has a healthy agent-server → reuse or kill+restart
+        2. Kill any leftover process on the port
+        3. Start fresh
+        """
         tmpl = TEMPLATES.get(machine.template, TEMPLATES["openhands"])
         binary = tmpl["binary"]
         port = machine.agent_server_port
@@ -271,31 +277,40 @@ class MachineManager:
         # Find actual binary — check new path first, fall back to legacy
         stdout, _, _ = await ssh.run(f"test -f {binary} && echo FOUND || echo MISSING", timeout=5)
         if stdout.strip() != "FOUND":
-            # Check legacy path
             stdout2, _, _ = await ssh.run("test -f /opt/agent-venv/bin/agent-server && echo FOUND || echo MISSING", timeout=5)
             if stdout2.strip() == "FOUND":
                 binary = "/opt/agent-venv/bin/agent-server"
                 logger.info(f"Using legacy binary path: {binary}")
 
-        # Check if agent-server is already running on this port with the right workspace
-        stdout, _, ec = await ssh.run(f"curl -s --max-time 2 http://localhost:{port}/health", timeout=5)
-        if ec == 0 and "OK" in stdout:
-            # Verify it's running in the correct workspace
+        # Step 1: Check if something is already listening on the port
+        health_out, _, health_ec = await ssh.run(
+            f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 http://localhost:{port}/health",
+            timeout=5,
+        )
+        port_healthy = health_out.strip() == "200"
+
+        if port_healthy:
+            # Something healthy on the port — check if it's our agent-server with right workspace
             check_stdout, _, _ = await ssh.run(
-                f"ps aux | grep 'agent-server --port {port}' | grep -v grep | head -1", timeout=5)
+                f"ps aux | grep 'agent-server.*--port {port}' | grep -v grep | head -1", timeout=5)
             if machine.workspace in check_stdout:
-                logger.info(f"Agent-server already running in {machine.workspace}")
+                logger.info(f"Agent-server already running in {machine.workspace}, reusing")
                 return
             else:
-                # Wrong workspace — kill and restart
-                logger.info(f"Agent-server running in wrong workspace, restarting for {machine.workspace}")
-                await ssh.run(f"pkill -f 'agent-server --port {port}' || true", timeout=5)
+                logger.info(f"Port {port} occupied (wrong workspace or other process), killing")
+                await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || pkill -f 'agent-server.*--port {port}' || true", timeout=5)
                 await asyncio.sleep(2)
+        else:
+            # Port not healthy — kill any leftover agent-server process on this port
+            await ssh.run(f"pkill -f 'agent-server.*--port {port}' 2>/dev/null || true", timeout=5)
+            # Also kill anything else holding the port
+            await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
+            await asyncio.sleep(1)
 
-        # Ensure workspace exists
+        # Step 2: Ensure workspace exists
         await ssh.run(f"mkdir -p {machine.workspace}")
 
-        # Start in background, pass through debug env vars from app-server
+        # Step 3: Start in background
         log_file = f"/tmp/agent-server-{machine.id}.log"
         env_vars = ""
         if os.environ.get('HICLAW_LLM_DEBUG'):
