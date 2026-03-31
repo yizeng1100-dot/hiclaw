@@ -2174,6 +2174,20 @@ class LiveStatusAppConversationServiceInjector(AppConversationServiceInjector):
                 if isinstance(sandbox_service, DockerSandboxService):
                     web_url = f'http://host.docker.internal:{sandbox_service.host_port}'
 
+            # >>> CUSTOM: HiClaw — replace host.docker.internal with reachable IP <<<
+            if web_url and 'host.docker.internal' in web_url:
+                import socket
+                app_ip = os.environ.get('HICLAW_APP_IP', '')
+                if not app_ip:
+                    try:
+                        import urllib.request
+                        app_ip = urllib.request.urlopen('https://icanhazip.com', timeout=3).read().decode().strip()
+                    except Exception:
+                        app_ip = socket.gethostbyname(socket.gethostname())
+                web_url = web_url.replace('host.docker.internal', app_ip)
+                _logger.info(f'Replaced web_url host.docker.internal with {app_ip}: {web_url}')
+            # >>> END CUSTOM <<<
+
             # Get app_mode for SaaS mode
             app_mode = None
             try:
