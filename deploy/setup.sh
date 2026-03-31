@@ -105,13 +105,12 @@ if [ -f "$DEPS_BUNDLE" ] && { [ ! -f "$GITEA_BIN" ] || [ ! -d "$MANAGER_DIR/deps
 fi
 
 if [ ! -f "$GITEA_BIN" ]; then
-        echo "  Downloading Gitea..."
-        mkdir -p "$HICLAW_DIR/bin"
-        RELEASE_URL="https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1"
-        curl -fSL "$RELEASE_URL/gitea" -o "$GITEA_BIN" 2>/dev/null || \
-        curl -fSL "https://dl.gitea.com/gitea/1.22.6/gitea-1.22.6-linux-amd64" -o "$GITEA_BIN"
-        chmod +x "$GITEA_BIN"
-    fi
+    echo "  Downloading Gitea..."
+    mkdir -p "$HICLAW_DIR/bin"
+    RELEASE_URL="https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1"
+    curl -fSL "$RELEASE_URL/gitea" -o "$GITEA_BIN" 2>/dev/null || \
+    curl -fSL "https://dl.gitea.com/gitea/1.22.6/gitea-1.22.6-linux-amd64" -o "$GITEA_BIN"
+    chmod +x "$GITEA_BIN"
 fi
 
 # Gitea config
