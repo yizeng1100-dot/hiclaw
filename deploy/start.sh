@@ -90,9 +90,19 @@ elif [ -d "$HICLAW_DIR/venv/bin" ]; then
     PYTHON="$HICLAW_DIR/venv/bin/python3"
     UVICORN="$HICLAW_DIR/venv/bin/uvicorn"
     export PATH="$HICLAW_DIR/venv/bin:$PATH"
+elif command -v uvicorn &>/dev/null; then
+    # System Python with uvicorn in PATH
+    PYTHON="python3"
+    UVICORN="uvicorn"
+elif [ -n "$(find "$HOME/.cache/pypoetry/virtualenvs" -name 'uvicorn' -type f 2>/dev/null | head -1)" ]; then
+    # Poetry venv (development mode)
+    POETRY_VENV="$(dirname "$(dirname "$(find "$HOME/.cache/pypoetry/virtualenvs" -name 'uvicorn' -path '*/bin/uvicorn' -type f 2>/dev/null | head -1)")")"
+    PYTHON="$POETRY_VENV/bin/python3"
+    UVICORN="$POETRY_VENV/bin/uvicorn"
+    export PATH="$POETRY_VENV/bin:$PATH"
 else
     echo "ERROR: Python environment not found."
-    echo "Put hiclaw-runtime.tar.gz in hiclaw/ and run: bash deploy/setup.sh"
+    echo "Put hiclaw-runtime.tar.gz in deploy/ and run: bash deploy/setup.sh"
     exit 1
 fi
 
