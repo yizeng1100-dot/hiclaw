@@ -80,6 +80,8 @@ class Provisioner:
         yield _evt(ProvisionStep.CHECK_PYTHON, "started")
         stdout, _, ec = await self.ssh.run("python3 --version", timeout=10)
         python_ok = False
+        # remote_python: the python3 command to use for all subsequent pip/exec calls
+        remote_python = "python3"
         if ec == 0:
             # Check version is >= 3.12
             version_str = stdout.strip()  # "Python 3.x.y"
@@ -89,6 +91,9 @@ class Provisioner:
             )
             if ver_ec == 0:
                 python_ok = True
+                # Find the actual python3 path on remote
+                py_path_out, _, _ = await self.ssh.run("which python3", timeout=5)
+                remote_python = py_path_out.strip() or "python3"
                 yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=version_str)
             else:
                 yield _evt(ProvisionStep.CHECK_PYTHON, "started",
@@ -112,7 +117,8 @@ class Provisioner:
                 # Ensure PATH has ~/.local/bin first
                 await self.ssh.run("grep -q '.local/bin' $HOME/.bashrc || echo 'export PATH=$HOME/.local/bin:$PATH' >> $HOME/.bashrc", timeout=5)
                 # Verify with full path
-                _, _, ec = await self.ssh.run(f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12 --version", timeout=5)
+                remote_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12"
+                _, _, ec = await self.ssh.run(f"{remote_python} --version", timeout=5)
                 if ec == 0:
                     yield _evt(ProvisionStep.INSTALL_PYTHON, "completed")
                 else:
@@ -131,9 +137,9 @@ class Provisioner:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Remote has internet")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing via pip")
 
-                # Bootstrap pip + setuptools + wheel in standalone Python
+                # Bootstrap pip + setuptools + wheel
                 await self.ssh.run(
-                    f"$HOME/.local/bin/python3 -m ensurepip --upgrade 2>/dev/null || true",
+                    f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true",
                     timeout=30,
                 )
 
@@ -146,27 +152,28 @@ class Provisioner:
 
                 # Upgrade pip and install build tools first
                 await self.ssh.run(
-                    f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
+                    f"{remote_python} -m pip install --break-system-packages --upgrade "
                     f"{mirror_flag} pip setuptools wheel",
                     timeout=120,
                 )
 
-                # Install to target dir
+                # Install to target dir — no-build-isolation avoids nested pip subprocess issues
                 _, stderr, ec = await self.ssh.run(
-                    f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
-                    f"--ignore-installed --prefer-binary --target {venv}/lib "
+                    f"{remote_python} -m pip install --break-system-packages --upgrade "
+                    f"--ignore-installed --prefer-binary --no-build-isolation "
+                    f"--target {venv}/lib "
                     f"{mirror_flag} {self.tmpl['pip_package']}",
                     timeout=600,
                 )
                 if ec != 0:
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[:200])
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[:500])
                     return
 
                 # Create wrapper script so agent-server binary works
                 await self.ssh.run(
                     f"mkdir -p {venv}/bin && "
                     f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
-                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec $HOME/.local/bin/python3 -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
+                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec {remote_python} -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
                     f"chmod +x {venv}/bin/agent-server",
                     timeout=10,
                 )
@@ -209,19 +216,20 @@ class Provisioner:
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
                 # Bootstrap pip + setuptools + wheel
                 await self.ssh.run(
-                    f"$HOME/.local/bin/python3 -m ensurepip --upgrade 2>/dev/null || true",
+                    f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true",
                     timeout=30,
                 )
                 await self.ssh.run(
-                    f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
+                    f"{remote_python} -m pip install --break-system-packages --upgrade "
                     f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"pip setuptools wheel 2>/dev/null || true",
                     timeout=60,
                 )
                 # Install to target dir
                 _, stderr, ec = await self.ssh.run(
-                    f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
-                    f"--ignore-installed --prefer-binary --target {venv}/lib "
+                    f"{remote_python} -m pip install --break-system-packages --upgrade "
+                    f"--ignore-installed --prefer-binary --no-build-isolation "
+                    f"--target {venv}/lib "
                     f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"{self.tmpl['pip_package']}",
                     timeout=300,
@@ -231,12 +239,12 @@ class Provisioner:
                 await self.ssh.run(
                     f"mkdir -p {venv}/bin && "
                     f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
-                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec $HOME/.local/bin/python3 -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
+                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec {remote_python} -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
                     f"chmod +x {venv}/bin/agent-server",
                     timeout=10,
                 )
                 if ec != 0:
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[:200])
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[:500])
                     return
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
         else:
