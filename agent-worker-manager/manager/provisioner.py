@@ -142,7 +142,7 @@ class Provisioner:
                                            progress_callback=_py_progress)
                 self._broadcast(_evt(ProvisionStep.INSTALL_PYTHON, "started",
                                      detail="Extracting..."))
-                await self.ssh.run(f"tar xzf /tmp/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm /tmp/python3-standalone.tar.gz", timeout=120)
+                await self.ssh.run(f"mkdir -p {REMOTE_PYTHON_INSTALL_PATH} && tar xzf /tmp/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm /tmp/python3-standalone.tar.gz", timeout=120)
                 # Override system python3/pip3 with 3.12 — put in front of PATH
                 await self.ssh.run(
                     f"mkdir -p $HOME/.local/bin && "
