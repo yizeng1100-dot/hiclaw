@@ -38,6 +38,17 @@ mkdir -p "$LOG_DIR"
 export no_proxy="${no_proxy:+$no_proxy,}localhost,127.0.0.1"
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1"
 
+# ─── Auto-detect app-server IP for internal networks ───
+# Remote agent-servers need this IP to callback to app-server (MCP, webhooks)
+# Priority: env var > ip route default > hostname -I
+if [ -z "$HICLAW_APP_IP" ]; then
+    HICLAW_APP_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+    [ -z "$HICLAW_APP_IP" ] && HICLAW_APP_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [ -z "$HICLAW_APP_IP" ] && HICLAW_APP_IP="127.0.0.1"
+fi
+export HICLAW_APP_IP
+echo "  App IP: $HICLAW_APP_IP"
+
 # ─── Python 环境 ───
 RUNTIME_DIR="$HICLAW_DIR/runtime"
 
