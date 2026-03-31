@@ -34,6 +34,10 @@ LOG_DIR="$HICLAW_DIR/logs"
 
 mkdir -p "$LOG_DIR"
 
+# ─── Bypass proxy for localhost (corporate networks) ───
+export no_proxy="${no_proxy:+$no_proxy,}localhost,127.0.0.1"
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1"
+
 # ─── Python 环境 ───
 RUNTIME_DIR="$HICLAW_DIR/runtime"
 
