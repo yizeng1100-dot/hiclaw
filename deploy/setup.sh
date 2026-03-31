@@ -80,29 +80,31 @@ fi
 echo "[2/5] Setting up Gitea..."
 GITEA_BIN="$HICLAW_DIR/bin/gitea"
 
-if [ ! -f "$GITEA_BIN" ]; then
-    # Extract from deps bundle
-    DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
-    if [ -f "$DEPS_BUNDLE" ]; then
-        echo "  Extracting Gitea from deps bundle..."
-        DEPS_TMP=$(mktemp -d)
-        tar xzf "$DEPS_BUNDLE" -C "$DEPS_TMP"
+# Extract deps bundle (Gitea + remote terminal deps)
+DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
+if [ -f "$DEPS_BUNDLE" ] && { [ ! -f "$GITEA_BIN" ] || [ ! -d "$MANAGER_DIR/deps/wheels" ]; }; then
+    echo "  Extracting deps bundle..."
+    DEPS_TMP=$(mktemp -d)
+    tar xzf "$DEPS_BUNDLE" -C "$DEPS_TMP"
+    # Gitea binary
+    if [ ! -f "$GITEA_BIN" ] && [ -f "$DEPS_TMP/gitea" ]; then
         mkdir -p "$HICLAW_DIR/bin"
-        if [ -f "$DEPS_TMP/gitea" ]; then
-            mv "$DEPS_TMP/gitea" "$GITEA_BIN"
-            chmod +x "$GITEA_BIN"
+        mv "$DEPS_TMP/gitea" "$GITEA_BIN"
+        chmod +x "$GITEA_BIN"
+    fi
+    # Remote terminal deps (wheels, code-server, python standalone)
+    if [ -d "$DEPS_TMP/agent-deps" ]; then
+        mkdir -p "$MANAGER_DIR/deps"
+        cp "$DEPS_TMP/agent-deps/"* "$MANAGER_DIR/deps/" 2>/dev/null || true
+        if [ -f "$MANAGER_DIR/deps/wheels.tar.gz" ]; then
+            tar xzf "$MANAGER_DIR/deps/wheels.tar.gz" -C "$MANAGER_DIR/deps/"
+            rm -f "$MANAGER_DIR/deps/wheels.tar.gz"
         fi
-        # Also extract agent deps for remote provisioning
-        if [ -d "$DEPS_TMP/agent-deps" ]; then
-            mkdir -p "$MANAGER_DIR/deps"
-            cp "$DEPS_TMP/agent-deps/"* "$MANAGER_DIR/deps/" 2>/dev/null || true
-            if [ -f "$MANAGER_DIR/deps/wheels.tar.gz" ]; then
-                tar xzf "$MANAGER_DIR/deps/wheels.tar.gz" -C "$MANAGER_DIR/deps/"
-                rm -f "$MANAGER_DIR/deps/wheels.tar.gz"
-            fi
-        fi
-        rm -rf "$DEPS_TMP"
-    else
+    fi
+    rm -rf "$DEPS_TMP"
+fi
+
+if [ ! -f "$GITEA_BIN" ]; then
         echo "  Downloading Gitea..."
         mkdir -p "$HICLAW_DIR/bin"
         RELEASE_URL="https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1"
