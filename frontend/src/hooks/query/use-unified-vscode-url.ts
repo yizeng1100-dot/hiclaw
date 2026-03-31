@@ -50,27 +50,24 @@ export const useUnifiedVSCodeUrl = () => {
 
       // V1: Get VSCode URL from sandbox exposed_urls
       if (isV1Conversation) {
-        // >>> CUSTOM: HiClaw — remote machines use code-server via /runtime/ proxy <<<
-        const isRemoteSandbox = sandboxId && sandboxId.startsWith("remote-");
-        if (isRemoteSandbox && appConversation?.conversation_url) {
-          // Extract tunnel port from conversation_url (e.g., /runtime/32073/api/...)
-          const match = appConversation.conversation_url.match(/\/runtime\/(\d+)\//);
-          if (match) {
-            // Try to get code-server tunnel port from Worker Manager
-            try {
-              const machinesResp = await fetch("/runtime/manager/api/machines");
-              const machines = await machinesResp.json();
-              const machine = machines.find((m: { code_server_tunnel_port: number; workspace: string; status: string }) =>
-                m.code_server_tunnel_port > 0 && m.status === "ready"
-              );
-              if (machine?.code_server_tunnel_port) {
-                // Access code-server via /runtime/ proxy (tunneled through SSH)
-                return {
-                  url: `/runtime/${machine.code_server_tunnel_port}/?folder=${encodeURIComponent(machine.workspace || "/root/workspace")}`,
-                  error: null,
-                };
-              }
-            } catch { /* fall through */ }
+        // >>> CUSTOM: HiClaw — remote machines use code-server directly <<<
+        const isRemoteSandbox = sandboxId?.startsWith("remote-");
+        if (isRemoteSandbox) {
+          try {
+            const machinesResp = await fetch("/runtime/manager/api/machines");
+            const machines = await machinesResp.json();
+            const machine = machines.find(
+              (m: { code_server_port: number; host: string; status: string }) =>
+                m.code_server_port > 0 && m.status === "ready",
+            );
+            if (machine?.host && machine?.code_server_port) {
+              return {
+                url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(machine.workspace || "/root/workspace")}`,
+                error: null,
+              };
+            }
+          } catch {
+            /* fall through */
           }
           return {
             url: null,
