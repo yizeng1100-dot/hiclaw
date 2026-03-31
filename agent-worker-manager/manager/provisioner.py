@@ -131,7 +131,7 @@ class Provisioner:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Remote has internet")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing via pip")
 
-                # Ensure pip is available via the standalone Python
+                # Bootstrap pip + setuptools + wheel in standalone Python
                 await self.ssh.run(
                     f"$HOME/.local/bin/python3 -m ensurepip --upgrade 2>/dev/null || true",
                     timeout=30,
@@ -144,7 +144,14 @@ class Provisioner:
                 )
                 mirror_flag = "-i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com" if mirror_ec == 0 else ""
 
-                # Install to target dir — only-binary prevents source builds on machines without gcc
+                # Upgrade pip and install build tools first
+                await self.ssh.run(
+                    f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
+                    f"{mirror_flag} pip setuptools wheel",
+                    timeout=120,
+                )
+
+                # Install to target dir
                 _, stderr, ec = await self.ssh.run(
                     f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
                     f"--ignore-installed --prefer-binary --target {venv}/lib "
@@ -200,12 +207,18 @@ class Provisioner:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
 
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
-                # Ensure pip is available
+                # Bootstrap pip + setuptools + wheel
                 await self.ssh.run(
                     f"$HOME/.local/bin/python3 -m ensurepip --upgrade 2>/dev/null || true",
                     timeout=30,
                 )
-                # Install to target dir — only-binary prevents source builds
+                await self.ssh.run(
+                    f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
+                    f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                    f"pip setuptools wheel 2>/dev/null || true",
+                    timeout=60,
+                )
+                # Install to target dir
                 _, stderr, ec = await self.ssh.run(
                     f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
                     f"--ignore-installed --prefer-binary --target {venv}/lib "
