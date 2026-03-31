@@ -173,20 +173,19 @@ class Provisioner:
                     "--trusted-host pypi.python.org"
                 )
 
-                # Upgrade pip and install build tools first
-                up_out, up_err, up_ec = await self.ssh.run(
+                # Upgrade pip and install setuptools+wheel first
+                # (ensurepip gives a basic pip; setuptools install via pip doesn't need setuptools itself)
+                await self.ssh.run(
                     f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"{cert_flag} {trusted_hosts} {mirror_flag} pip setuptools wheel 2>&1",
+                    f"{cert_flag} {trusted_hosts} {mirror_flag} pip setuptools wheel 2>&1 || true",
                     timeout=120,
                 )
-                if up_ec != 0:
-                    logger.warning("pip upgrade failed: %s", (up_out + up_err)[-500:])
 
-                # Install to target dir — no-build-isolation avoids nested pip subprocess issues
+                # Install to target dir
                 # Redirect stderr to stdout so we capture everything
                 stdout_all, stderr, ec = await self.ssh.run(
                     f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"--ignore-installed --prefer-binary --no-build-isolation "
+                    f"--ignore-installed --prefer-binary "
                     f"{cert_flag} {trusted_hosts} "
                     f"--target {venv}/lib "
                     f"{mirror_flag} {self.tmpl['pip_package']} 2>&1",
@@ -257,7 +256,7 @@ class Provisioner:
                 # Install to target dir
                 stdout_all, stderr, ec = await self.ssh.run(
                     f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"--ignore-installed --prefer-binary --no-build-isolation "
+                    f"--ignore-installed --prefer-binary "
                     f"--target {venv}/lib "
                     f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"{self.tmpl['pip_package']} 2>&1",
