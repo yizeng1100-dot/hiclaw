@@ -38,14 +38,12 @@ mkdir -p "$LOG_DIR"
 RUNTIME_DIR="$HICLAW_DIR/runtime"
 
 select_pro() {
-    if [ ! -d "$RUNTIME_DIR/bin" ]; then
+    if [ ! -f "$RUNTIME_DIR/hiclaw-python" ]; then
         echo "ERROR: Runtime not installed. Run: bash deploy/setup.sh"
         exit 1
     fi
-    PYTHON="$RUNTIME_DIR/bin/hiclaw-python"
-    UVICORN="$RUNTIME_DIR/bin/hiclaw-uvicorn"
-    export LD_LIBRARY_PATH="$RUNTIME_DIR/python/lib:$LD_LIBRARY_PATH"
-    export PATH="$RUNTIME_DIR/venv/bin:$PATH"
+    PYTHON="$RUNTIME_DIR/hiclaw-python"
+    UVICORN="$RUNTIME_DIR/hiclaw-uvicorn"
     echo "  Mode: PRODUCTION (hiclaw-runtime)"
 }
 
@@ -75,7 +73,7 @@ case "$MODE" in
     dev|development)
         select_dev ;;
     auto|"")
-        if [ -d "$RUNTIME_DIR/bin" ]; then
+        if [ -f "$RUNTIME_DIR/hiclaw-python" ]; then
             select_pro
         else
             select_dev

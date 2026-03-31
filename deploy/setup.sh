@@ -34,48 +34,16 @@ mkdir -p "$HICLAW_DIR"
 RUNTIME_BUNDLE="$SCRIPT_DIR/hiclaw-runtime.tar.gz"
 RUNTIME_DIR="$HICLAW_DIR/runtime"
 
-if [ -d "$RUNTIME_DIR/bin" ]; then
+if [ -f "$RUNTIME_DIR/hiclaw-python" ]; then
     echo "[0/5] Runtime already installed"
-    echo "  Python: $($RUNTIME_DIR/bin/hiclaw-python --version 2>&1)"
+    echo "  Python: $($RUNTIME_DIR/hiclaw-python --version 2>&1)"
 elif [ -f "$RUNTIME_BUNDLE" ]; then
     echo "[0/5] Installing self-contained runtime..."
     mkdir -p "$RUNTIME_DIR"
     tar xzf "$RUNTIME_BUNDLE" -C "$RUNTIME_DIR"
-
-    # Fix hardcoded paths — venv was built at /tmp/hiclaw-runtime, rewrite to actual location
-    echo "  Fixing paths..."
-    OLD_PATH="/tmp/hiclaw-runtime"
-    NEW_PATH="$RUNTIME_DIR"
-
-    # Fix pyvenv.cfg
-    sed -i "s|$OLD_PATH|$NEW_PATH|g" "$RUNTIME_DIR/venv/pyvenv.cfg"
-
-    # Fix shebang lines in all venv/bin/ scripts (regular files)
-    find "$RUNTIME_DIR/venv/bin" -type f -exec grep -l "$OLD_PATH" {} \; 2>/dev/null | while read f; do
-        sed -i "s|$OLD_PATH|$NEW_PATH|g" "$f"
-    done
-
-    # Fix symbolic links — python3/python in venv/bin may be symlinks to old path
-    for link in "$RUNTIME_DIR/venv/bin/python3" "$RUNTIME_DIR/venv/bin/python" "$RUNTIME_DIR/venv/bin/python3.12"; do
-        if [ -L "$link" ]; then
-            target="$(readlink "$link")"
-            if echo "$target" | grep -q "$OLD_PATH"; then
-                new_target="$(echo "$target" | sed "s|$OLD_PATH|$NEW_PATH|g")"
-                rm -f "$link"
-                ln -sf "$new_target" "$link"
-            fi
-        elif [ ! -e "$link" ]; then
-            # Broken or missing — recreate pointing to standalone python
-            rm -f "$link"
-            ln -sf "$RUNTIME_DIR/python/bin/python3.12" "$link"
-        fi
-    done
-
-    # Fix bin/ wrapper scripts
-    sed -i "s|$OLD_PATH|$NEW_PATH|g" "$RUNTIME_DIR/bin/hiclaw-python" "$RUNTIME_DIR/bin/hiclaw-uvicorn" "$RUNTIME_DIR/activate.sh" 2>/dev/null
-
-    echo "  Python: $($RUNTIME_DIR/bin/hiclaw-python --version 2>&1)"
-    echo "  Verify: $($RUNTIME_DIR/bin/hiclaw-python -c 'import uvicorn,socketio;print("All imports OK")' 2>&1)"
+    # No path fixing needed — uses PYTHONPATH, no venv, no absolute paths
+    echo "  Python: $($RUNTIME_DIR/hiclaw-python --version 2>&1)"
+    echo "  Verify: $($RUNTIME_DIR/hiclaw-python -c 'import uvicorn,socketio,browsergym;print("All imports OK")' 2>&1)"
 else
     echo "[0/5] ERROR: hiclaw-runtime.tar.gz not found in $SCRIPT_DIR/"
     echo "  This file contains Python 3.12 + all dependencies."
