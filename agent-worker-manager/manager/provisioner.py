@@ -143,17 +143,40 @@ class Provisioner:
                     timeout=30,
                 )
 
+                # Find system CA cert bundle for standalone Python (its bundled certs
+                # don't include corporate/internal CA certificates)
+                ca_out, _, _ = await self.ssh.run(
+                    "for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt "
+                    "/etc/ssl/ca-bundle.pem /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem; do "
+                    "[ -f \"$f\" ] && echo $f && break; done",
+                    timeout=5,
+                )
+                ca_cert = ca_out.strip()
+                cert_flag = f"--cert {ca_cert}" if ca_cert else ""
+
                 # Use mirror if accessible
                 _, _, mirror_ec = await self.ssh.run(
                     "curl -s --max-time 3 -o /dev/null https://mirrors.aliyun.com/pypi/simple/",
                     timeout=5,
                 )
-                mirror_flag = "-i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com" if mirror_ec == 0 else ""
+                if mirror_ec == 0:
+                    mirror_flag = (
+                        "-i https://mirrors.aliyun.com/pypi/simple/ "
+                        "--trusted-host mirrors.aliyun.com"
+                    )
+                else:
+                    mirror_flag = ""
+                # Always trust common hosts (standalone Python SSL certs may be incomplete)
+                trusted_hosts = (
+                    "--trusted-host pypi.org "
+                    "--trusted-host files.pythonhosted.org "
+                    "--trusted-host pypi.python.org"
+                )
 
                 # Upgrade pip and install build tools first
                 await self.ssh.run(
                     f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"{mirror_flag} pip setuptools wheel",
+                    f"{cert_flag} {trusted_hosts} {mirror_flag} pip setuptools wheel",
                     timeout=120,
                 )
 
@@ -161,12 +184,13 @@ class Provisioner:
                 _, stderr, ec = await self.ssh.run(
                     f"{remote_python} -m pip install --break-system-packages --upgrade "
                     f"--ignore-installed --prefer-binary --no-build-isolation "
+                    f"{cert_flag} {trusted_hosts} "
                     f"--target {venv}/lib "
                     f"{mirror_flag} {self.tmpl['pip_package']}",
                     timeout=600,
                 )
                 if ec != 0:
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[:500])
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[-800:])
                     return
 
                 # Create wrapper script so agent-server binary works
