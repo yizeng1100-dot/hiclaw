@@ -247,84 +247,48 @@ class Provisioner:
         else:
             yield _evt(ProvisionStep.CHECK_AGENT_SDK, "completed", detail="Already installed")
 
-        # Step 5: Install code-server (try mirrors first, fallback to direct)
+        # Step 5: Install code-server — always upload from app-server (same as SDK)
         if not already_has_cs:
-            yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "started")
-            installed = False
-
-            # Download URLs — try mirrors first, then direct
             CS_FILE = "code-server.tar.gz"
-            RELEASE_URL = "https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1/code-server.tar.gz"
-            mirror_urls = [
-                f"https://ghfast.top/{RELEASE_URL}",
-                RELEASE_URL,
-            ]
+            cs_tar = os.path.join(DEPS_DIR, CS_FILE)
+            if os.path.exists(cs_tar):
+                cs_size_mb = os.path.getsize(cs_tar) // 1024 // 1024
+                yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
+                           detail=f"Uploading code-server ({cs_size_mb}MB)")
 
-            for url in mirror_urls:
-                mirror_name = url.split("//")[1].split("/")[0]
+                last_mb = [0]
+                def _cs_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        total_mb = total // 1024 // 1024
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(_evt(
+                            ProvisionStep.INSTALL_CODE_SERVER, "started",
+                            detail=f"Uploading {sent_mb}/{total_mb}MB ({pct}%)"
+                        ))
+
+                await self.ssh.upload_file(cs_tar, f"/tmp/{CS_FILE}",
+                                           progress_callback=_cs_progress)
                 self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
-                                     detail=f"Trying {mirror_name}..."))
-                try:
-                    _, _, ec = await self.ssh.run(
-                        f"curl -fSL --max-time 600 -o /tmp/{CS_FILE} '{url}'",
-                        timeout=620,
-                    )
-                    if ec == 0:
-                        # Extract and install
-                        await self.ssh.run(
-                            f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
-                            f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
-                            f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && "
-                            f"rm -f /tmp/{CS_FILE}",
-                            timeout=60,
-                        )
-                        _, _, verify_ec = await self.ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
-                        if verify_ec == 0:
-                            installed = True
-                            yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed",
-                                       detail=f"Installed via {mirror_name}")
-                            break
-                except Exception:
-                    continue
-
-            if not installed:
-                # Final fallback: upload from app-server via SFTP
-                cs_tar = os.path.join(DEPS_DIR, "code-server.tar.gz")
-                if os.path.exists(cs_tar):
-                    cs_size_mb = os.path.getsize(cs_tar) // 1024 // 1024
-                    self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
-                                         detail=f"Mirrors failed, uploading from server ({cs_size_mb}MB)"))
-
-                    last_mb = [0]
-                    def _cs_progress(sent, total):
-                        sent_mb = sent // 1024 // 1024
-                        if sent_mb > last_mb[0]:
-                            last_mb[0] = sent_mb
-                            total_mb = total // 1024 // 1024
-                            pct = int(sent * 100 / total) if total else 0
-                            self._broadcast(_evt(
-                                ProvisionStep.INSTALL_CODE_SERVER, "started",
-                                detail=f"Uploading {sent_mb}/{total_mb}MB ({pct}%)"
-                            ))
-
-                    await self.ssh.upload_file(cs_tar, f"/tmp/{CS_FILE}",
-                                               progress_callback=_cs_progress)
-                    await self.ssh.run(
-                        f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
-                        f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
-                        f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && "
-                        f"rm -f /tmp/{CS_FILE}",
-                        timeout=60,
-                    )
-                    _, _, verify_ec = await self.ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
-                    if verify_ec == 0:
-                        installed = True
-                        yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed",
-                                   detail="Installed via SFTP upload")
-
-                if not installed:
-                    yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "skipped",
-                               detail="All methods failed, VS Code unavailable")
+                                     detail="Extracting..."))
+                await self.ssh.run(
+                    f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
+                    f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
+                    f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && "
+                    f"rm -f /tmp/{CS_FILE}",
+                    timeout=60,
+                )
+                _, _, verify_ec = await self.ssh.run(
+                    f"test -f {REMOTE_CODE_SERVER_PATH}/bin/code-server", timeout=5)
+                if verify_ec == 0:
+                    yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed")
+                else:
+                    yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "failed",
+                               detail="Extraction failed")
+            else:
+                yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "skipped",
+                           detail="code-server.tar.gz not found in deps/")
         else:
             yield _evt(ProvisionStep.CHECK_CODE_SERVER, "completed", detail="Already installed")
 
