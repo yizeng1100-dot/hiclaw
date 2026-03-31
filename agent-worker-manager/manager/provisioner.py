@@ -128,154 +128,84 @@ class Provisioner:
                 yield _evt(ProvisionStep.INSTALL_PYTHON, "failed", detail="python3-standalone.tar.gz not found")
                 return
 
-        # Step 3+4: Install SDK — uses pip install --target (no venv needed)
+        # Step 3+4: Install SDK — always push wheels from app-server (treat remote as offline)
         if not already_has_sdk:
-            has_internet = await self._check_internet()
             venv = self.tmpl["venv_path"]  # e.g. ~/.hiclaw/agent-venv
 
-            if has_internet:
-                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Remote has internet")
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing via pip")
+            # Upload wheels from app-server
+            wheels_dir = os.path.join(DEPS_DIR, "wheels")
+            if not os.path.isdir(wheels_dir):
+                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "failed", detail="wheels/ not found in deps/")
+                return
 
-                # Bootstrap pip + setuptools + wheel
-                await self.ssh.run(
-                    f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true",
-                    timeout=30,
-                )
+            import subprocess
+            wheels_archive = "/tmp/_wheels_upload.tar.gz"
+            subprocess.run(f"tar czf {wheels_archive} -C {DEPS_DIR} wheels/",
+                           shell=True, check=True, timeout=30)
+            archive_size = os.path.getsize(wheels_archive)
+            archive_size_mb = archive_size // 1024 // 1024
+            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "started",
+                       detail=f"Uploading {archive_size_mb}MB")
 
-                # Find system CA cert bundle for standalone Python (its bundled certs
-                # don't include corporate/internal CA certificates)
-                ca_out, _, _ = await self.ssh.run(
-                    "for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt "
-                    "/etc/ssl/ca-bundle.pem /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem; do "
-                    "[ -f \"$f\" ] && echo $f && break; done",
-                    timeout=5,
-                )
-                ca_cert = ca_out.strip()
-                cert_flag = f"--cert {ca_cert}" if ca_cert else ""
+            last_mb = [0]
+            def _on_progress(sent, total):
+                sent_mb = sent // 1024 // 1024
+                if sent_mb > last_mb[0]:
+                    last_mb[0] = sent_mb
+                    total_mb = total // 1024 // 1024
+                    pct = int(sent * 100 / total) if total else 0
+                    self._broadcast(_evt(
+                        ProvisionStep.SCP_DEPENDENCIES, "started",
+                        detail=f"{sent_mb}/{total_mb}MB ({pct}%)"
+                    ))
 
-                # Use mirror if accessible
-                _, _, mirror_ec = await self.ssh.run(
-                    "curl -s --max-time 3 -o /dev/null https://mirrors.aliyun.com/pypi/simple/",
-                    timeout=5,
-                )
-                if mirror_ec == 0:
-                    mirror_flag = (
-                        "-i https://mirrors.aliyun.com/pypi/simple/ "
-                        "--trusted-host mirrors.aliyun.com"
-                    )
-                else:
-                    mirror_flag = ""
-                # Always trust common hosts (standalone Python SSL certs may be incomplete)
-                trusted_hosts = (
-                    "--trusted-host pypi.org "
-                    "--trusted-host files.pythonhosted.org "
-                    "--trusted-host pypi.python.org"
-                )
+            await self.ssh.upload_file(wheels_archive, "/tmp/agent-wheels.tar.gz",
+                                       progress_callback=_on_progress)
+            await self.ssh.run(
+                f"mkdir -p {REMOTE_DEPS_PATH} && "
+                f"tar xzf /tmp/agent-wheels.tar.gz -C {REMOTE_DEPS_PATH}/ && "
+                f"rm -f /tmp/agent-wheels.tar.gz",
+                timeout=60,
+            )
+            os.remove(wheels_archive)
+            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
 
-                # Upgrade pip and install setuptools+wheel first
-                # (ensurepip gives a basic pip; setuptools install via pip doesn't need setuptools itself)
-                await self.ssh.run(
-                    f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"{cert_flag} {trusted_hosts} {mirror_flag} pip setuptools wheel 2>&1 || true",
-                    timeout=120,
-                )
+            # Install from local wheels only — no internet needed
+            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
+            await self.ssh.run(
+                f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true",
+                timeout=30,
+            )
+            # Install setuptools+wheel first (pip install wheel doesn't need setuptools)
+            await self.ssh.run(
+                f"{remote_python} -m pip install --break-system-packages --upgrade "
+                f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                f"pip setuptools wheel 2>&1 || true",
+                timeout=60,
+            )
+            # Install SDK packages
+            stdout_all, stderr, ec = await self.ssh.run(
+                f"{remote_python} -m pip install --break-system-packages --upgrade "
+                f"--ignore-installed --prefer-binary "
+                f"--target {venv}/lib "
+                f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                f"{self.tmpl['pip_package']} 2>&1",
+                timeout=300,
+            )
 
-                # Install to target dir
-                # Redirect stderr to stdout so we capture everything
-                stdout_all, stderr, ec = await self.ssh.run(
-                    f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"--ignore-installed --prefer-binary "
-                    f"{cert_flag} {trusted_hosts} "
-                    f"--target {venv}/lib "
-                    f"{mirror_flag} {self.tmpl['pip_package']} 2>&1",
-                    timeout=600,
-                )
-                if ec != 0:
-                    # Combine all output, take last 2000 chars to see actual error
-                    all_output = (stdout_all + "\n" + stderr).strip()
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=all_output[-2000:])
-                    return
-
-                # Create wrapper script so agent-server binary works
-                await self.ssh.run(
-                    f"mkdir -p {venv}/bin && "
-                    f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
-                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec {remote_python} -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
-                    f"chmod +x {venv}/bin/agent-server",
-                    timeout=10,
-                )
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
-            else:
-                # No internet — upload wheels
-                wheels_dir = os.path.join(DEPS_DIR, "wheels")
-                if not os.path.isdir(wheels_dir):
-                    yield _evt(ProvisionStep.SCP_DEPENDENCIES, "failed", detail="wheels/ not found in deps/")
-                    return
-
-                import subprocess
-                wheels_archive = "/tmp/_wheels_upload.tar.gz"
-                subprocess.run(f"tar czf {wheels_archive} -C {DEPS_DIR} wheels/",
-                               shell=True, check=True, timeout=30)
-                archive_size = os.path.getsize(wheels_archive)
-                archive_size_mb = archive_size // 1024 // 1024
-                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "started",
-                           detail=f"Uploading {archive_size_mb}MB (no internet)")
-
-                last_mb = [0]
-                def _on_progress(sent, total):
-                    sent_mb = sent // 1024 // 1024
-                    if sent_mb > last_mb[0]:
-                        last_mb[0] = sent_mb
-                        total_mb = total // 1024 // 1024
-                        pct = int(sent * 100 / total) if total else 0
-                        self._broadcast(_evt(
-                            ProvisionStep.SCP_DEPENDENCIES, "started",
-                            detail=f"{sent_mb}/{total_mb}MB ({pct}%)"
-                        ))
-
-                await self.ssh.upload_file(wheels_archive, "/tmp/agent-wheels.tar.gz",
-                                           progress_callback=_on_progress)
-                await self.ssh.run(f"mkdir -p {REMOTE_DEPS_PATH} && tar xzf /tmp/agent-wheels.tar.gz -C {REMOTE_DEPS_PATH}/", timeout=60)
-                await self.ssh.run("rm -f /tmp/agent-wheels.tar.gz", timeout=5)
-                os.remove(wheels_archive)
-                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
-
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
-                # Bootstrap pip + setuptools + wheel
-                await self.ssh.run(
-                    f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true",
-                    timeout=30,
-                )
-                await self.ssh.run(
-                    f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                    f"pip setuptools wheel 2>/dev/null || true",
-                    timeout=60,
-                )
-                # Install to target dir
-                stdout_all, stderr, ec = await self.ssh.run(
-                    f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"--ignore-installed --prefer-binary "
-                    f"--target {venv}/lib "
-                    f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                    f"{self.tmpl['pip_package']} 2>&1",
-                    timeout=300,
-                )
-
-                # Create wrapper script
-                await self.ssh.run(
-                    f"mkdir -p {venv}/bin && "
-                    f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
-                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec {remote_python} -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
-                    f"chmod +x {venv}/bin/agent-server",
-                    timeout=10,
-                )
-                if ec != 0:
-                    all_output = (stdout_all + "\n" + stderr).strip()
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=all_output[-2000:])
-                    return
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
+            # Create wrapper script
+            await self.ssh.run(
+                f"mkdir -p {venv}/bin && "
+                f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
+                f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec {remote_python} -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
+                f"chmod +x {venv}/bin/agent-server",
+                timeout=10,
+            )
+            if ec != 0:
+                all_output = (stdout_all + "\n" + stderr).strip()
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=all_output[-2000:])
+                return
+            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
         else:
             yield _evt(ProvisionStep.CHECK_AGENT_SDK, "completed", detail="Already installed")
 
@@ -360,20 +290,3 @@ class Provisioner:
         else:
             yield _evt(ProvisionStep.CHECK_CODE_SERVER, "completed", detail="Already installed")
 
-    async def _check_internet(self) -> bool:
-        """Check if remote machine can reach a pip mirror."""
-        # Try aliyun mirror first (fast in China), then pypi
-        for url in [
-            "https://mirrors.aliyun.com/pypi/simple/",
-            "https://pypi.org/simple/",
-        ]:
-            try:
-                stdout, _, ec = await self.ssh.run(
-                    f"curl -s --connect-timeout 5 --max-time 8 -o /dev/null -w '%{{http_code}}' {url}",
-                    timeout=15,
-                )
-                if ec == 0 and stdout.strip() in ("200", "301", "302"):
-                    return True
-            except Exception:
-                continue
-        return False
