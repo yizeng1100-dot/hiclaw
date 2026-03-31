@@ -77,44 +77,48 @@ class Provisioner:
             return
 
         # Step 2: Check Python — only needed if SDK not yet installed
+        # First check if standalone Python 3.12 was already installed (fastest check)
+        standalone_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12"
+        _, _, py312_ec = await self.ssh.run(f"test -f {standalone_python}", timeout=5)
+        has_standalone = py312_ec == 0
+
         remote_python = "python3"
-        if not already_has_sdk:
+        python_ok = False
+
+        if has_standalone:
+            # Standalone Python 3.12 already installed — use it directly
+            remote_python = standalone_python
+            python_ok = True
+            yield _evt(ProvisionStep.CHECK_PYTHON, "completed",
+                       detail="Python 3.12 (standalone, already installed)")
+        elif not already_has_sdk:
             yield _evt(ProvisionStep.CHECK_PYTHON, "started")
-            stdout, _, ec = await self.ssh.run("python3 --version", timeout=10)
-            python_ok = False
+            # Check with $HOME/.local/bin in PATH (where we symlink python3.12)
+            stdout, _, ec = await self.ssh.run(
+                "export PATH=$HOME/.local/bin:$PATH && python3 --version", timeout=10)
             if ec == 0:
                 version_str = stdout.strip()
                 _, _, ver_ec = await self.ssh.run(
+                    "export PATH=$HOME/.local/bin:$PATH && "
                     "python3 -c 'import sys; exit(0 if sys.version_info >= (3,12) else 1)'",
                     timeout=5,
                 )
                 if ver_ec == 0:
                     python_ok = True
-                    py_path_out, _, _ = await self.ssh.run("which python3", timeout=5)
+                    py_path_out, _, _ = await self.ssh.run(
+                        "export PATH=$HOME/.local/bin:$PATH && which python3", timeout=5)
                     remote_python = py_path_out.strip() or "python3"
                     yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=version_str)
                 else:
                     yield _evt(ProvisionStep.CHECK_PYTHON, "started",
                                detail=f"{version_str} too old, need >= 3.12")
-            # Also check if standalone Python 3.12 was already installed previously
-            if not python_ok:
-                _, _, py312_ec = await self.ssh.run(
-                    f"test -f {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12", timeout=5)
-                if py312_ec == 0:
-                    remote_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12"
-                    python_ok = True
-                    yield _evt(ProvisionStep.CHECK_PYTHON, "completed",
-                               detail="Python 3.12 (standalone, already installed)")
         else:
+            # SDK already installed — find which python to use
             yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail="SDK already installed")
             python_ok = True
-            # Find python for wrapper script if needed later
-            py_out, _, _ = await self.ssh.run("which python3", timeout=5)
+            py_out, _, _ = await self.ssh.run(
+                "export PATH=$HOME/.local/bin:$PATH && which python3", timeout=5)
             remote_python = py_out.strip() or "python3"
-            _, _, py312_ec = await self.ssh.run(
-                f"test -f {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12", timeout=5)
-            if py312_ec == 0:
-                remote_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12"
 
         if not python_ok:
             yield _evt(ProvisionStep.INSTALL_PYTHON, "started", detail="Deploying Python 3.12 standalone")
