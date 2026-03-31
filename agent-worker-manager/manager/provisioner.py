@@ -94,45 +94,45 @@ class Provisioner:
                 yield _evt(ProvisionStep.INSTALL_PYTHON, "failed", detail="python3-standalone.tar.gz not found")
                 return
 
-        # Step 3+4: Install SDK (prefer remote pip install if internet available)
+        # Step 3+4: Install SDK — uses pip install --target (no venv needed)
         if not already_has_sdk:
             has_internet = await self._check_internet()
-            venv = self.tmpl["venv_path"]
+            venv = self.tmpl["venv_path"]  # e.g. /opt/agent-venv — used as install target dir
 
             if has_internet:
-                # Remote has internet — let it download directly (much faster than SFTP)
-                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Remote has internet, using pip")
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Preparing environment")
+                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Remote has internet")
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing via pip")
 
-                # Ensure python3-venv is installed (required for creating virtualenvs)
-                await self.ssh.run(
-                    "apt-get update -qq && apt-get install -y -qq python3-venv python3-pip",
-                    timeout=120,
-                )
-                _, stderr, ec = await self.ssh.run(f"python3 -m venv {venv}", timeout=30)
-                if ec != 0:
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
-                               detail=f"Failed to create venv: {stderr[:150]}")
-                    return
+                # Ensure pip is available
+                await self.ssh.run("apt-get install -y -qq python3-pip 2>/dev/null || true", timeout=60)
 
-                self._broadcast(_evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
-                                     detail="Installing via pip (aliyun mirror)"))
-                # Use Chinese mirror if accessible (阿里云 ~16MB/s vs PyPI ~25KB/s)
+                # Use mirror if accessible
                 _, _, mirror_ec = await self.ssh.run(
                     "curl -s --max-time 3 -o /dev/null https://mirrors.aliyun.com/pypi/simple/",
                     timeout=5,
                 )
                 mirror_flag = "-i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com" if mirror_ec == 0 else ""
+
+                # Install to target dir (no venv, no python3-venv needed)
                 _, stderr, ec = await self.ssh.run(
-                    f"{venv}/bin/pip install {mirror_flag} {self.tmpl['pip_package']}",
+                    f"pip3 install --break-system-packages --target {venv}/lib {mirror_flag} {self.tmpl['pip_package']}",
                     timeout=600,
                 )
                 if ec != 0:
                     yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[:200])
                     return
+
+                # Create wrapper script so agent-server binary works
+                await self.ssh.run(
+                    f"mkdir -p {venv}/bin && "
+                    f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
+                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec python3 -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
+                    f"chmod +x {venv}/bin/agent-server",
+                    timeout=10,
+                )
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
             else:
-                # No internet — upload wheels via SFTP
+                # No internet — upload wheels
                 wheels_dir = os.path.join(DEPS_DIR, "wheels")
                 if not os.path.isdir(wheels_dir):
                     yield _evt(ProvisionStep.SCP_DEPENDENCIES, "failed", detail="wheels/ not found in deps/")
@@ -145,7 +145,7 @@ class Provisioner:
                 archive_size = os.path.getsize(wheels_archive)
                 archive_size_mb = archive_size // 1024 // 1024
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "started",
-                           detail=f"Uploading {archive_size_mb}MB (no internet on remote)")
+                           detail=f"Uploading {archive_size_mb}MB (no internet)")
 
                 last_mb = [0]
                 def _on_progress(sent, total):
@@ -166,16 +166,31 @@ class Provisioner:
                 os.remove(wheels_archive)
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
 
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from local wheels")
-                await self.ssh.run(
-                    "apt-get update -qq && apt-get install -y -qq python3-venv python3-pip",
-                    timeout=120,
-                )
-                await self.ssh.run(f"python3 -m venv {venv}", timeout=30)
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
+                # Install to target dir (no venv needed)
                 _, stderr, ec = await self.ssh.run(
-                    f"{venv}/bin/pip install --no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                    f"pip3 install --break-system-packages --target {venv}/lib "
+                    f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"{self.tmpl['pip_package']}",
                     timeout=300,
+                )
+
+                if ec != 0:
+                    # Fallback: try with python3 -m pip
+                    _, stderr, ec = await self.ssh.run(
+                        f"python3 -m pip install --break-system-packages --target {venv}/lib "
+                        f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                        f"{self.tmpl['pip_package']}",
+                        timeout=300,
+                    )
+
+                # Create wrapper script
+                await self.ssh.run(
+                    f"mkdir -p {venv}/bin && "
+                    f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
+                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec python3 -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
+                    f"chmod +x {venv}/bin/agent-server",
+                    timeout=10,
                 )
                 if ec != 0:
                     yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[:200])
