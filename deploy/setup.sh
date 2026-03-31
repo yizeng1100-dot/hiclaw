@@ -6,15 +6,15 @@
 # Usage:
 #   1. git clone -b test https://github.com/yizeng1100-dot/hiclaw.git && cd hiclaw
 #   2. Put these files in deploy/ directory:
-#      - hiclaw-runtime.tar.gz  (478MB) — App Server: Python 3.12 + all deps
-#      - hiclaw-deps.tar.gz     (283MB) — Remote terminal deps + Gitea
+#      - hiclaw-runtime.tar.gz  — App Server: Python 3.12 + all deps
+#      - hiclaw-deps.tar.gz     — Remote terminal deps + Gitea
 #   3. bash deploy/setup.sh
-#   4. bash deploy/start.sh
+#   4. bash deploy/start.sh pro
 #
 # All files installed to $HICLAW_DIR (default: ~/.hiclaw), NO sudo needed.
 # ═══════════════════════════════════════════════════════════════════════════
 
-set -e
+# NO set -e — we handle errors explicitly with logging
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 HICLAW_DIR="${HICLAW_DIR:-$HOME/.hiclaw}"
@@ -22,6 +22,12 @@ GITEA_PORT="${HICLAW_GITEA_PORT:-3300}"
 GITEA_USER="${HICLAW_GITEA_USER:-hiclaw-admin}"
 GITEA_PASS="${HICLAW_GITEA_PASSWORD:-HiClaw2026!}"
 MANAGER_DIR="$PROJECT_DIR/agent-worker-manager"
+RUNTIME_DIR="$HICLAW_DIR/runtime"
+
+log()  { echo "  $*"; }
+ok()   { echo "  ✓ $*"; }
+warn() { echo "  ⚠ $*"; }
+fail() { echo "  ✗ $*"; }
 
 echo "=== HiClaw Setup ==="
 echo "  Install dir: $HICLAW_DIR"
@@ -30,93 +36,139 @@ echo ""
 
 mkdir -p "$HICLAW_DIR"
 
-# ─── 0. Python Runtime ───
+# ═══════════════════════════════════════════════════════════════════════════
+# [0/5] Python Runtime
+# ═══════════════════════════════════════════════════════════════════════════
+echo "[0/5] Python Runtime..."
 RUNTIME_BUNDLE="$SCRIPT_DIR/hiclaw-runtime.tar.gz"
-RUNTIME_DIR="$HICLAW_DIR/runtime"
 
 if [ -f "$RUNTIME_DIR/hiclaw-python" ]; then
-    echo "[0/5] Runtime already installed"
-    echo "  Python: $($RUNTIME_DIR/hiclaw-python --version 2>&1)"
+    ok "Already installed: $($RUNTIME_DIR/hiclaw-python --version 2>&1)"
 elif [ -f "$RUNTIME_BUNDLE" ]; then
-    echo "[0/5] Installing self-contained runtime..."
+    log "Extracting hiclaw-runtime.tar.gz..."
     mkdir -p "$RUNTIME_DIR"
-    tar xzf "$RUNTIME_BUNDLE" -C "$RUNTIME_DIR"
-    # No path fixing needed — uses PYTHONPATH, no venv, no absolute paths
-    echo "  Python: $($RUNTIME_DIR/hiclaw-python --version 2>&1)"
-    echo "  Verify: $($RUNTIME_DIR/hiclaw-python -c 'import uvicorn,socketio,browsergym;print("All imports OK")' 2>&1)"
+    if tar xzf "$RUNTIME_BUNDLE" -C "$RUNTIME_DIR"; then
+        ok "Extracted"
+        log "Testing: $($RUNTIME_DIR/hiclaw-python --version 2>&1)"
+        VERIFY="$($RUNTIME_DIR/hiclaw-python -c 'import uvicorn,fastapi;print("OK")' 2>&1)"
+        if [ "$VERIFY" = "OK" ]; then
+            ok "All imports OK"
+        else
+            fail "Import test failed: $VERIFY"
+        fi
+    else
+        fail "Failed to extract hiclaw-runtime.tar.gz"
+        exit 1
+    fi
 else
-    echo "[0/5] ERROR: hiclaw-runtime.tar.gz not found in $SCRIPT_DIR/"
-    echo "  This file contains Python 3.12 + all dependencies."
+    fail "hiclaw-runtime.tar.gz not found in $SCRIPT_DIR/"
     echo "  Place it in the deploy/ directory and re-run setup."
     exit 1
 fi
 
-# Set PATH for rest of setup
-PYTHON="$RUNTIME_DIR/bin/hiclaw-python"
-export LD_LIBRARY_PATH="$RUNTIME_DIR/python/lib:$LD_LIBRARY_PATH"
-export PATH="$RUNTIME_DIR/venv/bin:$RUNTIME_DIR/bin:$PATH"
+PYTHON="$RUNTIME_DIR/hiclaw-python"
 
-# ─── 1. Skills Git Repo ───
-echo "[1/5] Setting up Skills Git repo..."
-if [ ! -d "$HICLAW_DIR/skills-repo.git" ]; then
-    git init --bare "$HICLAW_DIR/skills-repo.git"
-    TMPDIR=$(mktemp -d)
-    if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills"; then
-        cd "$TMPDIR/skills"
-        git config user.email "hiclaw@system"
-        git config user.name "HiClaw"
-        cp -r "$SCRIPT_DIR/skills-init/"* .
-        git add -A
-        git commit -m "init: add default skills"
-        git push origin master
-        cd "$PROJECT_DIR"
-        echo "  Skills repo initialized"
-    else
-        echo "  Warning: Failed to clone skills repo"
-    fi
-    rm -rf "$TMPDIR"
+# ═══════════════════════════════════════════════════════════════════════════
+# [1/5] Skills Git Repo
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "[1/5] Skills Git Repo..."
+
+if [ -d "$HICLAW_DIR/skills-repo.git" ]; then
+    ok "Already exists"
 else
-    echo "  Skills repo already exists"
-fi
+    log "Initializing bare repo..."
+    git init --bare "$HICLAW_DIR/skills-repo.git" || { fail "git init --bare failed"; }
 
-# ─── 2. Gitea ───
-echo "[2/5] Setting up Gitea..."
-GITEA_BIN="$HICLAW_DIR/bin/gitea"
-
-# Extract deps bundle (Gitea + remote terminal deps)
-DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
-if [ -f "$DEPS_BUNDLE" ] && { [ ! -f "$GITEA_BIN" ] || [ ! -d "$MANAGER_DIR/deps/wheels" ]; }; then
-    echo "  Extracting deps bundle..."
-    DEPS_TMP=$(mktemp -d)
-    tar xzf "$DEPS_BUNDLE" -C "$DEPS_TMP"
-    # Gitea binary
-    if [ ! -f "$GITEA_BIN" ] && [ -f "$DEPS_TMP/gitea" ]; then
-        mkdir -p "$HICLAW_DIR/bin"
-        mv "$DEPS_TMP/gitea" "$GITEA_BIN"
-        chmod +x "$GITEA_BIN"
-    fi
-    # Remote terminal deps (wheels, code-server, python standalone)
-    if [ -d "$DEPS_TMP/agent-deps" ]; then
-        mkdir -p "$MANAGER_DIR/deps"
-        cp "$DEPS_TMP/agent-deps/"* "$MANAGER_DIR/deps/" 2>/dev/null || true
-        if [ -f "$MANAGER_DIR/deps/wheels.tar.gz" ]; then
-            tar xzf "$MANAGER_DIR/deps/wheels.tar.gz" -C "$MANAGER_DIR/deps/"
-            rm -f "$MANAGER_DIR/deps/wheels.tar.gz"
+    if [ -d "$SCRIPT_DIR/skills-init" ]; then
+        log "Populating with initial skills..."
+        TMPDIR="$(mktemp -d)"
+        if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>&1; then
+            cd "$TMPDIR/skills"
+            git config user.email "hiclaw@system"
+            git config user.name "HiClaw"
+            cp -r "$SCRIPT_DIR/skills-init/"* . 2>/dev/null
+            git add -A
+            git commit -m "init: add default skills" 2>&1 || warn "Nothing to commit"
+            git push origin master 2>&1 || warn "Push failed"
+            cd "$PROJECT_DIR"
+            ok "Skills repo initialized"
+        else
+            warn "Could not clone skills repo"
         fi
+        rm -rf "$TMPDIR"
+    else
+        warn "No skills-init/ directory found, repo is empty"
     fi
-    rm -rf "$DEPS_TMP"
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════
+# [2/5] Gitea + Remote Terminal Deps
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "[2/5] Gitea + Agent Deps..."
+GITEA_BIN="$HICLAW_DIR/bin/gitea"
+DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
+
+# Extract deps bundle if needed
+if [ -f "$DEPS_BUNDLE" ]; then
+    NEED_EXTRACT=false
+    [ ! -f "$GITEA_BIN" ] && NEED_EXTRACT=true
+    [ ! -d "$MANAGER_DIR/deps/wheels" ] && NEED_EXTRACT=true
+
+    if $NEED_EXTRACT; then
+        log "Extracting hiclaw-deps.tar.gz..."
+        DEPS_TMP="$(mktemp -d)"
+        if tar xzf "$DEPS_BUNDLE" -C "$DEPS_TMP"; then
+            # Gitea binary
+            if [ ! -f "$GITEA_BIN" ] && [ -f "$DEPS_TMP/gitea" ]; then
+                mkdir -p "$HICLAW_DIR/bin"
+                mv "$DEPS_TMP/gitea" "$GITEA_BIN"
+                chmod +x "$GITEA_BIN"
+                ok "Gitea binary installed"
+            fi
+            # Agent deps
+            if [ -d "$DEPS_TMP/agent-deps" ]; then
+                mkdir -p "$MANAGER_DIR/deps"
+                cp "$DEPS_TMP/agent-deps/"* "$MANAGER_DIR/deps/" 2>/dev/null
+                if [ -f "$MANAGER_DIR/deps/wheels.tar.gz" ]; then
+                    log "Extracting wheels..."
+                    tar xzf "$MANAGER_DIR/deps/wheels.tar.gz" -C "$MANAGER_DIR/deps/"
+                    rm -f "$MANAGER_DIR/deps/wheels.tar.gz"
+                    ok "Agent deps extracted ($(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | wc -l) wheels)"
+                fi
+            else
+                warn "No agent-deps/ in bundle"
+            fi
+        else
+            fail "Failed to extract hiclaw-deps.tar.gz"
+        fi
+        rm -rf "$DEPS_TMP"
+    else
+        ok "Gitea and agent deps already present"
+    fi
+else
+    warn "hiclaw-deps.tar.gz not found — will try online download"
+fi
+
+# Download Gitea if still missing
 if [ ! -f "$GITEA_BIN" ]; then
-    echo "  Downloading Gitea..."
+    log "Downloading Gitea..."
     mkdir -p "$HICLAW_DIR/bin"
     RELEASE_URL="https://github.com/yizeng1100-dot/hiclaw/releases/download/deps-v1"
-    curl -fSL "$RELEASE_URL/gitea" -o "$GITEA_BIN" 2>/dev/null || \
-    curl -fSL "https://dl.gitea.com/gitea/1.22.6/gitea-1.22.6-linux-amd64" -o "$GITEA_BIN"
-    chmod +x "$GITEA_BIN"
+    if curl -fSL "$RELEASE_URL/gitea" -o "$GITEA_BIN" 2>/dev/null; then
+        chmod +x "$GITEA_BIN"
+        ok "Gitea downloaded"
+    elif curl -fSL "https://dl.gitea.com/gitea/1.22.6/gitea-1.22.6-linux-amd64" -o "$GITEA_BIN" 2>/dev/null; then
+        chmod +x "$GITEA_BIN"
+        ok "Gitea downloaded (fallback)"
+    else
+        fail "Could not download Gitea"
+    fi
 fi
 
 # Gitea config
+log "Generating Gitea config..."
 mkdir -p "$HICLAW_DIR/gitea/custom/conf" "$HICLAW_DIR/gitea/data" "$HICLAW_DIR/gitea/repos" "$HICLAW_DIR/gitea/log"
 GITEA_TEMPLATE="$SCRIPT_DIR/gitea-config/app.ini.template"
 if [ -f "$GITEA_TEMPLATE" ]; then
@@ -125,75 +177,130 @@ if [ -f "$GITEA_TEMPLATE" ]; then
         -e "s|__GITEA_PORT__|$GITEA_PORT|g" \
         -e "s|__APP_PORT__|${HICLAW_APP_PORT:-3000}|g" \
         "$GITEA_TEMPLATE" > "$HICLAW_DIR/gitea/custom/conf/app.ini"
+    ok "Config generated"
+else
+    warn "app.ini.template not found"
 fi
 
-# Fix SSH dir (Gitea needs it)
-mkdir -p ~/.ssh 2>/dev/null && touch ~/.ssh/authorized_keys 2>/dev/null || true
+# SSH dir
+mkdir -p ~/.ssh 2>/dev/null; touch ~/.ssh/authorized_keys 2>/dev/null || true
 
-# Create admin user if DB doesn't exist
-if [ ! -f "$HICLAW_DIR/gitea/data/gitea.db" ]; then
-    echo "  Creating Gitea admin user..."
+# Create admin user
+if [ -f "$GITEA_BIN" ] && [ ! -f "$HICLAW_DIR/gitea/data/gitea.db" ]; then
+    log "Creating Gitea admin user..."
     GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
         --username "$GITEA_USER" --password "$GITEA_PASS" \
         --email admin@hiclaw.local --admin \
-        --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>/dev/null || true
+        --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 || warn "Admin user creation had issues"
 fi
-echo "  Gitea ready ($GITEA_USER / $GITEA_PASS)"
+ok "Gitea ready ($GITEA_USER / $GITEA_PASS)"
 
-# ─── 3. Worker Manager deps ───
-echo "[3/5] Setting up Worker Manager..."
-if [ ! -d "$MANAGER_DIR/deps/wheels" ] && [ ! -f "$MANAGER_DIR/deps/code-server.tar.gz" ]; then
-    echo "  No agent deps found. Remote terminal offline install may not work."
-    echo "  (Will use online install if remote has internet)"
+# ═══════════════════════════════════════════════════════════════════════════
+# [3/5] Worker Manager Deps
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "[3/5] Worker Manager..."
+if [ -d "$MANAGER_DIR/deps/wheels" ]; then
+    ok "Agent deps present ($(ls "$MANAGER_DIR/deps/wheels/" | wc -l) wheels)"
+elif [ -f "$MANAGER_DIR/deps/code-server.tar.gz" ]; then
+    ok "Agent deps present (code-server only, no wheels)"
+else
+    warn "No agent deps. Remote offline install won't work (online install OK)"
 fi
-echo "  Worker Manager ready"
 
-# ─── 4. Push skills to Gitea ───
+# ═══════════════════════════════════════════════════════════════════════════
+# [4/5] Sync Skills to Gitea
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
 echo "[4/5] Syncing skills to Gitea..."
-GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
-    --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
-    > "$HICLAW_DIR/gitea/log/startup.log" 2>&1 &
-GITEA_PID=$!
-sleep 15
 
-curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
-    -H "Content-Type: application/json" \
-    -u "$GITEA_USER:$GITEA_PASS" \
-    -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' >/dev/null 2>&1 || true
-
-TMPDIR=$(mktemp -d)
-if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null; then
-    cd "$TMPDIR/skills"
-    git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
-    git push gitea master --force 2>/dev/null || true
-    cd "$PROJECT_DIR"
-    echo "  Skills synced to Gitea"
+if [ ! -f "$GITEA_BIN" ]; then
+    warn "Gitea not installed, skipping sync"
+elif [ ! -d "$HICLAW_DIR/skills-repo.git" ]; then
+    warn "Skills repo not found, skipping sync"
 else
-    echo "  Warning: Could not clone skills repo, skipping Gitea sync"
+    log "Starting Gitea temporarily..."
+    mkdir -p "$HICLAW_DIR/gitea/log"
+    GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
+        --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
+        > "$HICLAW_DIR/gitea/log/setup-startup.log" 2>&1 &
+    GITEA_PID=$!
+    log "Waiting for Gitea to start (PID $GITEA_PID)..."
+    sleep 15
+
+    # Check if Gitea started
+    if curl -s --max-time 3 "http://localhost:$GITEA_PORT" >/dev/null 2>&1; then
+        ok "Gitea started"
+
+        # Create repo
+        log "Creating skills repo in Gitea..."
+        curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
+            -H "Content-Type: application/json" \
+            -u "$GITEA_USER:$GITEA_PASS" \
+            -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' \
+            >/dev/null 2>&1 || true
+
+        # Push skills
+        log "Pushing skills..."
+        TMPDIR="$(mktemp -d)"
+        if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null; then
+            cd "$TMPDIR/skills"
+            git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
+            if git push gitea master --force 2>&1; then
+                ok "Skills pushed to Gitea"
+            else
+                warn "Push to Gitea failed"
+            fi
+            cd "$PROJECT_DIR"
+        else
+            warn "Could not clone skills repo for Gitea sync"
+        fi
+        rm -rf "$TMPDIR"
+    else
+        warn "Gitea failed to start — check $HICLAW_DIR/gitea/log/setup-startup.log"
+    fi
+
+    # Stop temp Gitea
+    log "Stopping temporary Gitea..."
+    kill "$GITEA_PID" 2>/dev/null
+    wait "$GITEA_PID" 2>/dev/null || true
 fi
-rm -rf "$TMPDIR"
 
-kill $GITEA_PID 2>/dev/null
-wait $GITEA_PID 2>/dev/null || true
-
-# ─── 5. Build frontend ───
-echo "[5/5] Building frontend..."
-if [ -d "$PROJECT_DIR/frontend" ] && command -v npm &>/dev/null; then
+# ═══════════════════════════════════════════════════════════════════════════
+# [5/5] Build Frontend
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "[5/5] Frontend..."
+if [ -f "$PROJECT_DIR/frontend/build/client/index.html" ]; then
+    ok "Already built"
+elif [ -d "$PROJECT_DIR/frontend" ] && command -v npm &>/dev/null; then
+    log "Running npm install + build..."
     cd "$PROJECT_DIR/frontend"
-    npm install --silent 2>/dev/null || true
-    npm run build 2>/dev/null || echo "  Warning: frontend build failed (need Node.js)"
+    if npm install 2>&1 | tail -1; then
+        if npm run build 2>&1 | tail -3; then
+            ok "Frontend built"
+        else
+            warn "npm run build failed"
+        fi
+    else
+        warn "npm install failed"
+    fi
     cd "$PROJECT_DIR"
 else
-    echo "  Skipped (no Node.js or no frontend dir)"
+    warn "Skipped (no Node.js or no frontend dir)"
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Done
+# ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "=== Setup Complete ==="
 echo ""
 echo "  Install dir:  $HICLAW_DIR"
-echo "  Runtime:      $RUNTIME_DIR/bin/hiclaw-python"
-echo "  Gitea:        $HICLAW_DIR/bin/gitea"
+echo "  Runtime:      $RUNTIME_DIR/hiclaw-python"
+echo "  Gitea:        ${GITEA_BIN:-not installed}"
 echo "  Skills repo:  $HICLAW_DIR/skills-repo.git"
+echo "  Agent deps:   $MANAGER_DIR/deps/"
 echo ""
-echo "To start:  bash deploy/start.sh"
+echo "To start:  bash deploy/start.sh pro"
 echo "To stop:   bash deploy/stop.sh"
