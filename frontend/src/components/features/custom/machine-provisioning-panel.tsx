@@ -116,9 +116,12 @@ export function MachineProvisioningPanel() {
   // Determine visible steps and their status
   const steps = BASE_STEPS.map((step) => {
     // Check if install variant exists (e.g., install_python for check_python)
+    // Prefer install_* event over check_* when both exist
     const installKey = step.replace("check_", "install_");
-    const evt = stepStatus[step] || stepStatus[installKey];
-    const displayStep = stepStatus[installKey] ? installKey : step;
+    const installEvt = stepStatus[installKey];
+    const checkEvt = stepStatus[step];
+    const evt = installEvt || checkEvt;
+    const displayStep = installEvt ? installKey : step;
     return {
       key: step,
       label: STEP_LABELS[displayStep] || displayStep,
