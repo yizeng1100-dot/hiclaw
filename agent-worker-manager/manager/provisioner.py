@@ -131,8 +131,11 @@ class Provisioner:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Remote has internet")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing via pip")
 
-                # Ensure pip is available
-                await self.ssh.run("apt-get install -y -qq python3-pip 2>/dev/null || true", timeout=60)
+                # Ensure pip is available via the standalone Python
+                await self.ssh.run(
+                    f"$HOME/.local/bin/python3 -m ensurepip --upgrade 2>/dev/null || true",
+                    timeout=30,
+                )
 
                 # Use mirror if accessible
                 _, _, mirror_ec = await self.ssh.run(
@@ -141,9 +144,11 @@ class Provisioner:
                 )
                 mirror_flag = "-i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com" if mirror_ec == 0 else ""
 
-                # Install to target dir (no venv, no python3-venv needed)
+                # Install to target dir — only-binary prevents source builds on machines without gcc
                 _, stderr, ec = await self.ssh.run(
-                    f"$HOME/.local/bin/pip3 install --break-system-packages --upgrade --ignore-installed --target {venv}/lib {mirror_flag} {self.tmpl['pip_package']}",
+                    f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
+                    f"--ignore-installed --only-binary :all: --target {venv}/lib "
+                    f"{mirror_flag} {self.tmpl['pip_package']}",
                     timeout=600,
                 )
                 if ec != 0:
@@ -195,22 +200,19 @@ class Provisioner:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
 
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
-                # Install to target dir (no venv needed)
+                # Ensure pip is available
+                await self.ssh.run(
+                    f"$HOME/.local/bin/python3 -m ensurepip --upgrade 2>/dev/null || true",
+                    timeout=30,
+                )
+                # Install to target dir — only-binary prevents source builds
                 _, stderr, ec = await self.ssh.run(
-                    f"$HOME/.local/bin/pip3 install --break-system-packages --upgrade --ignore-installed --target {venv}/lib "
+                    f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
+                    f"--ignore-installed --only-binary :all: --target {venv}/lib "
                     f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"{self.tmpl['pip_package']}",
                     timeout=300,
                 )
-
-                if ec != 0:
-                    # Fallback: try with python3 -m pip
-                    _, stderr, ec = await self.ssh.run(
-                        f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade --ignore-installed --target {venv}/lib "
-                        f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                        f"{self.tmpl['pip_package']}",
-                        timeout=300,
-                    )
 
                 # Create wrapper script
                 await self.ssh.run(
