@@ -117,7 +117,7 @@ class Provisioner:
 
                 # Install to target dir (no venv, no python3-venv needed)
                 _, stderr, ec = await self.ssh.run(
-                    f"pip3 install --break-system-packages --target {venv}/lib {mirror_flag} {self.tmpl['pip_package']}",
+                    f"pip3 install --break-system-packages --upgrade --ignore-installed --target {venv}/lib {mirror_flag} {self.tmpl['pip_package']}",
                     timeout=600,
                 )
                 if ec != 0:
@@ -171,7 +171,7 @@ class Provisioner:
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
                 # Install to target dir (no venv needed)
                 _, stderr, ec = await self.ssh.run(
-                    f"pip3 install --break-system-packages --target {venv}/lib "
+                    f"pip3 install --break-system-packages --upgrade --ignore-installed --target {venv}/lib "
                     f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"{self.tmpl['pip_package']}",
                     timeout=300,
@@ -180,7 +180,7 @@ class Provisioner:
                 if ec != 0:
                     # Fallback: try with python3 -m pip
                     _, stderr, ec = await self.ssh.run(
-                        f"python3 -m pip install --break-system-packages --target {venv}/lib "
+                        f"python3 -m pip install --break-system-packages --upgrade --ignore-installed --target {venv}/lib "
                         f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                         f"{self.tmpl['pip_package']}",
                         timeout=300,
