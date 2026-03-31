@@ -185,16 +185,6 @@ fi
 # SSH dir
 mkdir -p ~/.ssh 2>/dev/null; touch ~/.ssh/authorized_keys 2>/dev/null || true
 
-# Create admin user
-if [ -f "$GITEA_BIN" ] && [ ! -f "$HICLAW_DIR/gitea/data/gitea.db" ]; then
-    log "Creating Gitea admin user..."
-    GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
-        --username "$GITEA_USER" --password "$GITEA_PASS" \
-        --email admin@hiclaw.local --admin \
-        --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 || warn "Admin user creation had issues"
-fi
-ok "Gitea ready ($GITEA_USER / $GITEA_PASS)"
-
 # ═══════════════════════════════════════════════════════════════════════════
 # [3/5] Worker Manager Deps
 # ═══════════════════════════════════════════════════════════════════════════
@@ -209,16 +199,22 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# [4/5] Sync Skills to Gitea
+# [4/5] Gitea: Create User + Sync Skills (all in one step with Gitea running)
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "[4/5] Syncing skills to Gitea..."
+echo "[4/5] Gitea user + skills sync..."
 
 if [ ! -f "$GITEA_BIN" ]; then
-    warn "Gitea not installed, skipping sync"
-elif [ ! -d "$HICLAW_DIR/skills-repo.git" ]; then
-    warn "Skills repo not found, skipping sync"
+    warn "Gitea not installed, skipping"
 else
+    # Step 1: Try creating admin user via CLI (works before first run)
+    log "Ensuring admin user exists..."
+    GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
+        --username "$GITEA_USER" --password "$GITEA_PASS" \
+        --email admin@hiclaw.local --admin \
+        --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 | grep -v "already exists" || true
+
+    # Step 2: Start Gitea
     log "Starting Gitea temporarily..."
     mkdir -p "$HICLAW_DIR/gitea/log"
     GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
@@ -226,44 +222,93 @@ else
         > "$HICLAW_DIR/gitea/log/setup-startup.log" 2>&1 &
     GITEA_PID=$!
     log "Waiting for Gitea to start (PID $GITEA_PID)..."
-    sleep 15
 
-    # Check if Gitea started
-    if curl -s --max-time 3 "http://localhost:$GITEA_PORT" >/dev/null 2>&1; then
-        ok "Gitea started"
-
-        # Create repo
-        log "Creating skills repo in Gitea..."
-        curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
-            -H "Content-Type: application/json" \
-            -u "$GITEA_USER:$GITEA_PASS" \
-            -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' \
-            >/dev/null 2>&1 || true
-
-        # Push skills
-        log "Pushing skills..."
-        TMPDIR="$(mktemp -d)"
-        if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null; then
-            cd "$TMPDIR/skills"
-            git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
-            if git push gitea master --force 2>&1; then
-                ok "Skills pushed to Gitea"
-            else
-                warn "Push to Gitea failed"
-            fi
-            cd "$PROJECT_DIR"
-        else
-            warn "Could not clone skills repo for Gitea sync"
+    # Wait up to 30 seconds for Gitea
+    GITEA_READY=false
+    for i in $(seq 1 30); do
+        if curl -s --max-time 2 "http://localhost:$GITEA_PORT" >/dev/null 2>&1; then
+            GITEA_READY=true
+            break
         fi
-        rm -rf "$TMPDIR"
+        sleep 1
+    done
+
+    if $GITEA_READY; then
+        ok "Gitea started (took ${i}s)"
+
+        # Step 3: Verify user exists via API, create via API if CLI failed
+        log "Verifying admin user..."
+        USER_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+            "http://localhost:$GITEA_PORT/api/v1/user" 2>&1)
+        if echo "$USER_CHECK" | grep -q '"login"'; then
+            ok "Admin user verified"
+        else
+            log "CLI user creation may have failed, trying API registration..."
+            # Enable registration temporarily and create via API
+            curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/admin/users" \
+                -H "Content-Type: application/json" \
+                -d "{\"username\":\"$GITEA_USER\",\"password\":\"$GITEA_PASS\",\"email\":\"admin@hiclaw.local\",\"must_change_password\":false}" 2>&1 || true
+            # Try signing up
+            curl -s -X POST "http://localhost:$GITEA_PORT/user/sign_up" \
+                -d "user_name=$GITEA_USER&password=$GITEA_PASS&retype=$GITEA_PASS&email=admin@hiclaw.local" 2>&1 || true
+            # Verify again
+            USER_CHECK2=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+                "http://localhost:$GITEA_PORT/api/v1/user" 2>&1)
+            if echo "$USER_CHECK2" | grep -q '"login"'; then
+                ok "Admin user created via API"
+            else
+                warn "Could not create admin user. Response: $(echo "$USER_CHECK2" | head -1)"
+                warn "Try manually: GITEA_WORK_DIR=$HICLAW_DIR/gitea $GITEA_BIN admin user create --username $GITEA_USER --password $GITEA_PASS --email admin@hiclaw.local --admin --config $HICLAW_DIR/gitea/custom/conf/app.ini"
+            fi
+        fi
+
+        # Step 4: Create skills repo
+        log "Creating skills repo..."
+        REPO_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+            "http://localhost:$GITEA_PORT/api/v1/repos/$GITEA_USER/skills" 2>&1)
+        if echo "$REPO_CHECK" | grep -q '"full_name"'; then
+            ok "Skills repo already exists"
+        else
+            REPO_CREATE=$(curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
+                -H "Content-Type: application/json" \
+                -u "$GITEA_USER:$GITEA_PASS" \
+                -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' 2>&1)
+            if echo "$REPO_CREATE" | grep -q '"full_name"'; then
+                ok "Skills repo created"
+            else
+                warn "Could not create skills repo: $(echo "$REPO_CREATE" | head -1)"
+            fi
+        fi
+
+        # Step 5: Push skills
+        if [ -d "$HICLAW_DIR/skills-repo.git" ]; then
+            log "Pushing skills to Gitea..."
+            TMPDIR="$(mktemp -d)"
+            if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null; then
+                cd "$TMPDIR/skills"
+                git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
+                PUSH_OUTPUT=$(git push gitea master --force 2>&1)
+                if [ $? -eq 0 ]; then
+                    ok "Skills pushed to Gitea"
+                else
+                    warn "Push failed: $PUSH_OUTPUT"
+                fi
+                cd "$PROJECT_DIR"
+            else
+                warn "Could not clone skills repo"
+            fi
+            rm -rf "$TMPDIR"
+        fi
     else
-        warn "Gitea failed to start — check $HICLAW_DIR/gitea/log/setup-startup.log"
+        warn "Gitea failed to start after 30s"
+        warn "Check: cat $HICLAW_DIR/gitea/log/setup-startup.log"
     fi
 
     # Stop temp Gitea
     log "Stopping temporary Gitea..."
     kill "$GITEA_PID" 2>/dev/null
     wait "$GITEA_PID" 2>/dev/null || true
+    ok "Gitea setup done"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
