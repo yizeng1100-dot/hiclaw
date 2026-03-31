@@ -50,9 +50,25 @@ elif [ -f "$RUNTIME_BUNDLE" ]; then
     # Fix pyvenv.cfg
     sed -i "s|$OLD_PATH|$NEW_PATH|g" "$RUNTIME_DIR/venv/pyvenv.cfg"
 
-    # Fix shebang lines in all venv/bin/ scripts
+    # Fix shebang lines in all venv/bin/ scripts (regular files)
     find "$RUNTIME_DIR/venv/bin" -type f -exec grep -l "$OLD_PATH" {} \; 2>/dev/null | while read f; do
         sed -i "s|$OLD_PATH|$NEW_PATH|g" "$f"
+    done
+
+    # Fix symbolic links — python3/python in venv/bin may be symlinks to old path
+    for link in "$RUNTIME_DIR/venv/bin/python3" "$RUNTIME_DIR/venv/bin/python" "$RUNTIME_DIR/venv/bin/python3.12"; do
+        if [ -L "$link" ]; then
+            target="$(readlink "$link")"
+            if echo "$target" | grep -q "$OLD_PATH"; then
+                new_target="$(echo "$target" | sed "s|$OLD_PATH|$NEW_PATH|g")"
+                rm -f "$link"
+                ln -sf "$new_target" "$link"
+            fi
+        elif [ ! -e "$link" ]; then
+            # Broken or missing — recreate pointing to standalone python
+            rm -f "$link"
+            ln -sf "$RUNTIME_DIR/python/bin/python3.12" "$link"
+        fi
     done
 
     # Fix bin/ wrapper scripts
