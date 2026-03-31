@@ -156,24 +156,59 @@ class MachineManager:
                 evt = ProvisionEvent(step=ProvisionStep.CLONE_SKILLS, status="completed")
                 self._broadcast_event(machine_id, evt)
 
-                # Step 4: Start agent-server
+                # Step 4: Health check first — if agent-server already running and healthy, skip start
                 machine.status = MachineStatus.STARTING
-                evt = ProvisionEvent(step=ProvisionStep.START_AGENT_SERVER, status="started")
+                port = machine.agent_server_port
+                evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="started",
+                                     detail="Checking existing agent-server...")
                 self._broadcast_event(machine_id, evt)
 
-                await self._start_agent_server(ssh, machine)
+                already_healthy = False
+                try:
+                    h_out, _, h_ec = await ssh.run(
+                        f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 http://localhost:{port}/health",
+                        timeout=5,
+                    )
+                    if h_out.strip() == "200":
+                        # Verify workspace matches
+                        ps_out, _, _ = await ssh.run(
+                            f"ps aux | grep 'agent-server.*--port {port}' | grep -v grep | head -1",
+                            timeout=5,
+                        )
+                        if machine.workspace in ps_out:
+                            already_healthy = True
+                            logger.info(f"Agent-server already healthy on port {port}, reusing")
+                        else:
+                            logger.info(f"Agent-server on port {port} has wrong workspace, will restart")
+                except Exception:
+                    pass
 
-                evt = ProvisionEvent(step=ProvisionStep.START_AGENT_SERVER, status="completed")
-                self._broadcast_event(machine_id, evt)
+                if already_healthy:
+                    evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed",
+                                         detail="Already running")
+                    self._broadcast_event(machine_id, evt)
+                    evt = ProvisionEvent(step=ProvisionStep.START_AGENT_SERVER, status="completed",
+                                         detail="Already running")
+                    self._broadcast_event(machine_id, evt)
+                else:
+                    # Not healthy — kill old process, start fresh
+                    evt = ProvisionEvent(step=ProvisionStep.START_AGENT_SERVER, status="started")
+                    self._broadcast_event(machine_id, evt)
 
-                # Step 4: Health check
-                evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="started")
-                self._broadcast_event(machine_id, evt)
+                    await self._start_agent_server(ssh, machine)
 
-                await self._wait_healthy(ssh, machine)
+                    evt = ProvisionEvent(step=ProvisionStep.START_AGENT_SERVER, status="completed")
+                    self._broadcast_event(machine_id, evt)
 
-                evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed")
-                self._broadcast_event(machine_id, evt)
+                    # Now wait for health
+                    evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="started",
+                                         detail="Waiting for agent-server to start...")
+                    self._broadcast_event(machine_id, evt)
+
+                    await self._wait_healthy(ssh, machine)
+
+                    evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed")
+                    self._broadcast_event(machine_id, evt)
 
                 # Step 5: Start code-server (if installed)
                 await self._start_code_server(ssh, machine)
