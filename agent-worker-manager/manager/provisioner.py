@@ -147,7 +147,7 @@ class Provisioner:
                 # Install to target dir — only-binary prevents source builds on machines without gcc
                 _, stderr, ec = await self.ssh.run(
                     f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
-                    f"--ignore-installed --only-binary :all: --target {venv}/lib "
+                    f"--ignore-installed --prefer-binary --target {venv}/lib "
                     f"{mirror_flag} {self.tmpl['pip_package']}",
                     timeout=600,
                 )
@@ -208,7 +208,7 @@ class Provisioner:
                 # Install to target dir — only-binary prevents source builds
                 _, stderr, ec = await self.ssh.run(
                     f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade "
-                    f"--ignore-installed --only-binary :all: --target {venv}/lib "
+                    f"--ignore-installed --prefer-binary --target {venv}/lib "
                     f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"{self.tmpl['pip_package']}",
                     timeout=300,
