@@ -174,23 +174,28 @@ class Provisioner:
                 )
 
                 # Upgrade pip and install build tools first
-                await self.ssh.run(
+                up_out, up_err, up_ec = await self.ssh.run(
                     f"{remote_python} -m pip install --break-system-packages --upgrade "
-                    f"{cert_flag} {trusted_hosts} {mirror_flag} pip setuptools wheel",
+                    f"{cert_flag} {trusted_hosts} {mirror_flag} pip setuptools wheel 2>&1",
                     timeout=120,
                 )
+                if up_ec != 0:
+                    logger.warning("pip upgrade failed: %s", (up_out + up_err)[-500:])
 
                 # Install to target dir — no-build-isolation avoids nested pip subprocess issues
-                _, stderr, ec = await self.ssh.run(
+                # Redirect stderr to stdout so we capture everything
+                stdout_all, stderr, ec = await self.ssh.run(
                     f"{remote_python} -m pip install --break-system-packages --upgrade "
                     f"--ignore-installed --prefer-binary --no-build-isolation "
                     f"{cert_flag} {trusted_hosts} "
                     f"--target {venv}/lib "
-                    f"{mirror_flag} {self.tmpl['pip_package']}",
+                    f"{mirror_flag} {self.tmpl['pip_package']} 2>&1",
                     timeout=600,
                 )
                 if ec != 0:
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[-800:])
+                    # Combine all output, take last 2000 chars to see actual error
+                    all_output = (stdout_all + "\n" + stderr).strip()
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=all_output[-2000:])
                     return
 
                 # Create wrapper script so agent-server binary works
@@ -250,12 +255,12 @@ class Provisioner:
                     timeout=60,
                 )
                 # Install to target dir
-                _, stderr, ec = await self.ssh.run(
+                stdout_all, stderr, ec = await self.ssh.run(
                     f"{remote_python} -m pip install --break-system-packages --upgrade "
                     f"--ignore-installed --prefer-binary --no-build-isolation "
                     f"--target {venv}/lib "
                     f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                    f"{self.tmpl['pip_package']}",
+                    f"{self.tmpl['pip_package']} 2>&1",
                     timeout=300,
                 )
 
@@ -268,7 +273,8 @@ class Provisioner:
                     timeout=10,
                 )
                 if ec != 0:
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=stderr[:500])
+                    all_output = (stdout_all + "\n" + stderr).strip()
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=all_output[-2000:])
                     return
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
         else:
