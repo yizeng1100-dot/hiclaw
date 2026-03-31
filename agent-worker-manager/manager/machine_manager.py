@@ -268,6 +268,15 @@ class MachineManager:
         binary = tmpl["binary"]
         port = machine.agent_server_port
 
+        # Find actual binary — check new path first, fall back to legacy
+        stdout, _, _ = await ssh.run(f"test -f {binary} && echo FOUND || echo MISSING", timeout=5)
+        if stdout.strip() != "FOUND":
+            # Check legacy path
+            stdout2, _, _ = await ssh.run("test -f /opt/agent-venv/bin/agent-server && echo FOUND || echo MISSING", timeout=5)
+            if stdout2.strip() == "FOUND":
+                binary = "/opt/agent-venv/bin/agent-server"
+                logger.info(f"Using legacy binary path: {binary}")
+
         # Check if agent-server is already running on this port with the right workspace
         stdout, _, ec = await ssh.run(f"curl -s --max-time 2 http://localhost:{port}/health", timeout=5)
         if ec == 0 and "OK" in stdout:

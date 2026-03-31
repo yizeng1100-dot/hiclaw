@@ -59,8 +59,12 @@ class Provisioner:
         """Run all provisioning steps, yielding progress events."""
 
         # Step 1: Check if already fully provisioned (skip everything)
+        # Check both new path ($HOME/.hiclaw/) and legacy path (/opt/agent-venv/)
         binary = self.tmpl["binary"]
-        stdout, _, ec = await self.ssh.run(f"test -f {binary} && echo YES || echo NO", timeout=5)
+        stdout, _, ec = await self.ssh.run(
+            f"test -f {binary} && echo YES || test -f /opt/agent-venv/bin/agent-server && echo YES || echo NO",
+            timeout=5,
+        )
         already_has_sdk = stdout.strip() == "YES"
         _, _, ec2 = await self.ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
         already_has_cs = ec2 == 0
