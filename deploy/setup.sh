@@ -61,17 +61,20 @@ echo "[1/5] Setting up Skills Git repo..."
 if [ ! -d "$HICLAW_DIR/skills-repo.git" ]; then
     git init --bare "$HICLAW_DIR/skills-repo.git"
     TMPDIR=$(mktemp -d)
-    git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills"
-    cd "$TMPDIR/skills"
-    git config user.email "hiclaw@system"
-    git config user.name "HiClaw"
-    cp -r "$SCRIPT_DIR/skills-init/"* .
-    git add -A
-    git commit -m "init: add default skills"
-    git push origin master
-    cd "$PROJECT_DIR"
+    if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills"; then
+        cd "$TMPDIR/skills"
+        git config user.email "hiclaw@system"
+        git config user.name "HiClaw"
+        cp -r "$SCRIPT_DIR/skills-init/"* .
+        git add -A
+        git commit -m "init: add default skills"
+        git push origin master
+        cd "$PROJECT_DIR"
+        echo "  Skills repo initialized"
+    else
+        echo "  Warning: Failed to clone skills repo"
+    fi
     rm -rf "$TMPDIR"
-    echo "  Skills repo initialized"
 else
     echo "  Skills repo already exists"
 fi
@@ -159,16 +162,19 @@ curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
     -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' >/dev/null 2>&1 || true
 
 TMPDIR=$(mktemp -d)
-git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null
-cd "$TMPDIR/skills"
-git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
-git push gitea master --force 2>/dev/null || true
-cd "$PROJECT_DIR"
+if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null; then
+    cd "$TMPDIR/skills"
+    git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
+    git push gitea master --force 2>/dev/null || true
+    cd "$PROJECT_DIR"
+    echo "  Skills synced to Gitea"
+else
+    echo "  Warning: Could not clone skills repo, skipping Gitea sync"
+fi
 rm -rf "$TMPDIR"
 
 kill $GITEA_PID 2>/dev/null
 wait $GITEA_PID 2>/dev/null || true
-echo "  Skills synced to Gitea"
 
 # ─── 5. Build frontend ───
 echo "[5/5] Building frontend..."
