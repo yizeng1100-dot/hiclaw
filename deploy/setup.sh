@@ -130,8 +130,13 @@ fi
 
 # Gitea config
 mkdir -p "$HICLAW_DIR/gitea/custom/conf" "$HICLAW_DIR/gitea/data" "$HICLAW_DIR/gitea/repos" "$HICLAW_DIR/gitea/log"
-if [ -f "$SCRIPT_DIR/gitea-config/app.ini" ]; then
-    cp "$SCRIPT_DIR/gitea-config/app.ini" "$HICLAW_DIR/gitea/custom/conf/app.ini"
+GITEA_TEMPLATE="$SCRIPT_DIR/gitea-config/app.ini.template"
+if [ -f "$GITEA_TEMPLATE" ]; then
+    sed -e "s|__USER__|$(whoami)|g" \
+        -e "s|__HICLAW_DIR__|$HICLAW_DIR|g" \
+        -e "s|__GITEA_PORT__|$GITEA_PORT|g" \
+        -e "s|__APP_PORT__|${HICLAW_APP_PORT:-3000}|g" \
+        "$GITEA_TEMPLATE" > "$HICLAW_DIR/gitea/custom/conf/app.ini"
 fi
 
 # Fix SSH dir (Gitea needs it)

@@ -3,70 +3,24 @@
 # HiClaw — Start all services
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Usage: bash deploy/start.sh
-#
-# ─── Architecture ───
-#
-#   App Server (本机)                         远程终端 (用户的计算云)
-#   ┌─────────────────────────┐              ┌─────────────────────────┐
-#   │ OpenHands    :3000      │  SSH tunnel  │ agent-server   :8000    │
-#   │ Worker Mgr   :9090      │ ──────────►  │ code-server    :8443    │
-#   │ Gitea        :3300      │              │                         │
-#   └─────────────────────────┘              └─────────────────────────┘
-#
-# ─── Python 环境 ───
-#
-#   App Server:
-#     venv: /opt/hiclaw/venv/  (由 setup.sh + hiclaw-python-env.tar.gz 离线安装)
-#     包:   380+ 个 (OpenHands 全套 + Worker Manager 依赖)
-#     来源: hiclaw-python-env.tar.gz → wheels/ → pip install --no-index
-#
-#   远程终端:
-#     venv: /opt/agent-venv/  (由 Provisioner 自动安装)
-#     包:   180+ 个 (openhands-agent-server + SDK + tools)
-#     来源: 有网 → pip install from aliyun mirror
-#           没网 → hiclaw-deps.tar.gz 内的 wheels.tar.gz → pip install --no-index
-#
-# ─── 离线部署包 ───
-#
-#   hiclaw-python-env.tar.gz (380MB) → App Server 用
-#     ├── python3-standalone.tar.gz   (20MB)  Python 3.12
-#     ├── wheels/ (380 files)         (368MB) 所有 pip 依赖
-#     ├── requirements-clean.txt              包列表
-#     └── install.sh                          一键安装脚本
-#
-#   hiclaw-deps.tar.gz (283MB) → 远程终端 + Gitea 用
-#     ├── gitea                       (143MB) Gitea 二进制
-#     ├── agent-deps/wheels.tar.gz    (95MB)  agent-server SDK wheels
-#     ├── agent-deps/code-server.tar.gz(105MB) VS Code
-#     └── agent-deps/python3-standalone(20MB) Python 3.12 (远程没 Python 时)
-#
-# ─── 日志位置 ───
-#
-#   App Server:
-#     ~/openhands.log                    OpenHands 主服务 (会话创建/API)
-#     /tmp/manager.log                   Worker Manager (SSH/隧道/provisioning)
-#     /opt/hiclaw/gitea/log/gitea.log    Gitea (skill 管理 UI)
-#
-#   远程终端:
-#     /tmp/agent-server-{id}.log         agent-server (LLM 调用/工具执行/错误)
-#     {workspace}/logs/completions/      LLM 原始 request/response JSON
-#     {workspace}/workspace/conversations/  会话事件历史
+# Usage:
+#   bash deploy/start.sh pro    — 生产模式 (hiclaw-runtime.tar.gz)
+#   bash deploy/start.sh dev    — 开发模式 (Poetry venv)
+#   bash deploy/start.sh        — 自动检测
 #
 # ─── 环境变量 ───
-#
-#   HICLAW_DIR          数据目录           默认: /opt/hiclaw
-#   HICLAW_GITEA_PORT   Gitea 端口         默认: 3300
-#   HICLAW_MANAGER_PORT Worker Manager 端口 默认: 9090
-#   HICLAW_APP_PORT     OpenHands 端口      默认: 3000
-#   HICLAW_APP_IP       App Server IP      默认: 自动检测 (内网必须手动设)
-#   HICLAW_GITEA_USER   Gitea 管理员       默认: hiclaw-admin
+#   HICLAW_DIR            数据目录         默认: ~/.hiclaw
+#   HICLAW_GITEA_PORT     Gitea 端口       默认: 3300
+#   HICLAW_MANAGER_PORT   Manager 端口     默认: 9090
+#   HICLAW_APP_PORT       OpenHands 端口   默认: 3000
+#   HICLAW_APP_IP         App Server IP   默认: 自动检测
+#   HICLAW_GITEA_USER     Gitea 管理员     默认: hiclaw-admin
 #   HICLAW_GITEA_PASSWORD Gitea 密码       默认: HiClaw2026!
-#   HICLAW_LLM_DEBUG    LLM debug 日志     默认: 关闭 (设为1开启)
-#
+#   HICLAW_LLM_DEBUG      LLM debug 日志   默认: 关闭 (设为1开启)
 # ═══════════════════════════════════════════════════════════════════════════
 
 set -e
+MODE="${1:-auto}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 HICLAW_DIR="${HICLAW_DIR:-$HOME/.hiclaw}"
@@ -76,59 +30,96 @@ APP_PORT="${HICLAW_APP_PORT:-3000}"
 GITEA_USER="${HICLAW_GITEA_USER:-hiclaw-admin}"
 GITEA_PASS="${HICLAW_GITEA_PASSWORD:-HiClaw2026!}"
 MANAGER_DIR="$PROJECT_DIR/agent-worker-manager"
+LOG_DIR="$HICLAW_DIR/logs"
 
-# ─── Python 环境 (自包含运行时，不依赖系统 Python) ───
+mkdir -p "$LOG_DIR"
+
+# ─── Python 环境 ───
 RUNTIME_DIR="$HICLAW_DIR/runtime"
-if [ -d "$RUNTIME_DIR/bin" ]; then
-    # 自包含运行时 (hiclaw-runtime.tar.gz 解压到 /opt/hiclaw/runtime/)
+
+select_pro() {
+    if [ ! -d "$RUNTIME_DIR/bin" ]; then
+        echo "ERROR: Runtime not installed. Run: bash deploy/setup.sh"
+        exit 1
+    fi
     PYTHON="$RUNTIME_DIR/bin/hiclaw-python"
     UVICORN="$RUNTIME_DIR/bin/hiclaw-uvicorn"
     export LD_LIBRARY_PATH="$RUNTIME_DIR/python/lib:$LD_LIBRARY_PATH"
     export PATH="$RUNTIME_DIR/venv/bin:$PATH"
-elif [ -d "$HICLAW_DIR/venv/bin" ]; then
-    # 离线 venv (hiclaw-python-env.tar.gz 安装到 /opt/hiclaw/venv/)
-    PYTHON="$HICLAW_DIR/venv/bin/python3"
-    UVICORN="$HICLAW_DIR/venv/bin/uvicorn"
-    export PATH="$HICLAW_DIR/venv/bin:$PATH"
-elif command -v uvicorn &>/dev/null; then
-    # System Python with uvicorn in PATH
-    PYTHON="python3"
-    UVICORN="uvicorn"
-elif [ -n "$(find "$HOME/.cache/pypoetry/virtualenvs" -name 'uvicorn' -type f 2>/dev/null | head -1)" ]; then
-    # Poetry venv (development mode)
-    POETRY_VENV="$(dirname "$(dirname "$(find "$HOME/.cache/pypoetry/virtualenvs" -name 'uvicorn' -path '*/bin/uvicorn' -type f 2>/dev/null | head -1)")")"
-    PYTHON="$POETRY_VENV/bin/python3"
-    UVICORN="$POETRY_VENV/bin/uvicorn"
-    export PATH="$POETRY_VENV/bin:$PATH"
-else
-    echo "ERROR: Python environment not found."
-    echo "Put hiclaw-runtime.tar.gz in deploy/ and run: bash deploy/setup.sh"
-    exit 1
-fi
+    echo "  Mode: PRODUCTION (hiclaw-runtime)"
+}
+
+select_dev() {
+    # Find Poetry venv
+    POETRY_VENV="$(find "$HOME/.cache/pypoetry/virtualenvs" -name 'uvicorn' -path '*/bin/uvicorn' -type f 2>/dev/null | head -1)"
+    if [ -n "$POETRY_VENV" ]; then
+        POETRY_VENV="$(dirname "$(dirname "$POETRY_VENV")")"
+        PYTHON="$POETRY_VENV/bin/python3"
+        UVICORN="$POETRY_VENV/bin/uvicorn"
+        export PATH="$POETRY_VENV/bin:$PATH"
+        echo "  Mode: DEVELOPMENT (Poetry venv)"
+    elif command -v uvicorn &>/dev/null; then
+        PYTHON="python3"
+        UVICORN="uvicorn"
+        echo "  Mode: DEVELOPMENT (system Python)"
+    else
+        echo "ERROR: No Poetry venv or system uvicorn found."
+        echo "  Run: cd $PROJECT_DIR && poetry install"
+        exit 1
+    fi
+}
+
+case "$MODE" in
+    pro|prod|production)
+        select_pro ;;
+    dev|development)
+        select_dev ;;
+    auto|"")
+        if [ -d "$RUNTIME_DIR/bin" ]; then
+            select_pro
+        else
+            select_dev
+        fi ;;
+    *)
+        echo "Usage: bash deploy/start.sh [pro|dev]"
+        exit 1 ;;
+esac
 
 echo "=== Starting HiClaw Services ==="
-echo "  Python: $($PYTHON --version)"
+echo "  Python: $($PYTHON --version 2>&1)"
 echo "  Data:   $HICLAW_DIR"
 echo ""
 
-# 1. Gitea (Skills 管理 UI)
+# ─── Generate Gitea config from template ───
+GITEA_CONF="$HICLAW_DIR/gitea/custom/conf/app.ini"
+GITEA_TEMPLATE="$SCRIPT_DIR/gitea-config/app.ini.template"
+if [ -f "$GITEA_TEMPLATE" ]; then
+    mkdir -p "$(dirname "$GITEA_CONF")"
+    sed -e "s|__USER__|$(whoami)|g" \
+        -e "s|__HICLAW_DIR__|$HICLAW_DIR|g" \
+        -e "s|__GITEA_PORT__|$GITEA_PORT|g" \
+        -e "s|__APP_PORT__|$APP_PORT|g" \
+        "$GITEA_TEMPLATE" > "$GITEA_CONF"
+fi
+
+# ─── 1. Gitea ───
 if ! ss -tlnp | grep -q ":$GITEA_PORT "; then
-    GITEA_BIN="${HICLAW_DIR}/bin/gitea"
+    GITEA_BIN="$HICLAW_DIR/bin/gitea"
     [ ! -f "$GITEA_BIN" ] && GITEA_BIN="$(which gitea 2>/dev/null || echo gitea)"
     echo "[1/3] Starting Gitea (port $GITEA_PORT)..."
     GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
-        --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
-        > "$HICLAW_DIR/gitea/log/startup.log" 2>&1 &
+        --config "$GITEA_CONF" \
+        > "$LOG_DIR/gitea.log" 2>&1 &
     disown
     sleep 5
 else
     echo "[1/3] Gitea already running (port $GITEA_PORT)"
 fi
 
-# 2. Worker Manager (SSH 连接/隧道/Provisioning)
+# ─── 2. Worker Manager ───
 if ! ss -tlnp | grep -q ":$MANAGER_PORT "; then
     echo "[2/3] Starting Worker Manager (port $MANAGER_PORT)..."
-    cd "$MANAGER_DIR" && $PYTHON run.py > /tmp/manager.log 2>&1 &
+    cd "$MANAGER_DIR" && $PYTHON run.py > "$LOG_DIR/manager.log" 2>&1 &
     disown
     cd "$PROJECT_DIR"
     sleep 2
@@ -136,12 +127,12 @@ else
     echo "[2/3] Worker Manager already running (port $MANAGER_PORT)"
 fi
 
-# 3. OpenHands App Server (主服务)
+# ─── 3. OpenHands App Server ───
 if ! ss -tlnp | grep -q ":$APP_PORT "; then
     echo "[3/3] Starting OpenHands App Server (port $APP_PORT)..."
     cd "$PROJECT_DIR" && $UVICORN openhands.server.listen:app \
         --host 0.0.0.0 --port $APP_PORT \
-        > ~/openhands.log 2>&1 &
+        > "$LOG_DIR/openhands.log" 2>&1 &
     disown
     cd "$PROJECT_DIR"
 else
@@ -151,7 +142,7 @@ fi
 # ─── 等待并验证 ───
 echo ""
 echo "Waiting for services to start..."
-sleep 15
+sleep 20
 
 echo ""
 echo "=== Service Status ==="
@@ -161,7 +152,7 @@ for port_name in "$APP_PORT:OpenHands" "$GITEA_PORT:Gitea" "$MANAGER_PORT:Worker
     if ss -tlnp | grep -q ":$port "; then
         echo "  ✓ $name (port $port)"
     else
-        echo "  ✗ $name (port $port) — NOT RUNNING, check logs"
+        echo "  ✗ $name (port $port) — NOT RUNNING"
     fi
 done
 
@@ -171,8 +162,8 @@ echo "  App:    http://localhost:$APP_PORT"
 echo "  Skills: http://localhost:$APP_PORT/skill-management"
 echo "  Gitea:  http://localhost:$GITEA_PORT ($GITEA_USER / $GITEA_PASS)"
 echo ""
-echo "=== Logs ==="
-echo "  App Server:     tail -f ~/openhands.log"
-echo "  Worker Manager: tail -f /tmp/manager.log"
-echo "  Gitea:          tail -f $HICLAW_DIR/gitea/log/gitea.log"
-echo "  Agent Server:   ssh <remote> 'tail -f /tmp/agent-server-*.log'"
+echo "=== Logs (all in $LOG_DIR/) ==="
+echo "  tail -f $LOG_DIR/openhands.log"
+echo "  tail -f $LOG_DIR/manager.log"
+echo "  tail -f $LOG_DIR/gitea.log"
+echo "  Remote: ssh <host> 'tail -f /tmp/agent-server-*.log'"

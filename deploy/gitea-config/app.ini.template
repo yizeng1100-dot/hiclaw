@@ -1,28 +1,26 @@
 APP_NAME = HiClaw Skills
 RUN_MODE = prod
-RUN_USER = gyz
-WORK_PATH = /opt/hiclaw/gitea
+RUN_USER = __USER__
 
 [server]
-HTTP_PORT = 3300
-ROOT_URL = http://localhost:3000/runtime/gitea/
+HTTP_PORT = __GITEA_PORT__
+ROOT_URL = http://localhost:__APP_PORT__/runtime/gitea/
 LFS_START_SERVER = false
 OFFLINE_MODE = true
 START_SSH_SERVER = false
 
 [database]
 DB_TYPE = sqlite3
-PATH = /opt/hiclaw/gitea/data/gitea.db
+PATH = __HICLAW_DIR__/gitea/data/gitea.db
 
 [repository]
-ROOT = /opt/hiclaw/gitea/repos
+ROOT = __HICLAW_DIR__/gitea/repos
 DEFAULT_BRANCH = master
 
 [security]
 INSTALL_LOCK = true
 SECRET_KEY = hiclaw-secret-key-change-me
-X_FRAME_OPTIONS = 
-INTERNAL_TOKEN = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3NzQ1OTM0Njd9.xsK_PcoiJk4vZkYsUVtdgakzQY0SHBvx-jeKuvrYjm0
+X_FRAME_OPTIONS =
 
 [service]
 DISABLE_REGISTRATION = false
@@ -38,7 +36,4 @@ DEFAULT_THEME = gitea-dark
 [log]
 MODE = file
 LEVEL = Info
-ROOT_PATH = /opt/hiclaw/gitea/log
-
-[oauth2]
-JWT_SECRET = HYXt-cKHIP5Er-Jpsbj3xmgrulihRKK8bS3JVel8IO0
+ROOT_PATH = __HICLAW_DIR__/gitea/log
