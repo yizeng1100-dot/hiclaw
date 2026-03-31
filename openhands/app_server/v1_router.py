@@ -25,8 +25,9 @@ router.include_router(web_client_router.router)
 
 # >>> CUSTOM: HiClaw extensions (safe to remove when merging upstream) <<<
 try:
-    from custom.skill_mgmt.router import router as _skill_router
     from custom.skill_mgmt.conversation_router import router as _conv_router
+    from custom.skill_mgmt.router import router as _skill_router
+
     router.include_router(_skill_router)
     router.include_router(_conv_router)
 except ImportError:

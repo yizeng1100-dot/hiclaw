@@ -98,6 +98,7 @@ class LLM(RetryMixin, DebugMixin):
         # >>> CUSTOM: HiClaw — enable raw request/response logging via env var <<<
         if os.environ.get('HICLAW_LLM_DEBUG', '').lower() in ('1', 'true', 'yes'):
             import litellm as _litellm
+
             _litellm.log_raw_request_response = True
             _litellm.set_verbose = True
         # >>> END CUSTOM <<<
@@ -256,6 +257,7 @@ class LLM(RetryMixin, DebugMixin):
             # >>> CUSTOM: HiClaw — dynamic CoMagic headers <<<
             try:
                 from custom.comagic_hook import inject_comagic_headers
+
                 kwargs = inject_comagic_headers(self.config, kwargs)
             except ImportError:
                 pass

@@ -76,21 +76,43 @@ class Provisioner:
             yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed", detail="Already deployed")
             return
 
-        # Step 2: Check Python on remote
+        # Step 2: Check Python on remote (need >= 3.12 for our wheels)
         yield _evt(ProvisionStep.CHECK_PYTHON, "started")
         stdout, _, ec = await self.ssh.run("python3 --version", timeout=10)
+        python_ok = False
         if ec == 0:
-            yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=stdout.strip())
-        else:
-            yield _evt(ProvisionStep.INSTALL_PYTHON, "started", detail="Deploying standalone Python (20MB)")
+            # Check version is >= 3.12
+            version_str = stdout.strip()  # "Python 3.x.y"
+            _, _, ver_ec = await self.ssh.run(
+                "python3 -c 'import sys; exit(0 if sys.version_info >= (3,12) else 1)'",
+                timeout=5,
+            )
+            if ver_ec == 0:
+                python_ok = True
+                yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=version_str)
+            else:
+                yield _evt(ProvisionStep.CHECK_PYTHON, "started",
+                           detail=f"{version_str} too old, need >= 3.12")
+
+        if not python_ok:
+            yield _evt(ProvisionStep.INSTALL_PYTHON, "started", detail="Deploying Python 3.12 standalone")
             python_tar = os.path.join(DEPS_DIR, "python3-standalone.tar.gz")
             if os.path.exists(python_tar):
                 await self.ssh.upload_file(python_tar, "/tmp/python3-standalone.tar.gz")
                 await self.ssh.run(f"tar xzf /tmp/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm /tmp/python3-standalone.tar.gz", timeout=60)
-                await self.ssh.run(f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3 $HOME/.local/bin/python3", timeout=5)
-                await self.ssh.run(f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/pip3 $HOME/.local/bin/pip3", timeout=5)
-                await self.ssh.run("echo 'export PATH=$HOME/.local/bin:$PATH' >> $HOME/.bashrc", timeout=5)
-                _, _, ec = await self.ssh.run("python3 --version", timeout=5)
+                # Override system python3/pip3 with 3.12 — put in front of PATH
+                await self.ssh.run(
+                    f"mkdir -p $HOME/.local/bin && "
+                    f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12 $HOME/.local/bin/python3 && "
+                    f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12 $HOME/.local/bin/python3.12 && "
+                    f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/pip3.12 $HOME/.local/bin/pip3 && "
+                    f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/pip3.12 $HOME/.local/bin/pip3.12",
+                    timeout=5,
+                )
+                # Ensure PATH has ~/.local/bin first
+                await self.ssh.run("grep -q '.local/bin' $HOME/.bashrc || echo 'export PATH=$HOME/.local/bin:$PATH' >> $HOME/.bashrc", timeout=5)
+                # Verify with full path
+                _, _, ec = await self.ssh.run(f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12 --version", timeout=5)
                 if ec == 0:
                     yield _evt(ProvisionStep.INSTALL_PYTHON, "completed")
                 else:
@@ -121,7 +143,7 @@ class Provisioner:
 
                 # Install to target dir (no venv, no python3-venv needed)
                 _, stderr, ec = await self.ssh.run(
-                    f"pip3 install --break-system-packages --upgrade --ignore-installed --target {venv}/lib {mirror_flag} {self.tmpl['pip_package']}",
+                    f"$HOME/.local/bin/pip3 install --break-system-packages --upgrade --ignore-installed --target {venv}/lib {mirror_flag} {self.tmpl['pip_package']}",
                     timeout=600,
                 )
                 if ec != 0:
@@ -132,7 +154,7 @@ class Provisioner:
                 await self.ssh.run(
                     f"mkdir -p {venv}/bin && "
                     f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
-                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec python3 -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
+                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec $HOME/.local/bin/python3 -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
                     f"chmod +x {venv}/bin/agent-server",
                     timeout=10,
                 )
@@ -175,7 +197,7 @@ class Provisioner:
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
                 # Install to target dir (no venv needed)
                 _, stderr, ec = await self.ssh.run(
-                    f"pip3 install --break-system-packages --upgrade --ignore-installed --target {venv}/lib "
+                    f"$HOME/.local/bin/pip3 install --break-system-packages --upgrade --ignore-installed --target {venv}/lib "
                     f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                     f"{self.tmpl['pip_package']}",
                     timeout=300,
@@ -184,7 +206,7 @@ class Provisioner:
                 if ec != 0:
                     # Fallback: try with python3 -m pip
                     _, stderr, ec = await self.ssh.run(
-                        f"python3 -m pip install --break-system-packages --upgrade --ignore-installed --target {venv}/lib "
+                        f"$HOME/.local/bin/python3 -m pip install --break-system-packages --upgrade --ignore-installed --target {venv}/lib "
                         f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                         f"{self.tmpl['pip_package']}",
                         timeout=300,
@@ -194,7 +216,7 @@ class Provisioner:
                 await self.ssh.run(
                     f"mkdir -p {venv}/bin && "
                     f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
-                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec python3 -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
+                    f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec $HOME/.local/bin/python3 -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
                     f"chmod +x {venv}/bin/agent-server",
                     timeout=10,
                 )

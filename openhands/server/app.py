@@ -64,9 +64,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # >>> CUSTOM: HiClaw — seed skills from custom/skill_examples/ on startup <<<
     try:
         from custom.skill_mgmt.seed import seed_skills
+
         seed_skills()
     except Exception as e:
         import logging
+
         logging.getLogger(__name__).warning(f'Skill seed skipped: {e}')
     # >>> END CUSTOM <<<
     async with conversation_manager:
@@ -110,9 +112,10 @@ if server_config.enable_v1:
     app.include_router(v1_router.router)
 app.include_router(trajectory_router)
 # >>> CUSTOM: HiClaw <<<
-from openhands.server.routes.runtime_proxy import router as runtime_proxy_router
-from openhands.server.routes.hiclaw_skills import router as hiclaw_skills_router
-app.include_router(runtime_proxy_router)
-app.include_router(hiclaw_skills_router)
+import openhands.server.routes.hiclaw_skills as _hiclaw_skills  # noqa: E402
+import openhands.server.routes.runtime_proxy as _runtime_proxy  # noqa: E402
+
+app.include_router(_runtime_proxy.router)
+app.include_router(_hiclaw_skills.router)
 # >>> END CUSTOM <<<
 add_health_endpoints(app)
