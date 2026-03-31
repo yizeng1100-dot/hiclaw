@@ -47,12 +47,21 @@ class MachineManager:
             machine = self._machines[machine_id]
             if machine.status == MachineStatus.READY:
                 machine.active_conversations += 1
-                # Update workspace if changed
-                if req.workspace != machine.workspace:
-                    machine.workspace = req.workspace
-                    logger.info(f"Machine {machine_id} workspace updated to {req.workspace}")
-                # Always sync skills on reconnect
                 ssh = self._ssh_clients.get(machine_id)
+                # Update workspace if changed — restart agent-server + code-server
+                if req.workspace != machine.workspace:
+                    old_workspace = machine.workspace
+                    machine.workspace = req.workspace
+                    logger.info(f"Machine {machine_id} workspace changed: {old_workspace} → {req.workspace}")
+                    if ssh and ssh.connected:
+                        # Restart agent-server with new workspace
+                        await self._start_agent_server(ssh, machine)
+                        # Restart code-server with new workspace
+                        port = machine.agent_server_port
+                        await ssh.run(f"pkill -f 'code-server.*--port {machine.code_server_port}' 2>/dev/null || true", timeout=5)
+                        await asyncio.sleep(1)
+                        await self._start_code_server(ssh, machine)
+                # Always sync skills on reconnect
                 if ssh and ssh.connected:
                     asyncio.create_task(self._clone_skills_repo(ssh, machine))
                 return machine
@@ -359,11 +368,24 @@ class MachineManager:
 
     async def _start_code_server(self, ssh: SSHClient, machine: MachineInfo) -> None:
         """Start code-server on the remote machine if installed."""
-        _, _, ec = await ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
-        if ec != 0:
+        # Find code-server binary — check multiple paths
+        cs_bin = ""
+        for path in ["$HOME/.hiclaw/code-server/bin/code-server", "$HOME/.local/bin/code-server"]:
+            out, _, ec = await ssh.run(f"test -f {path} && echo {path}", timeout=5)
+            if ec == 0 and out.strip():
+                cs_bin = out.strip()
+                break
+        if not cs_bin:
+            # Try PATH as last resort
+            out, _, ec = await ssh.run("command -v code-server 2>/dev/null", timeout=5)
+            if ec == 0 and out.strip():
+                cs_bin = out.strip()
+        if not cs_bin:
             logger.info(f"code-server not installed on {machine.host}, skipping")
             machine.code_server_port = 0
             return
+
+        logger.info(f"Found code-server at: {cs_bin}")
 
         # Set dark theme to match container VS Code
         await ssh.run(
@@ -383,11 +405,11 @@ class MachineManager:
             machine.code_server_port = cs_port
             return
 
-        # Start code-server with no auth, bound to workspace
+        # Start code-server with full path, no auth, bound to workspace
         log_file = f"/tmp/code-server-{machine.id}.log"
         cmd = (
             f"no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 "
-            f"code-server --port {cs_port} --host 0.0.0.0 "
+            f"{cs_bin} --port {cs_port} --host 0.0.0.0 "
             f"--auth none --disable-telemetry "
             f"{machine.workspace}"
         )
