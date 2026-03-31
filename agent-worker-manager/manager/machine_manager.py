@@ -355,6 +355,7 @@ class MachineManager:
     async def _wait_healthy(self, ssh: SSHClient, machine: MachineInfo, timeout: int = 180) -> None:
         """Wait for agent-server to become healthy."""
         port = machine.agent_server_port
+        log_file = f"/tmp/agent-server-{machine.id}.log"
         start = asyncio.get_event_loop().time()
         attempt = 0
         # Wait a few seconds before first check — agent-server needs time to import modules
@@ -362,6 +363,24 @@ class MachineManager:
         while asyncio.get_event_loop().time() - start < timeout:
             attempt += 1
             elapsed = int(asyncio.get_event_loop().time() - start)
+
+            # Check if process is still alive — fail fast if it crashed
+            proc_out, _, _ = await ssh.run(
+                f"pgrep -f 'agent-server --port {port}' >/dev/null 2>&1 && echo ALIVE || echo DEAD",
+                timeout=5,
+            )
+            if proc_out.strip() == "DEAD":
+                # Process crashed — read log tail for error details
+                log_out, _, _ = await ssh.run(f"tail -30 {log_file} 2>/dev/null", timeout=5)
+                error_detail = log_out.strip()[-1000:] if log_out.strip() else "No log output"
+                self._broadcast_event(machine.id, ProvisionEvent(
+                    step=ProvisionStep.HEALTH_CHECK, status="started",
+                    detail=f"agent-server crashed! Log: {error_detail[:500]}",
+                ))
+                raise RuntimeError(
+                    f"agent-server process died. Last log:\n{error_detail}"
+                )
+
             try:
                 stdout, stderr, ec = await ssh.run(
                     f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{port}/health",
@@ -371,21 +390,26 @@ class MachineManager:
                 if code == "200":
                     return
                 # Broadcast progress so frontend knows it's still trying
-                if attempt % 5 == 0:
+                if attempt % 3 == 0:
                     self._broadcast_event(machine.id, ProvisionEvent(
                         step=ProvisionStep.HEALTH_CHECK, status="started",
                         detail=f"Waiting... ({elapsed}s, HTTP {code})",
                     ))
                     logger.info(f"Health check attempt {attempt}: HTTP {code} ({elapsed}s)")
             except Exception as e:
-                if attempt % 5 == 0:
+                if attempt % 3 == 0:
                     self._broadcast_event(machine.id, ProvisionEvent(
                         step=ProvisionStep.HEALTH_CHECK, status="started",
                         detail=f"Waiting... ({elapsed}s, {type(e).__name__})",
                     ))
                     logger.info(f"Health check attempt {attempt}: {e} ({elapsed}s)")
             await asyncio.sleep(3)
-        raise TimeoutError(f"Agent-server health check timed out after {timeout}s")
+        # Timed out — grab log for debugging
+        log_out, _, _ = await ssh.run(f"tail -30 {log_file} 2>/dev/null", timeout=5)
+        raise TimeoutError(
+            f"Agent-server health check timed out after {timeout}s. "
+            f"Last log:\n{log_out.strip()[-1000:]}"
+        )
 
     # ─── Query / Lifecycle ──────────────────────────────
 
