@@ -166,7 +166,7 @@ class MachineManager:
                 already_healthy = False
                 try:
                     h_out, _, h_ec = await ssh.run(
-                        f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 http://localhost:{port}/health",
+                        f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 http://localhost:{port}/health",
                         timeout=5,
                     )
                     if h_out.strip() == "200":
@@ -319,7 +319,7 @@ class MachineManager:
 
         # Step 1: Check if something is already listening on the port
         health_out, _, health_ec = await ssh.run(
-            f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 http://localhost:{port}/health",
+            f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 http://localhost:{port}/health",
             timeout=5,
         )
         port_healthy = health_out.strip() == "200"
@@ -347,7 +347,8 @@ class MachineManager:
 
         # Step 3: Start in background
         log_file = f"/tmp/agent-server-{machine.id}.log"
-        env_vars = ""
+        # no_proxy: corporate proxies intercept localhost connections
+        env_vars = "no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 "
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
         cmd = f"cd {machine.workspace} && {env_vars}{binary} --port {port}"
@@ -374,7 +375,7 @@ class MachineManager:
         cs_port = machine.code_server_port or 8443
 
         # Check if already running
-        stdout, _, ec = await ssh.run(f"curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}", timeout=5)
+        stdout, _, ec = await ssh.run(f"no_proxy=localhost,127.0.0.1 curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}", timeout=5)
         if stdout.strip() == "200":
             logger.info(f"code-server already running on {machine.host}:{cs_port}")
             machine.code_server_port = cs_port
@@ -383,6 +384,7 @@ class MachineManager:
         # Start code-server with no auth, bound to workspace
         log_file = f"/tmp/code-server-{machine.id}.log"
         cmd = (
+            f"no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 "
             f"code-server --port {cs_port} --host 0.0.0.0 "
             f"--auth none --disable-telemetry "
             f"{machine.workspace}"
@@ -394,7 +396,7 @@ class MachineManager:
         for _ in range(15):
             await asyncio.sleep(2)
             stdout, _, ec = await ssh.run(
-                f"curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}",
+                f"no_proxy=localhost,127.0.0.1 curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}",
                 timeout=5,
             )
             if stdout.strip() == "200":
@@ -433,7 +435,7 @@ class MachineManager:
 
             try:
                 stdout, stderr, ec = await ssh.run(
-                    f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{port}/health",
+                    f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{port}/health",
                     timeout=5,
                 )
                 code = stdout.strip()
