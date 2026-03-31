@@ -352,21 +352,39 @@ class MachineManager:
                 return
         logger.warning(f"code-server may not have started on {machine.host}:{cs_port}")
 
-    async def _wait_healthy(self, ssh: SSHClient, machine: MachineInfo, timeout: int = 90) -> None:
+    async def _wait_healthy(self, ssh: SSHClient, machine: MachineInfo, timeout: int = 180) -> None:
         """Wait for agent-server to become healthy."""
         port = machine.agent_server_port
         start = asyncio.get_event_loop().time()
+        attempt = 0
+        # Wait a few seconds before first check — agent-server needs time to import modules
+        await asyncio.sleep(5)
         while asyncio.get_event_loop().time() - start < timeout:
+            attempt += 1
+            elapsed = int(asyncio.get_event_loop().time() - start)
             try:
-                stdout, _, ec = await ssh.run(
+                stdout, stderr, ec = await ssh.run(
                     f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{port}/health",
                     timeout=5,
                 )
-                if stdout.strip() == "200":
+                code = stdout.strip()
+                if code == "200":
                     return
-            except Exception:
-                pass
-            await asyncio.sleep(2)
+                # Broadcast progress so frontend knows it's still trying
+                if attempt % 5 == 0:
+                    self._broadcast_event(machine.id, ProvisionEvent(
+                        step=ProvisionStep.HEALTH_CHECK, status="started",
+                        detail=f"Waiting... ({elapsed}s, HTTP {code})",
+                    ))
+                    logger.info(f"Health check attempt {attempt}: HTTP {code} ({elapsed}s)")
+            except Exception as e:
+                if attempt % 5 == 0:
+                    self._broadcast_event(machine.id, ProvisionEvent(
+                        step=ProvisionStep.HEALTH_CHECK, status="started",
+                        detail=f"Waiting... ({elapsed}s, {type(e).__name__})",
+                    ))
+                    logger.info(f"Health check attempt {attempt}: {e} ({elapsed}s)")
+            await asyncio.sleep(3)
         raise TimeoutError(f"Agent-server health check timed out after {timeout}s")
 
     # ─── Query / Lifecycle ──────────────────────────────

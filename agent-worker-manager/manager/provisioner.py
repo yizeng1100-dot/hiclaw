@@ -103,8 +103,25 @@ class Provisioner:
             yield _evt(ProvisionStep.INSTALL_PYTHON, "started", detail="Deploying Python 3.12 standalone")
             python_tar = os.path.join(DEPS_DIR, "python3-standalone.tar.gz")
             if os.path.exists(python_tar):
-                await self.ssh.upload_file(python_tar, "/tmp/python3-standalone.tar.gz")
-                await self.ssh.run(f"tar xzf /tmp/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm /tmp/python3-standalone.tar.gz", timeout=60)
+                tar_size_mb = os.path.getsize(python_tar) // 1024 // 1024
+                last_mb = [0]
+                def _py_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        total_mb = total // 1024 // 1024
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(_evt(
+                            ProvisionStep.INSTALL_PYTHON, "started",
+                            detail=f"Uploading Python {sent_mb}/{total_mb}MB ({pct}%)"
+                        ))
+                self._broadcast(_evt(ProvisionStep.INSTALL_PYTHON, "started",
+                                     detail=f"Uploading Python 3.12 ({tar_size_mb}MB)"))
+                await self.ssh.upload_file(python_tar, "/tmp/python3-standalone.tar.gz",
+                                           progress_callback=_py_progress)
+                self._broadcast(_evt(ProvisionStep.INSTALL_PYTHON, "started",
+                                     detail="Extracting..."))
+                await self.ssh.run(f"tar xzf /tmp/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm /tmp/python3-standalone.tar.gz", timeout=120)
                 # Override system python3/pip3 with 3.12 — put in front of PATH
                 await self.ssh.run(
                     f"mkdir -p $HOME/.local/bin && "
