@@ -347,8 +347,10 @@ class MachineManager:
 
         # Step 3: Start in background
         log_file = f"/tmp/agent-server-{machine.id}.log"
-        # no_proxy: corporate proxies intercept localhost connections
-        env_vars = "no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 "
+        # no_proxy: corporate proxies intercept localhost + app-server IP connections
+        app_ip = os.environ.get('HICLAW_APP_IP', '')
+        no_proxy_list = f"localhost,127.0.0.1{f',{app_ip}' if app_ip else ''}"
+        env_vars = f"no_proxy={no_proxy_list} NO_PROXY={no_proxy_list} "
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
         cmd = f"cd {machine.workspace} && {env_vars}{binary} --port {port}"
