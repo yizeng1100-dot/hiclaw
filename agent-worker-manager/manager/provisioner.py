@@ -17,10 +17,11 @@ from .ssh_client import SSHClient
 logger = logging.getLogger(__name__)
 
 # Remote machine paths — configurable via environment variables
-REMOTE_VENV_PATH = os.environ.get('HICLAW_REMOTE_VENV', '/opt/agent-venv')
-REMOTE_DEPS_PATH = os.environ.get('HICLAW_REMOTE_DEPS', '/opt/agent-deps')
-REMOTE_CODE_SERVER_PATH = os.environ.get('HICLAW_REMOTE_CODE_SERVER', '/usr/local/lib/code-server')
-REMOTE_PYTHON_INSTALL_PATH = os.environ.get('HICLAW_REMOTE_PYTHON_PATH', '/usr/local')
+# These use $HOME which bash expands on the remote machine — no /opt/ needed, no sudo
+REMOTE_VENV_PATH = os.environ.get('HICLAW_REMOTE_VENV', '$HOME/.hiclaw/agent-venv')
+REMOTE_DEPS_PATH = os.environ.get('HICLAW_REMOTE_DEPS', '$HOME/.hiclaw/agent-deps')
+REMOTE_CODE_SERVER_PATH = os.environ.get('HICLAW_REMOTE_CODE_SERVER', '$HOME/.hiclaw/code-server')
+REMOTE_PYTHON_INSTALL_PATH = os.environ.get('HICLAW_REMOTE_PYTHON_PATH', '$HOME/.hiclaw')
 
 # Template-specific config
 TEMPLATES = {
@@ -61,7 +62,7 @@ class Provisioner:
         binary = self.tmpl["binary"]
         stdout, _, ec = await self.ssh.run(f"test -f {binary} && echo YES || echo NO", timeout=5)
         already_has_sdk = stdout.strip() == "YES"
-        _, _, ec2 = await self.ssh.run("which code-server", timeout=5)
+        _, _, ec2 = await self.ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
         already_has_cs = ec2 == 0
 
         if already_has_sdk and already_has_cs:
@@ -82,8 +83,9 @@ class Provisioner:
             if os.path.exists(python_tar):
                 await self.ssh.upload_file(python_tar, "/tmp/python3-standalone.tar.gz")
                 await self.ssh.run(f"tar xzf /tmp/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm /tmp/python3-standalone.tar.gz", timeout=60)
-                await self.ssh.run(f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3 /usr/local/bin/python3", timeout=5)
-                await self.ssh.run(f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/pip3 /usr/local/bin/pip3", timeout=5)
+                await self.ssh.run(f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3 $HOME/.local/bin/python3", timeout=5)
+                await self.ssh.run(f"ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/pip3 $HOME/.local/bin/pip3", timeout=5)
+                await self.ssh.run("echo 'export PATH=$HOME/.local/bin:$PATH' >> $HOME/.bashrc", timeout=5)
                 _, _, ec = await self.ssh.run("python3 --version", timeout=5)
                 if ec == 0:
                     yield _evt(ProvisionStep.INSTALL_PYTHON, "completed")
@@ -97,7 +99,7 @@ class Provisioner:
         # Step 3+4: Install SDK — uses pip install --target (no venv needed)
         if not already_has_sdk:
             has_internet = await self._check_internet()
-            venv = self.tmpl["venv_path"]  # e.g. /opt/agent-venv — used as install target dir
+            venv = self.tmpl["venv_path"]  # e.g. ~/.hiclaw/agent-venv
 
             if has_internet:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Remote has internet")
@@ -226,11 +228,11 @@ class Provisioner:
                         await self.ssh.run(
                             f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
                             f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
-                            f"ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server /usr/local/bin/code-server && "
+                            f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && "
                             f"rm -f /tmp/{CS_FILE}",
                             timeout=60,
                         )
-                        _, _, verify_ec = await self.ssh.run("which code-server", timeout=5)
+                        _, _, verify_ec = await self.ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
                         if verify_ec == 0:
                             installed = True
                             yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed",
@@ -264,11 +266,11 @@ class Provisioner:
                     await self.ssh.run(
                         f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
                         f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
-                        f"ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server /usr/local/bin/code-server && "
+                        f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && "
                         f"rm -f /tmp/{CS_FILE}",
                         timeout=60,
                     )
-                    _, _, verify_ec = await self.ssh.run("which code-server", timeout=5)
+                    _, _, verify_ec = await self.ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
                     if verify_ec == 0:
                         installed = True
                         yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed",

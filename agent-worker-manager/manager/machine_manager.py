@@ -268,11 +268,20 @@ class MachineManager:
         binary = tmpl["binary"]
         port = machine.agent_server_port
 
-        # Check if agent-server is already running on this port
+        # Check if agent-server is already running on this port with the right workspace
         stdout, _, ec = await ssh.run(f"curl -s --max-time 2 http://localhost:{port}/health", timeout=5)
         if ec == 0 and "OK" in stdout:
-            logger.info(f"Agent-server already running on {machine.host}:{port}")
-            return
+            # Verify it's running in the correct workspace
+            check_stdout, _, _ = await ssh.run(
+                f"ps aux | grep 'agent-server --port {port}' | grep -v grep | head -1", timeout=5)
+            if machine.workspace in check_stdout:
+                logger.info(f"Agent-server already running in {machine.workspace}")
+                return
+            else:
+                # Wrong workspace — kill and restart
+                logger.info(f"Agent-server running in wrong workspace, restarting for {machine.workspace}")
+                await ssh.run(f"pkill -f 'agent-server --port {port}' || true", timeout=5)
+                await asyncio.sleep(2)
 
         # Ensure workspace exists
         await ssh.run(f"mkdir -p {machine.workspace}")
@@ -288,7 +297,7 @@ class MachineManager:
 
     async def _start_code_server(self, ssh: SSHClient, machine: MachineInfo) -> None:
         """Start code-server on the remote machine if installed."""
-        _, _, ec = await ssh.run("which code-server", timeout=5)
+        _, _, ec = await ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
         if ec != 0:
             logger.info(f"code-server not installed on {machine.host}, skipping")
             machine.code_server_port = 0
