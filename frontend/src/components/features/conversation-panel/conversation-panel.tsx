@@ -235,7 +235,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
           {!batchMode ? (
             <button
               type="button"
-              onClick={() => setBatchMode(true)}
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); setBatchMode(true); }}
               className="text-xs text-neutral-400 hover:text-neutral-200"
             >
               Batch Delete
@@ -244,7 +244,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
             <div className="flex items-center gap-2 w-full">
               <button
                 type="button"
-                onClick={selectAll}
+                onClick={(e) => { e.stopPropagation(); selectAll(); }}
                 className="text-xs text-blue-400 hover:text-blue-300"
               >
                 {selectedIds.size === conversations.length ? "Deselect All" : "Select All"}
@@ -254,7 +254,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
               </span>
               <button
                 type="button"
-                onClick={handleBatchDelete}
+                onClick={(e) => { e.stopPropagation(); handleBatchDelete(); }}
                 disabled={selectedIds.size === 0}
                 className="text-xs text-red-400 hover:text-red-300 disabled:text-neutral-600"
               >
@@ -262,7 +262,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
               </button>
               <button
                 type="button"
-                onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }}
+                onClick={(e) => { e.stopPropagation(); setBatchMode(false); setSelectedIds(new Set()); }}
                 className="text-xs text-neutral-400 hover:text-neutral-200"
               >
                 Cancel
