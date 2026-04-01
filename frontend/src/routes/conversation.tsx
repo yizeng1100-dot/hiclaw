@@ -122,7 +122,6 @@ function AppContent() {
 
     if (!conversation) {
       // >>> CUSTOM: HiClaw — check if this might be a remote conversation needing reconnect <<<
-      // If we have saved SSH config, show reconnect dialog instead of 404
       if (config.host) {
         setNeedsReconnect(true);
         setReconnectPassword(config.password || "");
@@ -130,6 +129,15 @@ function AppContent() {
         displayErrorToast(t(I18nKey.CONVERSATION$NOT_EXIST_OR_NO_PERMISSION));
         navigate("/");
       }
+    } else if (
+      // Remote conversation with no active tunnel (STOPPED/PAUSED after restart)
+      conversation.sandbox_id?.startsWith("remote-") &&
+      (conversation.status === "STOPPED" || conversation.runtime_status === null) &&
+      !conversation.url &&
+      config.host
+    ) {
+      setNeedsReconnect(true);
+      setReconnectPassword(config.password || "");
       // >>> END CUSTOM <<<
     } else {
       setNeedsReconnect(false);

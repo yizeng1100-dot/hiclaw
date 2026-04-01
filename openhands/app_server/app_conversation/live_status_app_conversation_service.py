@@ -631,19 +631,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             if tunnel_port:
                 conversation_url = f'/runtime/{tunnel_port}/api/conversations/{app_conversation_info.id.hex}'
                 sandbox_status = SandboxStatus.RUNNING
-                # Update in-memory remote_agent_url for this request
                 app_conversation_info.remote_agent_url = f'http://localhost:{tunnel_port}'
-            else:
-                # No active tunnel — try stored URL as fallback
-                remote_url = app_conversation_info.remote_agent_url
-                if remote_url:
-                    try:
-                        from urllib.parse import urlparse
-                        parsed = urlparse(remote_url)
-                        if parsed.port:
-                            conversation_url = f'/runtime/{parsed.port}/api/conversations/{app_conversation_info.id.hex}'
-                    except Exception:
-                        pass
+            # else: no active tunnel → conversation_url stays None, status stays PAUSED
 
             return AppConversation(
                 **app_conversation_info.model_dump(),
