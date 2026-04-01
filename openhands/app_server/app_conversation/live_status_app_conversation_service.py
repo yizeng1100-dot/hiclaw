@@ -610,25 +610,53 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         if is_remote:
             # For remote workers: sandbox doesn't exist locally.
-            # Build conversation_url through the /runtime/{port}/ proxy
-            # so the browser can reach it via the app-server (port 3000).
-            remote_url = app_conversation_info.remote_agent_url
+            # Build conversation_url through the /runtime/{port}/ proxy.
+            # Always use the CURRENT tunnel port from Worker Manager (not the stored one),
+            # because tunnels are lost on service restart.
             conversation_url = None
-            if remote_url:
-                # remote_url is like "http://localhost:47132"
-                # Convert to "/runtime/47132" path through app-server
-                try:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(remote_url)
-                    tunnel_port = parsed.port
-                    if tunnel_port:
-                        conversation_url = f'/runtime/{tunnel_port}/api/conversations/{app_conversation_info.id.hex}'
-                except Exception:
-                    conversation_url = f'{remote_url}/api/conversations/{app_conversation_info.id.hex}'
+            tunnel_port = None
+            sandbox_status = SandboxStatus.PAUSED  # default: assume tunnel is dead
+
+            try:
+                from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+                import httpx as _httpx
+                async with _httpx.AsyncClient() as _client:
+                    _resp = await _client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
+                    for _m in _resp.json():
+                        if _m.get('status') == 'ready' and _m.get('tunnel_port'):
+                            tunnel_port = _m['tunnel_port']
+                            break
+            except Exception:
+                pass
+
+            if tunnel_port:
+                conversation_url = f'/runtime/{tunnel_port}/api/conversations/{app_conversation_info.id.hex}'
+                sandbox_status = SandboxStatus.RUNNING
+                # Update stored remote_agent_url so future lookups are faster
+                new_url = f'http://localhost:{tunnel_port}'
+                if app_conversation_info.remote_agent_url != new_url:
+                    app_conversation_info.remote_agent_url = new_url
+                    try:
+                        await self.app_conversation_info_service.save_app_conversation_info(
+                            app_conversation_info
+                        )
+                    except Exception:
+                        pass
+            else:
+                # No active tunnel — try stored URL as fallback
+                remote_url = app_conversation_info.remote_agent_url
+                if remote_url:
+                    try:
+                        from urllib.parse import urlparse
+                        parsed = urlparse(remote_url)
+                        if parsed.port:
+                            conversation_url = f'/runtime/{parsed.port}/api/conversations/{app_conversation_info.id.hex}'
+                    except Exception:
+                        pass
 
             return AppConversation(
                 **app_conversation_info.model_dump(),
-                sandbox_status=SandboxStatus.RUNNING,
+                sandbox_status=sandbox_status,
                 execution_status=(
                     conversation_info.execution_status if conversation_info else None
                 ),

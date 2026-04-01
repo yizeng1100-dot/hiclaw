@@ -507,14 +507,25 @@ async def get_conversation(
                             app_conversation.sandbox_status = SandboxStatus.STARTING
 
                     except Exception:
-                        # >>> CUSTOM: HiClaw — remote conversations: tunnel dead = STOPPED <<<
+                        # >>> CUSTOM: HiClaw — remote conversations: check Worker Manager <<<
                         is_remote = app_conversation.sandbox_id and app_conversation.sandbox_id.startswith('remote-')
                         if is_remote:
-                            # Tunnel is gone after service restart — mark as stopped
-                            logger.info(
-                                f'Remote conversation {app_conversation.id}: tunnel unreachable, marking STOPPED'
-                            )
-                            app_conversation.sandbox_status = SandboxStatus.PAUSED
+                            # Check if Worker Manager has an active tunnel
+                            _has_tunnel = False
+                            try:
+                                from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+                                _mr = await httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=2)
+                                for _m in _mr.json():
+                                    if _m.get('status') == 'ready' and _m.get('tunnel_port'):
+                                        _has_tunnel = True
+                                        break
+                            except Exception:
+                                pass
+                            if _has_tunnel:
+                                # Tunnel exists but conversation_url was stale — mark as running
+                                app_conversation.sandbox_status = SandboxStatus.RUNNING
+                            else:
+                                app_conversation.sandbox_status = SandboxStatus.PAUSED
                         else:
                             # >>> END CUSTOM — original logic for Docker sandboxes <<<
                             logger.warning(
