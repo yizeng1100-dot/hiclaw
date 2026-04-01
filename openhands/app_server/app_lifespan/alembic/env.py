@@ -79,7 +79,7 @@ def run_migrations_offline() -> None:
         )
         url = f'postgresql://{db_session.user}:{password_value}@{db_session.host}:{db_session.port}/{db_session.name}'
     else:
-        url = f'sqlite:///{db_session.persistence_dir}/hiclaw.db'
+        url = f'sqlite:///{db_session.persistence_dir}/openhands.db'
 
     context.configure(
         url=url,

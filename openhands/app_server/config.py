@@ -70,7 +70,7 @@ def get_default_persistence_dir() -> Path:
     if persistence_dir:
         result = Path(persistence_dir)
     else:
-        result = Path.home() / '.hiclaw'
+        result = Path.home() / '.openhands'
 
     result.mkdir(parents=True, exist_ok=True)
     return result
