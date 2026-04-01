@@ -61,13 +61,19 @@ class Provisioner:
         # Step 1: Check if already fully provisioned (skip everything)
         # Check both new path ($HOME/.hiclaw/) and legacy path (/opt/agent-venv/)
         binary = self.tmpl["binary"]
-        stdout, _, ec = await self.ssh.run(
+        sdk_out, _, ec = await self.ssh.run(
             f"test -f {binary} && echo YES || test -f /opt/agent-venv/bin/agent-server && echo YES || echo NO",
             timeout=5,
         )
-        already_has_sdk = stdout.strip() == "YES"
-        _, _, ec2 = await self.ssh.run("command -v code-server 2>/dev/null || test -f $HOME/.local/bin/code-server || test -f $HOME/.hiclaw/code-server/bin/code-server", timeout=5)
-        already_has_cs = ec2 == 0
+        already_has_sdk = sdk_out.strip() == "YES"
+        cs_out, _, ec2 = await self.ssh.run(
+            f"test -f $HOME/.hiclaw/code-server/bin/code-server && echo YES || "
+            f"test -f $HOME/.local/bin/code-server && echo YES || "
+            f"command -v code-server >/dev/null 2>&1 && echo YES || echo NO",
+            timeout=5,
+        )
+        already_has_cs = cs_out.strip() == "YES"
+        logger.info(f"Provision check: SDK={already_has_sdk} (binary={binary}), code-server={already_has_cs}")
 
         if already_has_sdk and already_has_cs:
             yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail="Already deployed")
@@ -75,6 +81,10 @@ class Provisioner:
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already deployed")
             yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed", detail="Already deployed")
             return
+
+        if already_has_sdk:
+            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="SDK already installed")
+            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed")
 
         # Step 2: Check Python — only needed if SDK not yet installed
         # First check if standalone Python 3.12 was already installed (fastest check)
