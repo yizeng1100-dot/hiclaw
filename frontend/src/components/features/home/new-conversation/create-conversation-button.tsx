@@ -232,15 +232,8 @@ export function CreateConversationButton() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <div className="w-28">
-                      <label className="block text-xs text-neutral-500 mb-1">Mode</label>
-                      <select value={config.mode}
-                        onChange={(e) => setConfig({ mode: e.target.value as "docker" | "host" })}
-                        className={inputCls}>
-                        <option value="host">Host</option>
-                        <option value="docker">Docker</option>
-                      </select>
-                    </div>
+                    {/* Mode selector hidden — only host mode for now */}
+                    <input type="hidden" value="host" />
                     <div className="flex-1">
                       <label className="block text-xs text-neutral-500 mb-1">Workspace</label>
                       <input type="text" value={config.workspace}
