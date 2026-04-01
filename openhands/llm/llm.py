@@ -282,6 +282,20 @@ class LLM(RetryMixin, DebugMixin):
                         extra_body = kwargs.get('extra_body', {})
                         extra_body['model_option_id'] = 204
                         kwargs['extra_body'] = extra_body
+                else:
+                    logger.warning(
+                        f'[COMAGIC] ENV fallback: COMAGIC_TOKEN={"SET" if _comagic_token else "EMPTY"}, '
+                        f'COMAGIC_USER_ID={"SET" if _comagic_uid else "EMPTY"}, '
+                        f'base_url={self.config.base_url}, '
+                        f'hihonor_match={"hihonor" in (self.config.base_url or "").lower()}'
+                    )
+            # Log the actual request being sent
+            logger.info(
+                f'[LLM_REQUEST] base_url={self.config.base_url}, '
+                f'api_key={str(kwargs.get("api_key", ""))[:20]}..., '
+                f'extra_headers={kwargs.get("extra_headers", {})}, '
+                f'extra_body={kwargs.get("extra_body", {})}'
+            )
             # >>> END CUSTOM <<<
             from openhands.io import json
 
