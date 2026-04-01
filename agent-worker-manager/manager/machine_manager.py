@@ -400,7 +400,7 @@ class MachineManager:
             await asyncio.sleep(1)
 
         # Step 2: Ensure workspace exists
-        await ssh.run(f"mkdir -p {machine.workspace}")
+        await ssh.run(f"mkdir -p {machine.workspace}/.hiclaw")
 
         # Step 3: Start in background
         log_file = f"/tmp/agent-server-{machine.id}.log"
@@ -408,8 +408,8 @@ class MachineManager:
         app_ip = os.environ.get('HICLAW_APP_IP', '')
         no_proxy_list = f"localhost,127.0.0.1{f',{app_ip}' if app_ip else ''}"
         env_vars = f"no_proxy={no_proxy_list} NO_PROXY={no_proxy_list} "
-        # Store conversation data and logs in workspace directly
-        env_vars += f"FILE_STORE_PATH={machine.workspace} "
+        # Store conversation data in workspace/.hiclaw/ (separate from project files)
+        env_vars += f"FILE_STORE_PATH={machine.workspace}/.hiclaw "
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
         # Read CoMagic token from remote machine's ~/.comagic/userToken.json

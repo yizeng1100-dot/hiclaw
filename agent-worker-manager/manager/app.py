@@ -70,6 +70,42 @@ async def list_machines():
     return manager.list_machines()
 
 
+@app.post("/api/list-dirs")
+async def list_remote_dirs(req: ConnectMachineRequest):
+    """SSH to a remote machine and list available workspace directories."""
+    from .ssh_client import SSHClient
+    try:
+        ssh = SSHClient(req.host, req.port, req.username, req.password)
+        await ssh.connect()
+        # Get home path and list directories in one SSH session
+        stdout, _, _ = await ssh.run(
+            "HOME_DIR=$HOME; echo \"HOME:$HOME_DIR\"; "
+            # Home subdirectories (depth 1-2, skip hidden)
+            "find $HOME_DIR -maxdepth 2 -mindepth 1 -type d ! -name '.*' ! -path '*/.*' 2>/dev/null | sort | head -30; "
+            # Common project paths
+            "for d in /workspace /data /project /opt /srv; do "
+            "[ -d \"$d\" ] && find $d -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort | head -10; done",
+            timeout=10,
+        )
+        await ssh.close()
+
+        lines = stdout.strip().split('\n')
+        home = ""
+        dirs = []
+        for line in lines:
+            line = line.strip()
+            if line.startswith("HOME:"):
+                home = line[5:]
+            elif line and not line.startswith('.'):
+                dirs.append(line)
+        # Add home itself as an option
+        if home and home not in dirs:
+            dirs.insert(0, home)
+        return {"home": home, "dirs": sorted(set(dirs))}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/api/machines/{machine_id}", response_model=MachineInfo)
 async def get_machine(machine_id: str):
     machine = manager.get_machine(machine_id)

@@ -229,13 +229,45 @@ export function CreateConversationButton() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    {/* Mode selector hidden — only host mode for now */}
                     <input type="hidden" value="host" />
                     <div className="flex-1">
-                      <label className="block text-xs text-neutral-500 mb-1">Workspace</label>
+                      <label className="block text-xs text-neutral-500 mb-1">
+                        Workspace
+                        {config.host && config.password && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const resp = await axios.post(`${workerManagerUrl}/api/list-dirs`, {
+                                  host: config.host, port: config.port,
+                                  username: config.username, password: config.password,
+                                  mode: "host", template: "openhands", workspace: "",
+                                }, { timeout: 15000 });
+                                const dirs: string[] = resp.data?.dirs || [];
+                                if (dirs.length > 0) {
+                                  const sel = document.getElementById("hiclaw-dir-select") as HTMLSelectElement;
+                                  if (sel) { sel.innerHTML = '<option value="">-- Select --</option>' + dirs.map((d: string) => `<option value="${d}">${d}</option>`).join(''); sel.style.display = 'block'; }
+                                }
+                              } catch { /* ignore */ }
+                            }}
+                            className="ml-2 text-blue-400 hover:text-blue-300 text-[10px]"
+                          >
+                            Browse
+                          </button>
+                        )}
+                      </label>
                       <input type="text" value={config.workspace}
                         onChange={(e) => setConfig({ workspace: e.target.value })}
+                        placeholder="/home/user/project"
                         className={inputCls} />
+                      <select
+                        id="hiclaw-dir-select"
+                        style={{ display: 'none' }}
+                        onChange={(e) => { if (e.target.value) setConfig({ workspace: e.target.value }); }}
+                        className="w-full mt-1 px-2.5 py-1.5 bg-neutral-900 border border-neutral-600 rounded text-neutral-200 text-xs"
+                      >
+                        <option value="">-- Select --</option>
+                      </select>
                     </div>
                   </div>
                 </div>
