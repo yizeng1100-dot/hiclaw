@@ -52,16 +52,11 @@ function VSCodeTab() {
   }
 
   if (error || data?.error || !data?.url || iframeError) {
-    // >>> CUSTOM: HiClaw — hide VS Code tab for remote conversations <<<
-    if (!data?.url && !data?.error && !error) {
-      return null; // Remote conversation — no web VS Code, use VS Code Remote SSH
-    }
-    // >>> END CUSTOM <<<
     return (
       <div className="w-full h-full flex items-center text-center justify-center text-2xl text-tertiary-light">
         {iframeError ||
           data?.error ||
-          (error ? String(error) : null) ||
+          String(error) ||
           t(I18nKey.VSCODE$URL_NOT_AVAILABLE)}
       </div>
     );

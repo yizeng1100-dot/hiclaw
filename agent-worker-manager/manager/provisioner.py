@@ -208,6 +208,40 @@ class Provisioner:
                 f"chmod +x {venv}/bin/agent-server", timeout=10)
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
 
-        # ── Step 3: code-server — skipped (users use VS Code Remote SSH) ──
-        yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "skipped", detail="Use VS Code Remote SSH")
+        # ── Step 3: code-server ──
+        # Check: code-server binary exists?
+        cs_path = REMOTE_CODE_SERVER_PATH.replace("$HOME", "~")
+        has_cs = await self._check_remote(f"test -f {cs_path}/bin/code-server")
+        if has_cs:
+            yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed", detail="Already installed")
+            logger.info("code-server: already installed, skipping")
+        else:
+            CS_FILE = "code-server.tar.gz"
+            cs_tar = os.path.join(DEPS_DIR, CS_FILE)
+            if os.path.exists(cs_tar):
+                cs_size_mb = os.path.getsize(cs_tar) // 1024 // 1024
+                yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
+                           detail=f"Uploading ({cs_size_mb}MB)")
+                last_mb = [0]
+                def _cs_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
+                                             detail=f"Uploading {sent_mb}/{cs_size_mb}MB ({pct}%)"))
+                await self.ssh.upload_file(cs_tar, f"/tmp/{CS_FILE}", progress_callback=_cs_progress)
+                self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started", detail="Extracting..."))
+                await self.ssh.run(
+                    f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
+                    f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
+                    f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && "
+                    f"rm -f /tmp/{CS_FILE}", timeout=60)
+                if await self._check_remote(f"test -f {REMOTE_CODE_SERVER_PATH}/bin/code-server"):
+                    yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed")
+                else:
+                    yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "failed", detail="Extraction failed")
+            else:
+                yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "skipped",
+                           detail="code-server.tar.gz not in deps/")
 

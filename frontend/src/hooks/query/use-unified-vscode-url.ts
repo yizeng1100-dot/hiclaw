@@ -50,10 +50,29 @@ export const useUnifiedVSCodeUrl = () => {
 
       // V1: Get VSCode URL from sandbox exposed_urls
       if (isV1Conversation) {
-        // >>> CUSTOM: HiClaw — remote machines use VS Code Remote SSH (no web code-server) <<<
+        // >>> CUSTOM: HiClaw — remote machines use code-server directly <<<
         const isRemoteSandbox = sandboxId?.startsWith("remote-");
         if (isRemoteSandbox) {
-          return { url: null, error: null };
+          try {
+            const machinesResp = await fetch("/runtime/manager/api/machines");
+            const machines = await machinesResp.json();
+            const machine = machines.find(
+              (m: { code_server_port: number; host: string; status: string }) =>
+                m.code_server_port > 0 && m.status === "ready",
+            );
+            if (machine?.host && machine?.code_server_port) {
+              return {
+                url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(machine.workspace || "/root/workspace")}`,
+                error: null,
+              };
+            }
+          } catch {
+            /* fall through */
+          }
+          return {
+            url: null,
+            error: t(I18nKey.VSCODE$URL_NOT_AVAILABLE),
+          };
         }
         // >>> END CUSTOM <<<
 
