@@ -27,6 +27,32 @@ export type MachineStatus =
   | "disconnected"
   | null;
 
+// Persist SSH credentials to localStorage (except password which stays in memory)
+const STORAGE_KEY = "hiclaw-remote-config";
+
+function loadSavedConfig(): Partial<RemoteMachineConfig> {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch { /* ignore */ }
+  return {};
+}
+
+function saveConfig(config: RemoteMachineConfig) {
+  try {
+    // Save everything including password for convenience
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      password: config.password,
+      workspace: config.workspace,
+    }));
+  } catch { /* ignore */ }
+}
+
+const savedConfig = loadSavedConfig();
+
 interface RemoteMachineStore {
   enabled: boolean;
   config: RemoteMachineConfig;
@@ -56,12 +82,12 @@ interface RemoteMachineStore {
 export const useRemoteWorkerStore = create<RemoteMachineStore>((set) => ({
   enabled: true,
   config: {
-    host: "",
-    port: 22,
-    username: "root",
-    password: "",
+    host: savedConfig.host || "",
+    port: savedConfig.port || 22,
+    username: savedConfig.username || "root",
+    password: savedConfig.password || "",
     mode: "host",
-    workspace: "",
+    workspace: savedConfig.workspace || "",
     template: "openhands",
   },
   // Route through app-server proxy so browser doesn't need direct access to 9090
@@ -75,7 +101,11 @@ export const useRemoteWorkerStore = create<RemoteMachineStore>((set) => ({
 
   setEnabled: (enabled) => set({ enabled }),
   setConfig: (partial) =>
-    set((state) => ({ config: { ...state.config, ...partial } })),
+    set((state) => {
+      const newConfig = { ...state.config, ...partial };
+      saveConfig(newConfig);
+      return { config: newConfig };
+    }),
   setWorkerManagerUrl: (url) => set({ workerManagerUrl: url }),
   setMachineId: (id) => set({ machineId: id }),
   setMachineStatus: (status) => set({ machineStatus: status }),

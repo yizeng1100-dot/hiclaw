@@ -51,6 +51,43 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
     string | null
   >(null);
 
+  // >>> CUSTOM: HiClaw — batch delete <<<
+  const [batchMode, setBatchMode] = React.useState(false);
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (selectedIds.size === conversations.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(conversations.map((c) => c.conversation_id)));
+    }
+  };
+
+  const handleBatchDelete = () => {
+    selectedIds.forEach((id) => {
+      deleteConversation(
+        { conversationId: id },
+        {
+          onSuccess: () => {
+            if (id === currentConversationId) navigate("/");
+          },
+        },
+      );
+    });
+    setSelectedIds(new Set());
+    setBatchMode(false);
+  };
+  // >>> END CUSTOM <<<
+
   const {
     data,
     isFetching,
@@ -145,6 +182,50 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
       data-testid="conversation-panel"
       className="w-full md:w-[400px] h-full border border-[#525252] bg-[#25272D] rounded-lg overflow-y-auto absolute custom-scrollbar-always"
     >
+      {/* >>> CUSTOM: HiClaw — batch delete toolbar <<< */}
+      {conversations.length > 0 && (
+        <div className="sticky top-0 z-10 bg-[#25272D] border-b border-[#525252] px-3 py-2 flex items-center justify-between">
+          {!batchMode ? (
+            <button
+              type="button"
+              onClick={() => setBatchMode(true)}
+              className="text-xs text-neutral-400 hover:text-neutral-200"
+            >
+              Batch Delete
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 w-full">
+              <button
+                type="button"
+                onClick={selectAll}
+                className="text-xs text-blue-400 hover:text-blue-300"
+              >
+                {selectedIds.size === conversations.length ? "Deselect All" : "Select All"}
+              </button>
+              <span className="text-xs text-neutral-500 flex-1">
+                {selectedIds.size} selected
+              </span>
+              <button
+                type="button"
+                onClick={handleBatchDelete}
+                disabled={selectedIds.size === 0}
+                className="text-xs text-red-400 hover:text-red-300 disabled:text-neutral-600"
+              >
+                Delete ({selectedIds.size})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }}
+                className="text-xs text-neutral-400 hover:text-neutral-200"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {/* >>> END CUSTOM <<< */}
+
       {isFetching && conversations.length === 0 && (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, index) => (
@@ -179,9 +260,27 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
       {conversations?.map((project) => (
         <NavLink
           key={project.conversation_id}
-          to={`/conversations/${project.conversation_id}`}
-          onClick={onClose}
+          to={batchMode ? "#" : `/conversations/${project.conversation_id}`}
+          onClick={(e) => {
+            if (batchMode) {
+              e.preventDefault();
+              toggleSelect(project.conversation_id);
+            } else {
+              onClose();
+            }
+          }}
+          className={batchMode && selectedIds.has(project.conversation_id) ? "bg-blue-900/20" : ""}
         >
+          {batchMode && (
+            <div className="absolute left-2 top-1/2 -translate-y-1/2 z-10">
+              <input
+                type="checkbox"
+                checked={selectedIds.has(project.conversation_id)}
+                onChange={() => toggleSelect(project.conversation_id)}
+                className="accent-blue-500 w-3.5 h-3.5"
+              />
+            </div>
+          )}
           <ConversationCard
             onDelete={() =>
               handleDeleteProject(project.conversation_id, project.title)
