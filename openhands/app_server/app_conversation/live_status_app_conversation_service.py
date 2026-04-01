@@ -1717,12 +1717,17 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     app_ip = urllib.request.urlopen('https://icanhazip.com', timeout=3).read().decode().strip()
                 except Exception:
                     app_ip = socket.gethostbyname(socket.gethostname())
+            # For remote workers: disable MCP servers that point to app-server
+            # (remote machine may not be able to reach app-server IP)
             mcp_servers = mcp_config.get('mcpServers', {})
-            for name, cfg in mcp_servers.items():
-                url = cfg.get('url', '') or ''
-                if 'host.docker.internal' in url:
-                    cfg['url'] = url.replace('host.docker.internal', app_ip)
-                    _logger.info(f'Replaced MCP server {name!r} URL with {app_ip}: {cfg["url"]}')
+            unreachable = [name for name, cfg in mcp_servers.items()
+                           if 'host.docker.internal' in (cfg.get('url', '') or '')
+                           or app_ip in (cfg.get('url', '') or '')]
+            for name in unreachable:
+                del mcp_servers[name]
+                _logger.info(f'Removed unreachable MCP server {name!r} for remote worker')
+            if not mcp_servers:
+                mcp_config = {}
         # >>> END CUSTOM <<<
         agent = self._create_agent_with_context(
             llm,
