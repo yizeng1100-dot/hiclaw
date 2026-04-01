@@ -260,7 +260,28 @@ class LLM(RetryMixin, DebugMixin):
 
                 kwargs = inject_comagic_headers(self.config, kwargs)
             except ImportError:
-                pass
+                # Fallback: use env vars (for remote agent-servers without custom/ dir)
+                _comagic_token = os.environ.get('COMAGIC_TOKEN', '')
+                _comagic_uid = os.environ.get('COMAGIC_USER_ID', '')
+                if _comagic_token:
+                    base_url = self.config.base_url or ''
+                    if 'hihonor' in base_url.lower():
+                        import uuid as _uuid
+
+                        kwargs['api_key'] = _comagic_token
+                        extra_headers = kwargs.get('extra_headers', {})
+                        extra_headers.update(
+                            {
+                                'X-User-Id': _comagic_uid,
+                                'X-Enterprise-Id': 'copilot',
+                                'X-Request-ID': str(_uuid.uuid4()),
+                                'User-Agent': 'CLI/0.0.0 CoMagic/0.1.66',
+                            }
+                        )
+                        kwargs['extra_headers'] = extra_headers
+                        extra_body = kwargs.get('extra_body', {})
+                        extra_body['model_option_id'] = 204
+                        kwargs['extra_body'] = extra_body
             # >>> END CUSTOM <<<
             from openhands.io import json
 

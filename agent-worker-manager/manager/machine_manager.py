@@ -364,6 +364,22 @@ class MachineManager:
         env_vars += f"FILE_STORE_PATH={machine.workspace} "
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
+        # Read CoMagic token from remote machine's ~/.comagic/userToken.json
+        token_out, _, _ = await ssh.run(
+            "cat ~/.comagic/userToken.json 2>/dev/null || echo '{}'",
+            timeout=5,
+        )
+        try:
+            import json
+            comagic = json.loads(token_out.strip())
+            if comagic.get('token'):
+                env_vars += f"COMAGIC_TOKEN='{comagic['token']}' "
+            if comagic.get('xUserId'):
+                env_vars += f"COMAGIC_USER_ID='{comagic['xUserId']}' "
+            if comagic.get('token'):
+                logger.info(f"CoMagic token loaded for {machine.host}")
+        except Exception:
+            pass
         cmd = f"cd {machine.workspace} && {env_vars}{binary} --port {port}"
         await ssh.run_background(cmd, log_file=log_file)
         logger.info(f"Started agent-server on {machine.host}:{port}")
