@@ -145,7 +145,7 @@ export function CreateConversationButton() {
         mode: config.mode,
         template: config.template,
         workspace: config.workspace,
-      }, { timeout: 10000 });
+      }, { timeout: 60000 });
 
       if (resp.data.status === "ready") {
         // Machine already provisioned — skip progress panel, go straight to conversation

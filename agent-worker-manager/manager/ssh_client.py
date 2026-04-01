@@ -21,7 +21,7 @@ class SSHClient:
         username: str = "root",
         password: str | None = None,
         private_key: str | None = None,
-        connect_timeout: int = 10,
+        connect_timeout: int = 30,
     ):
         self.host = host
         self.port = port
@@ -46,9 +46,20 @@ class SSHClient:
         if self.private_key:
             kwargs["client_keys"] = [asyncssh.import_private_key(self.private_key)]
 
-        logger.info(f"Connecting to {self.username}@{self.host}:{self.port}")
-        self._conn = await asyncssh.connect(**kwargs)
-        logger.info(f"Connected to {self.host}")
+        # Retry SSH connection up to 3 times (internal networks can be flaky)
+        last_err = None
+        for attempt in range(3):
+            try:
+                logger.info(f"Connecting to {self.username}@{self.host}:{self.port} (attempt {attempt + 1})")
+                self._conn = await asyncssh.connect(**kwargs)
+                logger.info(f"Connected to {self.host}")
+                return
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    logger.warning(f"SSH connect attempt {attempt + 1} failed: {e}, retrying...")
+                    await asyncio.sleep(2)
+        raise last_err or RuntimeError("SSH connection failed")
 
     async def run(self, command: str, timeout: int = 60) -> tuple[str, str, int]:
         """Execute a command and return (stdout, stderr, exit_code)."""
