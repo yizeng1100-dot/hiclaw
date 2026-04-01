@@ -265,7 +265,7 @@ class LLM(RetryMixin, DebugMixin):
                 _comagic_uid = os.environ.get('COMAGIC_USER_ID', '')
                 if _comagic_token:
                     base_url = self.config.base_url or ''
-                    if 'hihonor' in base_url.lower():
+                    if 'hihonor' in base_url.lower() or 'hi.com' in base_url.lower():
                         import uuid as _uuid
 
                         kwargs['api_key'] = _comagic_token

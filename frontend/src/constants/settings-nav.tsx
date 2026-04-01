@@ -67,11 +67,13 @@ export const SAAS_NAV_ITEMS: SettingsNavItem[] = [
 ];
 
 export const OSS_NAV_ITEMS: SettingsNavItem[] = [
-  {
-    icon: <CircuitIcon width={22} height={22} />,
-    to: "/settings",
-    text: "SETTINGS$NAV_LLM",
-  },
+  // >>> CUSTOM: HiClaw — LLM settings hidden, configured via config files <<<
+  // {
+  //   icon: <CircuitIcon width={22} height={22} />,
+  //   to: "/settings",
+  //   text: "SETTINGS$NAV_LLM",
+  // },
+  // >>> END CUSTOM <<<
   {
     icon: <ServerProcessIcon width={22} height={22} />,
     to: "/settings/mcp",

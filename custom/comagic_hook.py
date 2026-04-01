@@ -34,7 +34,7 @@ def _read_comagic_config() -> dict:
 def inject_comagic_headers(config, kwargs: dict) -> dict:
     """Inject CoMagic-specific headers and body fields if using CoMagic API."""
     base_url = config.base_url or ""
-    if "hihonor" not in base_url.lower():
+    if "hihonor" not in base_url.lower() and "hi.com" not in base_url.lower():
         print(f"[COMAGIC_HOOK] SKIP - base_url '{base_url}' does not match")
         return kwargs
 
