@@ -165,6 +165,23 @@ class MachineManager:
                 evt = ProvisionEvent(step=ProvisionStep.CLONE_SKILLS, status="completed")
                 self._broadcast_event(machine_id, evt)
 
+                # Read CoMagic token from remote (always, regardless of agent-server state)
+                token_out, _, _ = await ssh.run(
+                    "cat ~/.comagic/userToken.json 2>/dev/null || echo '{}'",
+                    timeout=5,
+                )
+                try:
+                    import json as _json
+                    _comagic = _json.loads(token_out.strip())
+                    if _comagic.get('token'):
+                        machine.comagic_token = _comagic['token']
+                    if _comagic.get('xUserId'):
+                        machine.comagic_user_id = _comagic['xUserId']
+                    if _comagic.get('token'):
+                        logger.info(f"CoMagic token loaded for {machine.host}")
+                except Exception:
+                    pass
+
                 # Step 4: Health check first — if agent-server already running and healthy, skip start
                 machine.status = MachineStatus.STARTING
                 port = machine.agent_server_port
