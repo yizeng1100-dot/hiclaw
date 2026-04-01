@@ -270,13 +270,16 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
                 # >>> CUSTOM: HiClaw — use actual workspace from Worker Manager <<<
                 working_dir = '/workspace/project'  # default fallback
+                _remote_host = ''
+                _remote_user = ''
                 try:
-                    import httpx as _httpx
                     from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
                     _resp = await self.httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
                     for _m in _resp.json():
                         if _m.get('status') == 'ready':
                             working_dir = _m.get('workspace', working_dir)
+                            _remote_host = _m.get('host', '')
+                            _remote_user = _m.get('username', '')
                             break
                 except Exception:
                     pass
@@ -384,9 +387,16 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
             # Store info...
             user_id = await self.user_context.get_user_id()
+            # >>> CUSTOM: HiClaw — use user@host:workspace as title for remote sessions <<<
+            if request.remote_agent_url and (_remote_host or _remote_user):
+                _ws_name = working_dir.rstrip('/').split('/')[-1] if working_dir else ''
+                _conv_title = f'{_remote_user}@{_remote_host}:{_ws_name}' if _ws_name else f'{_remote_user}@{_remote_host}'
+            else:
+                _conv_title = f'Conversation {info.id.hex[:5]}'
+            # >>> END CUSTOM <<<
             app_conversation_info = AppConversationInfo(
                 id=info.id,
-                title=f'Conversation {info.id.hex[:5]}',
+                title=_conv_title,
                 sandbox_id=sandbox_id,
                 created_by_user_id=user_id,
                 llm_model=start_conversation_request.agent.llm.model,
