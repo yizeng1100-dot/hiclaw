@@ -54,7 +54,7 @@ interface RemoteMachineStore {
 }
 
 export const useRemoteWorkerStore = create<RemoteMachineStore>((set) => ({
-  enabled: false,
+  enabled: true,
   config: {
     host: "",
     port: 22,
