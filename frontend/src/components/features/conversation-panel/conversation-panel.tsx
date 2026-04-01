@@ -1,6 +1,7 @@
 import React from "react";
 import { NavLink, useParams, useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
+import axios from "axios";
 import { I18nKey } from "#/i18n/declaration";
 import { usePaginatedConversations } from "#/hooks/query/use-paginated-conversations";
 import { useStartTasks } from "#/hooks/query/use-start-tasks";
@@ -18,6 +19,9 @@ import { displaySuccessToast } from "#/utils/custom-toast-handlers";
 import { ConversationCard } from "./conversation-card/conversation-card";
 import { StartTaskCard } from "./start-task-card/start-task-card";
 import { ConversationCardSkeleton } from "./conversation-card/conversation-card-skeleton";
+// >>> CUSTOM: HiClaw <<<
+import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
+// >>> END CUSTOM <<<
 
 interface ConversationPanelProps {
   onClose: () => void;
@@ -50,6 +54,49 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
   const [openContextMenuId, setOpenContextMenuId] = React.useState<
     string | null
   >(null);
+
+  // >>> CUSTOM: HiClaw — reconnect modal for remote conversations <<<
+  const [reconnectModalVisible, setReconnectModalVisible] = React.useState(false);
+  const [reconnectPassword, setReconnectPassword] = React.useState("");
+  const [reconnectConversationId, setReconnectConversationId] = React.useState<string | null>(null);
+  const [reconnectLoading, setReconnectLoading] = React.useState(false);
+  const [reconnectError, setReconnectError] = React.useState<string | null>(null);
+  const { config, workerManagerUrl } = useRemoteWorkerStore();
+
+  const handleRemoteConversationClick = (conversationId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    setReconnectConversationId(conversationId);
+    setReconnectPassword(config.password || "");
+    setReconnectError(null);
+    setReconnectModalVisible(true);
+  };
+
+  const handleReconnect = async () => {
+    if (!reconnectPassword || !reconnectConversationId) return;
+    setReconnectLoading(true);
+    setReconnectError(null);
+    try {
+      await axios.post(`${workerManagerUrl}/api/machines/connect`, {
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: reconnectPassword,
+        mode: "host",
+        template: "openhands",
+        workspace: config.workspace,
+      }, { timeout: 30000 });
+      // Save password for next time
+      useRemoteWorkerStore.getState().setConfig({ password: reconnectPassword });
+      setReconnectModalVisible(false);
+      onClose();
+      navigate(`/conversations/${reconnectConversationId}`);
+    } catch (err) {
+      setReconnectError(err instanceof Error ? err.message : "Connection failed");
+    } finally {
+      setReconnectLoading(false);
+    }
+  };
+  // >>> END CUSTOM <<<
 
   // >>> CUSTOM: HiClaw — batch delete <<<
   const [batchMode, setBatchMode] = React.useState(false);
@@ -297,7 +344,15 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
         <NavLink
           key={project.conversation_id}
           to={`/conversations/${project.conversation_id}`}
-          onClick={onClose}
+          onClick={(e) => {
+            // >>> CUSTOM: HiClaw — remote conversations require password <<<
+            if (project.sandbox_id?.startsWith("remote-")) {
+              handleRemoteConversationClick(project.conversation_id, e);
+              return;
+            }
+            // >>> END CUSTOM <<<
+            onClose();
+          }}
         >
           <ConversationCard
             onDelete={() =>
@@ -375,6 +430,51 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
           onCancel={() => setConfirmExitConversationModalVisible(false)}
         />
       )}
+
+      {/* >>> CUSTOM: HiClaw — reconnect password modal <<< */}
+      {reconnectModalVisible && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={(e) => { if (e.target === e.currentTarget) setReconnectModalVisible(false); }}
+        >
+          <div className="bg-neutral-800 border border-neutral-600 rounded-xl p-6 w-[360px] shadow-2xl">
+            <h3 className="text-base font-semibold text-neutral-100 mb-3">SSH Password</h3>
+            <p className="text-xs text-neutral-400 mb-3">
+              {config.username}@{config.host}
+            </p>
+            <input
+              type="password"
+              value={reconnectPassword}
+              onChange={(e) => setReconnectPassword(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleReconnect(); }}
+              placeholder="Password"
+              autoFocus
+              className="w-full px-3 py-2 bg-neutral-900 border border-neutral-600 rounded text-neutral-200 text-sm focus:border-blue-500 focus:outline-none mb-3"
+            />
+            {reconnectError && (
+              <p className="text-xs text-red-400 mb-3">{reconnectError}</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setReconnectModalVisible(false)}
+                className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleReconnect}
+                disabled={!reconnectPassword || reconnectLoading}
+                className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-600 disabled:text-neutral-400 text-white rounded-lg"
+              >
+                {reconnectLoading ? "Connecting..." : "Connect"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* >>> END CUSTOM <<< */}
     </div>
   );
 }
