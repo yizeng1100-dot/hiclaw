@@ -128,12 +128,9 @@ export function CreateConversationButton() {
   };
 
   const handleClick = () => {
-    if (enabled) {
-      reset();
-      setShowModal(true);
-    } else {
-      doCreateConversation();
-    }
+    // Remote machine is always required — show connection modal
+    reset();
+    setShowModal(true);
   };
 
   const handleStartRemote = async () => {
