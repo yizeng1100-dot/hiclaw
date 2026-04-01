@@ -183,7 +183,7 @@ class DbSessionInjector(BaseModel, Injector[async_sessionmaker]):
                     database=self.name,
                 )
             else:
-                url = f'sqlite+aiosqlite:///{str(self.persistence_dir)}/openhands.db'
+                url = f'sqlite+aiosqlite:///{str(self.persistence_dir)}/hiclaw.db'
 
             if self.host:
                 async_engine = create_async_engine(
@@ -226,7 +226,7 @@ class DbSessionInjector(BaseModel, Injector[async_sessionmaker]):
                     database=self.name,
                 )
             else:
-                url = f'sqlite:///{self.persistence_dir}/openhands.db'
+                url = f'sqlite:///{self.persistence_dir}/hiclaw.db'
             engine = create_engine(
                 url,
                 pool_size=self.pool_size,
