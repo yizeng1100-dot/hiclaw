@@ -480,9 +480,9 @@ class MachineManager:
         await ssh.run_background(cmd, log_file=log_file)
         machine.code_server_port = cs_port
 
-        # Wait for it to start (3 attempts × 1s = 3s max, non-blocking if slow)
-        for _ in range(3):
-            await asyncio.sleep(1)
+        # Wait for it to start (5 attempts × 2s = 10s max)
+        for _ in range(5):
+            await asyncio.sleep(2)
             stdout, _, ec = await ssh.run(
                 f"no_proxy=localhost,127.0.0.1 curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}",
                 timeout=5,

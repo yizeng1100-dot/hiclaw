@@ -38,7 +38,7 @@ export const useSandboxMetrics = (
       return getCombinedMetrics(conversationInfo);
     },
     enabled:
-      enabled && !!conversationId && !!conversationUrl && !!sessionApiKey,
+      enabled && !!conversationId && !!conversationUrl,
     staleTime: 1000 * 30, // 30 seconds
     gcTime: 1000 * 60 * 5, // 5 minutes
     refetchInterval: 1000 * 30, // Refetch every 30 seconds
