@@ -360,6 +360,8 @@ class MachineManager:
         app_ip = os.environ.get('HICLAW_APP_IP', '')
         no_proxy_list = f"localhost,127.0.0.1{f',{app_ip}' if app_ip else ''}"
         env_vars = f"no_proxy={no_proxy_list} NO_PROXY={no_proxy_list} "
+        # Store conversation data and logs in workspace directly
+        env_vars += f"FILE_STORE_PATH={machine.workspace} "
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
         cmd = f"cd {machine.workspace} && {env_vars}{binary} --port {port}"
