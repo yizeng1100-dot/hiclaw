@@ -620,28 +620,19 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             try:
                 from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
                 import httpx as _httpx
-                async with _httpx.AsyncClient() as _client:
-                    _resp = await _client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
-                    for _m in _resp.json():
-                        if _m.get('status') == 'ready' and _m.get('tunnel_port'):
-                            tunnel_port = _m['tunnel_port']
-                            break
+                _resp = _httpx.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
+                for _m in _resp.json():
+                    if _m.get('status') == 'ready' and _m.get('tunnel_port'):
+                        tunnel_port = _m['tunnel_port']
+                        break
             except Exception:
                 pass
 
             if tunnel_port:
                 conversation_url = f'/runtime/{tunnel_port}/api/conversations/{app_conversation_info.id.hex}'
                 sandbox_status = SandboxStatus.RUNNING
-                # Update stored remote_agent_url so future lookups are faster
-                new_url = f'http://localhost:{tunnel_port}'
-                if app_conversation_info.remote_agent_url != new_url:
-                    app_conversation_info.remote_agent_url = new_url
-                    try:
-                        await self.app_conversation_info_service.save_app_conversation_info(
-                            app_conversation_info
-                        )
-                    except Exception:
-                        pass
+                # Update in-memory remote_agent_url for this request
+                app_conversation_info.remote_agent_url = f'http://localhost:{tunnel_port}'
             else:
                 # No active tunnel — try stored URL as fallback
                 remote_url = app_conversation_info.remote_agent_url
