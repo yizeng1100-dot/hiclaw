@@ -83,5 +83,7 @@ class MachineInfo(BaseModel):
     active_conversations: int = 0
     provision_steps: list[ProvisionEvent] = Field(default_factory=list)
     error: str = ""
+    comagic_token: str = ""  # CoMagic API token from remote ~/.comagic/userToken.json
+    comagic_user_id: str = ""  # CoMagic xUserId
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_used_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

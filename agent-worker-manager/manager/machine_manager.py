@@ -374,8 +374,10 @@ class MachineManager:
             comagic = json.loads(token_out.strip())
             if comagic.get('token'):
                 env_vars += f"COMAGIC_TOKEN='{comagic['token']}' "
+                machine.comagic_token = comagic['token']
             if comagic.get('xUserId'):
                 env_vars += f"COMAGIC_USER_ID='{comagic['xUserId']}' "
+                machine.comagic_user_id = comagic['xUserId']
             if comagic.get('token'):
                 logger.info(f"CoMagic token loaded for {machine.host}")
         except Exception:
