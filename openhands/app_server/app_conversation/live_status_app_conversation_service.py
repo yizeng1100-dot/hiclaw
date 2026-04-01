@@ -1665,7 +1665,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         if sandbox is None:  # remote worker
             base_url = llm.base_url or ''
             _logger.info(f'[COMAGIC] Remote worker LLM base_url: {base_url}')
-            if 'hihonor' in base_url.lower() or 'hi.com' in base_url.lower():
+            if 'hihonor' in base_url.lower():
                 try:
                     from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
                     _resp = await self.httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)

@@ -31,7 +31,7 @@ import uvicorn
 app = FastAPI(title="CoMagic Proxy")
 
 # ─── Configuration ────────────────────────────────────────
-COMAGIC_URL = os.getenv("COMAGIC_URL", "https://cm.bata.hi.com/v2/chat/completions")
+COMAGIC_URL = os.getenv("COMAGIC_URL", "")
 TOKEN_FILE = os.getenv("COMAGIC_TOKEN_FILE", "/tmp/token.txt")
 USER_ID_FILE = os.getenv("COMAGIC_USER_ID_FILE", "/tmp/xuerid.txt")
 ENTERPRISE_ID = os.getenv("COMAGIC_ENTERPRISE_ID", "copilot")
