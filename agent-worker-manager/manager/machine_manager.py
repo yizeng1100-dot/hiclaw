@@ -259,29 +259,41 @@ class MachineManager:
                 logger.info(f"code-server step took {_cs_elapsed}s")
 
                 # Step 6: SSH tunnels
-                evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="started")
+                evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="started",
+                                     detail="Creating SSH tunnels...")
                 self._broadcast_event(machine_id, evt)
 
-                # Tunnel for agent-server
-                local_port = _pick_port()
-                listener = await ssh.forward_local_port(machine.agent_server_port, local_port)
-                self._listeners[machine_id] = listener
-                self._local_ports[machine_id] = local_port
-                machine.tunnel_port = local_port
-                machine.proxy_url = f"http://localhost:{local_port}"
+                try:
+                    # Tunnel for agent-server
+                    local_port = _pick_port()
+                    logger.info(f"Creating agent-server tunnel: localhost:{local_port} → remote:{machine.agent_server_port}")
+                    listener = await ssh.forward_local_port(machine.agent_server_port, local_port)
+                    self._listeners[machine_id] = listener
+                    self._local_ports[machine_id] = local_port
+                    machine.tunnel_port = local_port
+                    machine.proxy_url = f"http://localhost:{local_port}"
 
-                # Tunnel for code-server (if running) — fixed port for easy SSH forwarding
-                if machine.code_server_port:
-                    cs_local_port = 18443  # Fixed port so user can SSH -L 18443:localhost:18443
-                    cs_listener = await ssh.forward_local_port(machine.code_server_port, cs_local_port)
-                    self._listeners[f"{machine_id}_cs"] = cs_listener
-                    machine.code_server_tunnel_port = cs_local_port
-                    machine.vscode_url = f"http://localhost:{cs_local_port}"
-                    logger.info(f"Code-server tunnel: localhost:{cs_local_port} → remote:{machine.code_server_port}")
+                    # Tunnel for code-server (if running) — fixed port for easy SSH forwarding
+                    if machine.code_server_port:
+                        cs_local_port = 18443
+                        logger.info(f"Creating code-server tunnel: localhost:{cs_local_port} → remote:{machine.code_server_port}")
+                        try:
+                            cs_listener = await ssh.forward_local_port(machine.code_server_port, cs_local_port)
+                            self._listeners[f"{machine_id}_cs"] = cs_listener
+                            machine.code_server_tunnel_port = cs_local_port
+                            machine.vscode_url = f"http://localhost:{cs_local_port}"
+                        except Exception as cs_e:
+                            logger.warning(f"Code-server tunnel failed (non-fatal): {cs_e}")
 
-                evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="completed",
-                                     detail=f"agent:localhost:{local_port}" + (f" vscode:localhost:{machine.code_server_tunnel_port}" if machine.vscode_url else ""))
-                self._broadcast_event(machine_id, evt)
+                    evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="completed",
+                                         detail=f"agent:localhost:{local_port}" + (f" vscode:localhost:{machine.code_server_tunnel_port}" if machine.vscode_url else ""))
+                    self._broadcast_event(machine_id, evt)
+                except Exception as tunnel_e:
+                    logger.error(f"Tunnel creation failed: {tunnel_e}")
+                    evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="failed",
+                                         detail=str(tunnel_e)[:500])
+                    self._broadcast_event(machine_id, evt)
+                    raise
 
                 # Done!
                 machine.status = MachineStatus.READY
@@ -424,18 +436,14 @@ class MachineManager:
 
     async def _start_code_server(self, ssh: SSHClient, machine: MachineInfo) -> None:
         """Start code-server on the remote machine if installed."""
-        # Find code-server binary — check multiple paths
-        cs_bin = ""
-        for path in ["$HOME/.hiclaw/code-server/bin/code-server", "$HOME/.local/bin/code-server"]:
-            out, _, ec = await ssh.run(f"test -f {path} && echo {path}", timeout=5)
-            if ec == 0 and out.strip():
-                cs_bin = out.strip()
-                break
-        if not cs_bin:
-            # Try PATH as last resort
-            out, _, ec = await ssh.run("command -v code-server 2>/dev/null", timeout=5)
-            if ec == 0 and out.strip():
-                cs_bin = out.strip()
+        # Find code-server binary — single SSH command checks all paths
+        out, _, _ = await ssh.run(
+            "for p in ~/.hiclaw/code-server/bin/code-server ~/.local/bin/code-server; do "
+            "[ -f \"$p\" ] && echo \"$p\" && exit 0; done; "
+            "command -v code-server 2>/dev/null || echo ''",
+            timeout=5,
+        )
+        cs_bin = out.strip()
         if not cs_bin:
             logger.info(f"code-server not installed on {machine.host}, skipping")
             machine.code_server_port = 0
