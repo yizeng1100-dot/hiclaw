@@ -227,27 +227,36 @@ class MachineManager:
                     self._broadcast_event(machine_id, evt)
 
                     # Now wait for health
+                    import time as _time
+                    _hc_start = _time.monotonic()
                     evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="started",
                                          detail="Waiting for agent-server to start...")
                     self._broadcast_event(machine_id, evt)
 
                     await self._wait_healthy(ssh, machine)
 
-                    evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed")
+                    _hc_elapsed = int(_time.monotonic() - _hc_start)
+                    evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed",
+                                         detail=f"Healthy ({_hc_elapsed}s)")
                     self._broadcast_event(machine_id, evt)
+                    logger.info(f"Health check took {_hc_elapsed}s")
 
                 # Step 5: Start code-server (if installed)
+                import time as _time
+                _cs_start = _time.monotonic()
                 evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="started",
                                      detail="Starting code-server...")
                 self._broadcast_event(machine_id, evt)
                 await self._start_code_server(ssh, machine)
+                _cs_elapsed = int(_time.monotonic() - _cs_start)
                 if machine.code_server_port:
                     evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="completed",
-                                         detail=f"Running on port {machine.code_server_port}")
+                                         detail=f"Running on port {machine.code_server_port} ({_cs_elapsed}s)")
                 else:
                     evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="skipped",
-                                         detail="Not installed")
+                                         detail=f"Not installed ({_cs_elapsed}s)")
                 self._broadcast_event(machine_id, evt)
+                logger.info(f"code-server step took {_cs_elapsed}s")
 
                 # Step 6: SSH tunnels
                 evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="started")
