@@ -35,6 +35,7 @@ def inject_comagic_headers(config, kwargs: dict) -> dict:
     """Inject CoMagic-specific headers and body fields if using CoMagic API."""
     base_url = config.base_url or ""
     if "hihonor" not in base_url.lower():
+        print(f"[COMAGIC_HOOK] SKIP - base_url '{base_url}' does not match")
         return kwargs
 
     # Read token and userId from ~/.comagic/userToken.json
@@ -42,8 +43,15 @@ def inject_comagic_headers(config, kwargs: dict) -> dict:
     token = comagic.get("token", "")
     user_id = comagic.get("xUserId", "")
 
+    print(f"[COMAGIC_HOOK] TRIGGERED - base_url: {base_url}")
+    print(f"[COMAGIC_HOOK] config file: {COMAGIC_CONFIG}")
+    print(f"[COMAGIC_HOOK] token: {token[:20]}..." if token else "[COMAGIC_HOOK] token: EMPTY!")
+    print(f"[COMAGIC_HOOK] xUserId: {user_id}")
+
     if token:
         kwargs["api_key"] = token
+    else:
+        print("[COMAGIC_HOOK] WARNING: no token found, request will likely fail with 401!")
 
     extra_headers = kwargs.get("extra_headers", {})
     extra_headers.update({
