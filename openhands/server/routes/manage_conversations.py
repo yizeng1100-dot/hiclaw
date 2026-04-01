@@ -507,22 +507,26 @@ async def get_conversation(
                             app_conversation.sandbox_status = SandboxStatus.STARTING
 
                     except Exception:
-                        # The sandbox is marked as RUNNING, but the server is not responding.
-                        # There is a bug in runtime API which means that the server is marked
-                        # as RUNNING before it is actually started. (Primarily affecting resumed
-                        # runtimes) As a temporary work around for this, we mark the server as
-                        # STARTING. If the sandbox is actually in an error state, the API will
-                        # discover this quite quickly and mark the sandbox as ERROR
-                        logger.warning(
-                            'get_sandbox_info_failed',
-                            extra={
-                                'conversation_id': app_conversation.id,
-                                'sandbox_id': app_conversation.sandbox_id,
-                            },
-                            exc_info=True,
-                            stack_info=True,
-                        )
-                        app_conversation.sandbox_status = SandboxStatus.STARTING
+                        # >>> CUSTOM: HiClaw — remote conversations: tunnel dead = STOPPED <<<
+                        is_remote = app_conversation.sandbox_id and app_conversation.sandbox_id.startswith('remote-')
+                        if is_remote:
+                            # Tunnel is gone after service restart — mark as stopped
+                            logger.info(
+                                f'Remote conversation {app_conversation.id}: tunnel unreachable, marking STOPPED'
+                            )
+                            app_conversation.sandbox_status = SandboxStatus.PAUSED
+                        else:
+                            # >>> END CUSTOM — original logic for Docker sandboxes <<<
+                            logger.warning(
+                                'get_sandbox_info_failed',
+                                extra={
+                                    'conversation_id': app_conversation.id,
+                                    'sandbox_id': app_conversation.sandbox_id,
+                                },
+                                exc_info=True,
+                                stack_info=True,
+                            )
+                            app_conversation.sandbox_status = SandboxStatus.STARTING
 
                 return _to_conversation_info(app_conversation)
         except (ValueError, TypeError, Exception):
