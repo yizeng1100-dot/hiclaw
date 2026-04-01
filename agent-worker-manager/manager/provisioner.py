@@ -59,21 +59,26 @@ class Provisioner:
         """Run all provisioning steps, yielding progress events."""
 
         # Step 1: Check if already fully provisioned (skip everything)
-        # Check both new path ($HOME/.hiclaw/) and legacy path (/opt/agent-venv/)
-        binary = self.tmpl["binary"]
-        sdk_out, _, ec = await self.ssh.run(
+        # Use ~ instead of $HOME for reliability in non-interactive SSH sessions
+        binary = self.tmpl["binary"].replace("$HOME", "~")
+        sdk_out, _, _ = await self.ssh.run(
             f"test -f {binary} && echo YES || test -f /opt/agent-venv/bin/agent-server && echo YES || echo NO",
             timeout=5,
         )
         already_has_sdk = sdk_out.strip() == "YES"
-        cs_out, _, ec2 = await self.ssh.run(
-            f"test -f $HOME/.hiclaw/code-server/bin/code-server && echo YES || "
-            f"test -f $HOME/.local/bin/code-server && echo YES || "
-            f"command -v code-server >/dev/null 2>&1 && echo YES || echo NO",
+        cs_out, _, _ = await self.ssh.run(
+            "test -f ~/.hiclaw/code-server/bin/code-server && echo YES || "
+            "test -f ~/.local/bin/code-server && echo YES || "
+            "command -v code-server >/dev/null 2>&1 && echo YES || echo NO",
             timeout=5,
         )
         already_has_cs = cs_out.strip() == "YES"
-        logger.info(f"Provision check: SDK={already_has_sdk} (binary={binary}), code-server={already_has_cs}")
+        # Debug: show actual paths checked
+        debug_out, _, _ = await self.ssh.run(
+            f"echo HOME=$HOME; ls -la {binary} 2>&1; ls -la ~/.hiclaw/code-server/bin/code-server 2>&1",
+            timeout=5,
+        )
+        logger.info(f"Provision check: SDK={already_has_sdk}, CS={already_has_cs}, debug: {debug_out.strip()}")
 
         if already_has_sdk and already_has_cs:
             yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail="Already deployed")
@@ -241,7 +246,12 @@ class Provisioner:
                 timeout=300,
             )
 
-            # Create wrapper script
+            if ec != 0:
+                all_output = (stdout_all + "\n" + stderr).strip()
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=all_output[-2000:])
+                return
+
+            # Create wrapper script only after successful pip install
             await self.ssh.run(
                 f"mkdir -p {venv}/bin && "
                 f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
@@ -249,10 +259,6 @@ class Provisioner:
                 f"chmod +x {venv}/bin/agent-server",
                 timeout=10,
             )
-            if ec != 0:
-                all_output = (stdout_all + "\n" + stderr).strip()
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=all_output[-2000:])
-                return
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
         else:
             yield _evt(ProvisionStep.CHECK_AGENT_SDK, "completed", detail="Already installed")
