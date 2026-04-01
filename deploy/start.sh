@@ -127,6 +127,21 @@ if [ -f "$GITEA_TEMPLATE" ]; then
         "$GITEA_TEMPLATE" > "$GITEA_CONF"
 fi
 
+# ─── DB schema migration (add HiClaw custom columns) ───
+OH_DB="$HOME/.openhands/openhands.db"
+if [ -f "$OH_DB" ]; then
+    $PYTHON -c "
+import sqlite3
+conn = sqlite3.connect('$OH_DB')
+cols = [r[1] for r in conn.execute('PRAGMA table_info(conversation_metadata)').fetchall()]
+if 'remote_agent_url' not in cols:
+    conn.execute('ALTER TABLE conversation_metadata ADD COLUMN remote_agent_url TEXT')
+    conn.commit()
+    print('  DB migration: added remote_agent_url column')
+conn.close()
+" 2>/dev/null
+fi
+
 # ─── 1. Gitea ───
 if ! ss -tlnp | grep -q ":$GITEA_PORT "; then
     GITEA_BIN="$HICLAW_DIR/bin/gitea"
