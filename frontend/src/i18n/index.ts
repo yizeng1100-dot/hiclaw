@@ -4,9 +4,9 @@ import LanguageDetector from "i18next-browser-languagedetector";
 import { initReactI18next } from "react-i18next";
 
 export const AvailableLanguages = [
+  { label: "简体中文", value: "zh-CN" },
   { label: "English", value: "en" },
   { label: "日本語", value: "ja" },
-  { label: "简体中文", value: "zh-CN" },
   { label: "繁體中文", value: "zh-TW" },
   { label: "한국어", value: "ko-KR" },
   { label: "Norsk", value: "no" },
@@ -26,7 +26,7 @@ i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    fallbackLng: "en",
+    fallbackLng: "zh-CN",
     debug: import.meta.env.NODE_ENV === "development",
 
     // Define supported languages explicitly to prevent 404 errors
