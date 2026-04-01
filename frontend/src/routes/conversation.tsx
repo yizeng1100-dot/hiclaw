@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
+import axios from "axios";
 
 import { useConversationId } from "#/hooks/use-conversation-id";
 import { useCommandStore } from "#/stores/command-store";
@@ -27,6 +28,9 @@ import { WebSocketProviderWrapper } from "#/contexts/websocket-provider-wrapper"
 import { useErrorMessageStore } from "#/stores/error-message-store";
 import { I18nKey } from "#/i18n/declaration";
 import { useEventStore } from "#/stores/use-event-store";
+// >>> CUSTOM: HiClaw <<<
+import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
+// >>> END CUSTOM <<<
 
 function AppContent() {
   useConversationConfig();
@@ -37,7 +41,7 @@ function AppContent() {
   // Handle both task IDs (task-{uuid}) and regular conversation IDs
   const { isTask, taskStatus, taskDetail } = useTaskPolling();
 
-  const { data: conversation, isFetched } = useActiveConversation();
+  const { data: conversation, isFetched, refetch } = useActiveConversation();
   const { data: isAuthed } = useIsAuthed();
   const { resetConversationState } = useConversationStore();
   const navigate = useNavigate();
@@ -48,6 +52,39 @@ function AppContent() {
   const removeErrorMessage = useErrorMessageStore(
     (state) => state.removeErrorMessage,
   );
+
+  // >>> CUSTOM: HiClaw — reconnect for remote conversations <<<
+  const [needsReconnect, setNeedsReconnect] = React.useState(false);
+  const [reconnectPassword, setReconnectPassword] = React.useState("");
+  const [reconnectLoading, setReconnectLoading] = React.useState(false);
+  const [reconnectError, setReconnectError] = React.useState<string | null>(null);
+  const { config, workerManagerUrl } = useRemoteWorkerStore();
+
+  const handleReconnect = async () => {
+    if (!reconnectPassword) return;
+    setReconnectLoading(true);
+    setReconnectError(null);
+    try {
+      await axios.post(`${workerManagerUrl}/api/machines/connect`, {
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: reconnectPassword,
+        mode: "host",
+        template: "openhands",
+        workspace: config.workspace,
+      }, { timeout: 60000 });
+      useRemoteWorkerStore.getState().setConfig({ password: reconnectPassword });
+      setNeedsReconnect(false);
+      // Refetch conversation with new tunnel
+      setTimeout(() => refetch(), 1000);
+    } catch (err) {
+      setReconnectError(err instanceof Error ? err.message : "Connection failed");
+    } finally {
+      setReconnectLoading(false);
+    }
+  };
+  // >>> END CUSTOM <<<
 
   // Fetch batch feedback data when conversation is loaded
   useBatchFeedback();
@@ -83,12 +120,65 @@ function AppContent() {
     // Wait for data to be fetched
     if (!isFetched || !isAuthed) return;
 
-    // Handle conversation not found
     if (!conversation) {
-      displayErrorToast(t(I18nKey.CONVERSATION$NOT_EXIST_OR_NO_PERMISSION));
-      navigate("/");
+      // >>> CUSTOM: HiClaw — check if this might be a remote conversation needing reconnect <<<
+      // If we have saved SSH config, show reconnect dialog instead of 404
+      if (config.host) {
+        setNeedsReconnect(true);
+        setReconnectPassword(config.password || "");
+      } else {
+        displayErrorToast(t(I18nKey.CONVERSATION$NOT_EXIST_OR_NO_PERMISSION));
+        navigate("/");
+      }
+      // >>> END CUSTOM <<<
+    } else {
+      setNeedsReconnect(false);
     }
-  }, [conversation, isFetched, isAuthed, navigate, t]);
+  }, [conversation, isFetched, isAuthed, navigate, t, config.host, config.password]);
+
+  // >>> CUSTOM: HiClaw — reconnect UI <<<
+  if (needsReconnect) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="bg-neutral-800 border border-neutral-600 rounded-xl p-6 w-[380px] shadow-2xl">
+          <h3 className="text-base font-semibold text-neutral-100 mb-2">Reconnect Required</h3>
+          <p className="text-xs text-neutral-400 mb-3">
+            SSH connection to {config.username}@{config.host} needs to be re-established.
+          </p>
+          <input
+            type="password"
+            value={reconnectPassword}
+            onChange={(e) => setReconnectPassword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleReconnect(); }}
+            placeholder="SSH Password"
+            autoFocus
+            className="w-full px-3 py-2 bg-neutral-900 border border-neutral-600 rounded text-neutral-200 text-sm focus:border-blue-500 focus:outline-none mb-3"
+          />
+          {reconnectError && (
+            <p className="text-xs text-red-400 mb-3">{reconnectError}</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 rounded"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={handleReconnect}
+              disabled={!reconnectPassword || reconnectLoading}
+              className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-600 disabled:text-neutral-400 text-white rounded-lg"
+            >
+              {reconnectLoading ? "Connecting..." : "Connect"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  // >>> END CUSTOM <<<
 
   const isV0Conversation = conversation?.conversation_version === "V0";
 
