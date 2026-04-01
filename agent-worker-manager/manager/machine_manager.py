@@ -241,22 +241,11 @@ class MachineManager:
                     self._broadcast_event(machine_id, evt)
                     logger.info(f"Health check took {_hc_elapsed}s")
 
-                # Step 5: Start code-server (if installed)
-                import time as _time
-                _cs_start = _time.monotonic()
-                evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="started",
-                                     detail="Starting code-server...")
+                # Step 5: code-server — skipped (users connect via VS Code Remote SSH)
+                machine.code_server_port = 0
+                evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="skipped",
+                                     detail="Use VS Code Remote SSH")
                 self._broadcast_event(machine_id, evt)
-                await self._start_code_server(ssh, machine)
-                _cs_elapsed = int(_time.monotonic() - _cs_start)
-                if machine.code_server_port:
-                    evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="completed",
-                                         detail=f"Running on port {machine.code_server_port} ({_cs_elapsed}s)")
-                else:
-                    evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="skipped",
-                                         detail=f"Not installed ({_cs_elapsed}s)")
-                self._broadcast_event(machine_id, evt)
-                logger.info(f"code-server step took {_cs_elapsed}s")
 
                 # Step 6: SSH tunnels
                 evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="started",
