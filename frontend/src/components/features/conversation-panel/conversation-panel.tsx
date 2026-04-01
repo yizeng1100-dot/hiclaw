@@ -258,21 +258,13 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
       ))}
       {/* Then render completed conversations */}
       {conversations?.map((project) => (
-        <NavLink
-          key={project.conversation_id}
-          to={batchMode ? "#" : `/conversations/${project.conversation_id}`}
-          onClick={(e) => {
-            if (batchMode) {
-              e.preventDefault();
-              toggleSelect(project.conversation_id);
-            } else {
-              onClose();
-            }
-          }}
-          className={batchMode && selectedIds.has(project.conversation_id) ? "bg-blue-900/20" : ""}
-        >
-          {batchMode && (
-            <div className="absolute left-2 top-1/2 -translate-y-1/2 z-10">
+        batchMode ? (
+          <div
+            key={project.conversation_id}
+            onClick={() => toggleSelect(project.conversation_id)}
+            className={`cursor-pointer flex items-center gap-2 ${selectedIds.has(project.conversation_id) ? "bg-blue-900/30" : ""}`}
+          >
+            <div className="shrink-0 pl-2">
               <input
                 type="checkbox"
                 checked={selectedIds.has(project.conversation_id)}
@@ -280,7 +272,33 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
                 className="accent-blue-500 w-3.5 h-3.5"
               />
             </div>
-          )}
+            <div className="flex-1 min-w-0">
+              <ConversationCard
+                onDelete={() => {}}
+                onStop={() => {}}
+                onChangeTitle={() => {}}
+                title={project.title}
+                selectedRepository={{
+                  selected_repository: project.selected_repository,
+                  selected_branch: project.selected_branch,
+                  git_provider: project.git_provider as Provider,
+                }}
+                lastUpdatedAt={project.last_updated_at}
+                createdAt={project.created_at}
+                conversationStatus={project.status}
+                conversationId={project.conversation_id}
+                conversationVersion={project.conversation_version}
+                contextMenuOpen={false}
+                onContextMenuToggle={() => {}}
+              />
+            </div>
+          </div>
+        ) : (
+        <NavLink
+          key={project.conversation_id}
+          to={`/conversations/${project.conversation_id}`}
+          onClick={onClose}
+        >
           <ConversationCard
             onDelete={() =>
               handleDeleteProject(project.conversation_id, project.title)
@@ -312,6 +330,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
             }
           />
         </NavLink>
+        )
       ))}
 
       {/* Loading indicator for fetching more conversations */}
