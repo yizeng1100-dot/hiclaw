@@ -628,14 +628,21 @@ async def _try_delete_v1_conversation(
             await db_session.commit()
 
             # Delete the sandbox in the background
-            asyncio.create_task(
-                _finalize_delete_and_close_connections(
-                    sandbox_service,
-                    app_conversation_info.sandbox_id,
-                    db_session,
-                    httpx_client,
+            # >>> CUSTOM: HiClaw — skip sandbox deletion for remote conversations <<<
+            if app_conversation_info.sandbox_id and app_conversation_info.sandbox_id.startswith('remote-'):
+                # Remote conversations don't have a real sandbox to delete
+                await db_session.aclose()
+                await httpx_client.aclose()
+            else:
+                # >>> END CUSTOM <<<
+                asyncio.create_task(
+                    _finalize_delete_and_close_connections(
+                        sandbox_service,
+                        app_conversation_info.sandbox_id,
+                        db_session,
+                        httpx_client,
+                    )
                 )
-            )
     except Exception:
         # Continue with V0 logic
         pass
