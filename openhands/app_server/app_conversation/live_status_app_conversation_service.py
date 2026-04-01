@@ -367,12 +367,17 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             body_json = start_conversation_request.model_dump(
                 mode='json', context={'expose_secrets': True}
             )
-            # Log hook_config to verify it's being passed
-            hook_config_in_request = body_json.get('hook_config')
-            _logger.debug(
-                f'Sending StartConversationRequest with hook_config: '
-                f'{hook_config_in_request}'
+            # >>> CUSTOM: HiClaw — debug LLM config sent to remote <<<
+            _agent_llm = body_json.get('agent', {}).get('llm', {})
+            _api_key_val = _agent_llm.get('api_key', '')
+            _logger.info(
+                f'[COMAGIC_DEBUG] LLM sent to remote: '
+                f'base_url={_agent_llm.get("base_url")}, '
+                f'api_key={str(_api_key_val)[:20] if _api_key_val else "EMPTY"}..., '
+                f'extra_headers={_agent_llm.get("extra_headers")}, '
+                f'litellm_extra_body={_agent_llm.get("litellm_extra_body")}'
             )
+            # >>> END CUSTOM <<<
             response = await self.httpx_client.post(
                 f'{agent_server_url}/api/conversations',
                 json=body_json,
