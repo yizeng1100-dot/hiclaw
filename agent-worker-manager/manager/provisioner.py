@@ -93,9 +93,10 @@ class Provisioner:
 
         # Step 2: Check Python — only needed if SDK not yet installed
         # First check if standalone Python 3.12 was already installed (fastest check)
-        standalone_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12"
+        standalone_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12".replace("$HOME", "~")
         _, _, py312_ec = await self.ssh.run(f"test -f {standalone_python}", timeout=5)
         has_standalone = py312_ec == 0
+        logger.info(f"Standalone Python check: test -f {standalone_python} → {'EXISTS' if has_standalone else 'NOT FOUND'}")
 
         remote_python = "python3"
         python_ok = False
