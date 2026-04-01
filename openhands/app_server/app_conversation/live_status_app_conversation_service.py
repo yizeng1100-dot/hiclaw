@@ -1647,7 +1647,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     for _m in _resp.json():
                         if _m.get('status') == 'ready' and _m.get('comagic_token'):
                             import uuid as _uuid
-                            llm.api_key = _m['comagic_token']
+                            from pydantic import SecretStr
+                            llm.api_key = SecretStr(_m['comagic_token'])
                             llm.extra_headers = {
                                 **(llm.extra_headers or {}),
                                 'X-User-Id': _m.get('comagic_user_id', ''),

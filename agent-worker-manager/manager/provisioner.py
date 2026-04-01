@@ -55,86 +55,44 @@ class Provisioner:
         self.tmpl = TEMPLATES.get(template, TEMPLATES["openhands"])
         self._broadcast = broadcast_fn or (lambda evt: None)
 
+    async def _check_remote(self, cmd: str) -> bool:
+        """Run a check command on remote, return True if exit code is 0."""
+        _, _, ec = await self.ssh.run(cmd, timeout=5)
+        return ec == 0
+
     async def provision(self) -> AsyncGenerator[ProvisionEvent, None]:
-        """Run all provisioning steps, yielding progress events."""
+        """Run all provisioning steps. Each step checks remote state first, skips if already done."""
 
-        # Step 1: Check if already fully provisioned (skip everything)
-        # Use ~ instead of $HOME for reliability in non-interactive SSH sessions
-        binary = self.tmpl["binary"].replace("$HOME", "~")
-        sdk_out, _, _ = await self.ssh.run(
-            f"test -f {binary} && echo YES || test -f /opt/agent-venv/bin/agent-server && echo YES || echo NO",
-            timeout=5,
-        )
-        already_has_sdk = sdk_out.strip() == "YES"
-        cs_out, _, _ = await self.ssh.run(
-            "test -f ~/.hiclaw/code-server/bin/code-server && echo YES || "
-            "test -f ~/.local/bin/code-server && echo YES || "
-            "command -v code-server >/dev/null 2>&1 && echo YES || echo NO",
-            timeout=5,
-        )
-        already_has_cs = cs_out.strip() == "YES"
-        # Debug: show actual paths checked
-        debug_out, _, _ = await self.ssh.run(
-            f"echo HOME=$HOME; ls -la {binary} 2>&1; ls -la ~/.hiclaw/code-server/bin/code-server 2>&1",
-            timeout=5,
-        )
-        logger.info(f"Provision check: SDK={already_has_sdk}, CS={already_has_cs}, debug: {debug_out.strip()}")
-
-        if already_has_sdk and already_has_cs:
-            yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail="Already deployed")
-            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Already deployed")
-            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already deployed")
-            yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed", detail="Already deployed")
-            return
-
-        if already_has_sdk:
-            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="SDK already installed")
-            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed")
-
-        # Step 2: Check Python — only needed if SDK not yet installed
-        # First check if standalone Python 3.12 was already installed (fastest check)
+        # ── Step 1: Python ──
+        # Check: standalone 3.12 exists? OR system python >= 3.12?
         standalone_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12".replace("$HOME", "~")
-        _, _, py312_ec = await self.ssh.run(f"test -f {standalone_python}", timeout=5)
-        has_standalone = py312_ec == 0
-        logger.info(f"Standalone Python check: test -f {standalone_python} → {'EXISTS' if has_standalone else 'NOT FOUND'}")
-
+        has_standalone = await self._check_remote(f"test -f {standalone_python}")
         remote_python = "python3"
         python_ok = False
 
         if has_standalone:
-            # Standalone Python 3.12 already installed — use it directly
             remote_python = standalone_python
             python_ok = True
-            yield _evt(ProvisionStep.CHECK_PYTHON, "completed",
-                       detail="Python 3.12 (standalone, already installed)")
-        elif not already_has_sdk:
-            yield _evt(ProvisionStep.CHECK_PYTHON, "started")
-            # Check with $HOME/.local/bin in PATH (where we symlink python3.12)
-            stdout, _, ec = await self.ssh.run(
-                "export PATH=$HOME/.local/bin:$PATH && python3 --version", timeout=10)
-            if ec == 0:
-                version_str = stdout.strip()
-                _, _, ver_ec = await self.ssh.run(
-                    "export PATH=$HOME/.local/bin:$PATH && "
-                    "python3 -c 'import sys; exit(0 if sys.version_info >= (3,12) else 1)'",
-                    timeout=5,
-                )
-                if ver_ec == 0:
-                    python_ok = True
-                    py_path_out, _, _ = await self.ssh.run(
-                        "export PATH=$HOME/.local/bin:$PATH && which python3", timeout=5)
-                    remote_python = py_path_out.strip() or "python3"
-                    yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=version_str)
-                else:
-                    yield _evt(ProvisionStep.CHECK_PYTHON, "started",
-                               detail=f"{version_str} too old, need >= 3.12")
+            yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail="Python 3.12 already installed")
+            logger.info(f"Python: standalone exists at {standalone_python}")
         else:
-            # SDK already installed — find which python to use
-            yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail="SDK already installed")
-            python_ok = True
-            py_out, _, _ = await self.ssh.run(
-                "export PATH=$HOME/.local/bin:$PATH && which python3", timeout=5)
-            remote_python = py_out.strip() or "python3"
+            yield _evt(ProvisionStep.CHECK_PYTHON, "started")
+            sys_ok = await self._check_remote(
+                "export PATH=$HOME/.local/bin:$PATH && "
+                "python3 -c 'import sys; exit(0 if sys.version_info >= (3,12) else 1)'"
+            )
+            if sys_ok:
+                py_out, _, _ = await self.ssh.run(
+                    "export PATH=$HOME/.local/bin:$PATH && which python3", timeout=5)
+                remote_python = py_out.strip() or "python3"
+                python_ok = True
+                ver_out, _, _ = await self.ssh.run(
+                    "export PATH=$HOME/.local/bin:$PATH && python3 --version", timeout=5)
+                yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=ver_out.strip())
+            else:
+                ver_out, _, _ = await self.ssh.run("python3 --version 2>&1 || echo 'not found'", timeout=5)
+                yield _evt(ProvisionStep.CHECK_PYTHON, "started",
+                           detail=f"{ver_out.strip()}, need >= 3.12")
 
         if not python_ok:
             yield _evt(ProvisionStep.INSTALL_PYTHON, "started", detail="Deploying Python 3.12 standalone")
@@ -182,130 +140,108 @@ class Provisioner:
                 yield _evt(ProvisionStep.INSTALL_PYTHON, "failed", detail="python3-standalone.tar.gz not found")
                 return
 
-        # Step 3+4: Install SDK — always push wheels from app-server (treat remote as offline)
-        if not already_has_sdk:
-            venv = self.tmpl["venv_path"]  # e.g. ~/.hiclaw/agent-venv
+        # ── Step 2: Agent SDK ──
+        # Check: wrapper script exists?
+        binary = self.tmpl["binary"].replace("$HOME", "~")
+        has_sdk = await self._check_remote(
+            f"test -f {binary} || test -f /opt/agent-venv/bin/agent-server"
+        )
+        if has_sdk:
+            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Already installed")
+            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed")
+            logger.info("SDK: already installed, skipping")
+        else:
+            venv = self.tmpl["venv_path"]
+            # Check: wheels already on remote?
+            has_wheels = await self._check_remote(f"test -d {REMOTE_DEPS_PATH}/wheels")
+            if has_wheels:
+                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Wheels already on remote")
+                logger.info("SDK wheels: already on remote, skipping upload")
+            else:
+                wheels_dir = os.path.join(DEPS_DIR, "wheels")
+                if not os.path.isdir(wheels_dir):
+                    yield _evt(ProvisionStep.SCP_DEPENDENCIES, "failed", detail="wheels/ not found in deps/")
+                    return
+                import subprocess
+                wheels_archive = "/tmp/_wheels_upload.tar.gz"
+                subprocess.run(f"tar czf {wheels_archive} -C {DEPS_DIR} wheels/",
+                               shell=True, check=True, timeout=30)
+                archive_size_mb = os.path.getsize(wheels_archive) // 1024 // 1024
+                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "started", detail=f"Uploading {archive_size_mb}MB")
+                last_mb = [0]
+                def _on_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(_evt(ProvisionStep.SCP_DEPENDENCIES, "started",
+                                             detail=f"{sent_mb}/{archive_size_mb}MB ({pct}%)"))
+                await self.ssh.upload_file(wheels_archive, "/tmp/agent-wheels.tar.gz",
+                                           progress_callback=_on_progress)
+                await self.ssh.run(
+                    f"mkdir -p {REMOTE_DEPS_PATH} && "
+                    f"tar xzf /tmp/agent-wheels.tar.gz -C {REMOTE_DEPS_PATH}/ && "
+                    f"rm -f /tmp/agent-wheels.tar.gz", timeout=60)
+                os.remove(wheels_archive)
+                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
 
-            # Upload wheels from app-server
-            wheels_dir = os.path.join(DEPS_DIR, "wheels")
-            if not os.path.isdir(wheels_dir):
-                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "failed", detail="wheels/ not found in deps/")
-                return
-
-            import subprocess
-            wheels_archive = "/tmp/_wheels_upload.tar.gz"
-            subprocess.run(f"tar czf {wheels_archive} -C {DEPS_DIR} wheels/",
-                           shell=True, check=True, timeout=30)
-            archive_size = os.path.getsize(wheels_archive)
-            archive_size_mb = archive_size // 1024 // 1024
-            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "started",
-                       detail=f"Uploading {archive_size_mb}MB")
-
-            last_mb = [0]
-            def _on_progress(sent, total):
-                sent_mb = sent // 1024 // 1024
-                if sent_mb > last_mb[0]:
-                    last_mb[0] = sent_mb
-                    total_mb = total // 1024 // 1024
-                    pct = int(sent * 100 / total) if total else 0
-                    self._broadcast(_evt(
-                        ProvisionStep.SCP_DEPENDENCIES, "started",
-                        detail=f"{sent_mb}/{total_mb}MB ({pct}%)"
-                    ))
-
-            await self.ssh.upload_file(wheels_archive, "/tmp/agent-wheels.tar.gz",
-                                       progress_callback=_on_progress)
-            await self.ssh.run(
-                f"mkdir -p {REMOTE_DEPS_PATH} && "
-                f"tar xzf /tmp/agent-wheels.tar.gz -C {REMOTE_DEPS_PATH}/ && "
-                f"rm -f /tmp/agent-wheels.tar.gz",
-                timeout=60,
-            )
-            os.remove(wheels_archive)
-            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
-
-            # Install from local wheels only — no internet needed
+            # Install SDK from wheels
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
-            await self.ssh.run(
-                f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true",
-                timeout=30,
-            )
-            # Install setuptools+wheel first (pip install wheel doesn't need setuptools)
+            await self.ssh.run(f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true", timeout=30)
             await self.ssh.run(
                 f"{remote_python} -m pip install --break-system-packages --upgrade "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"pip setuptools wheel 2>&1 || true",
-                timeout=60,
-            )
-            # Install SDK packages
+                f"pip setuptools wheel 2>&1 || true", timeout=60)
             stdout_all, stderr, ec = await self.ssh.run(
                 f"{remote_python} -m pip install --break-system-packages --upgrade "
-                f"--ignore-installed --prefer-binary "
-                f"--target {venv}/lib "
+                f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"{self.tmpl['pip_package']} 2>&1",
-                timeout=300,
-            )
-
+                f"{self.tmpl['pip_package']} 2>&1", timeout=300)
             if ec != 0:
-                all_output = (stdout_all + "\n" + stderr).strip()
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed", detail=all_output[-2000:])
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
+                           detail=(stdout_all + "\n" + stderr).strip()[-2000:])
                 return
-
-            # Create wrapper script only after successful pip install
             await self.ssh.run(
                 f"mkdir -p {venv}/bin && "
                 f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
                 f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec {remote_python} -m openhands.agent_server \"$@\"' >> {venv}/bin/agent-server && "
-                f"chmod +x {venv}/bin/agent-server",
-                timeout=10,
-            )
+                f"chmod +x {venv}/bin/agent-server", timeout=10)
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
-        else:
-            yield _evt(ProvisionStep.CHECK_AGENT_SDK, "completed", detail="Already installed")
 
-        # Step 5: Install code-server — always upload from app-server (same as SDK)
-        if not already_has_cs:
+        # ── Step 3: code-server ──
+        # Check: code-server binary exists?
+        cs_path = REMOTE_CODE_SERVER_PATH.replace("$HOME", "~")
+        has_cs = await self._check_remote(f"test -f {cs_path}/bin/code-server")
+        if has_cs:
+            yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed", detail="Already installed")
+            logger.info("code-server: already installed, skipping")
+        else:
             CS_FILE = "code-server.tar.gz"
             cs_tar = os.path.join(DEPS_DIR, CS_FILE)
             if os.path.exists(cs_tar):
                 cs_size_mb = os.path.getsize(cs_tar) // 1024 // 1024
                 yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
-                           detail=f"Uploading code-server ({cs_size_mb}MB)")
-
+                           detail=f"Uploading ({cs_size_mb}MB)")
                 last_mb = [0]
                 def _cs_progress(sent, total):
                     sent_mb = sent // 1024 // 1024
                     if sent_mb > last_mb[0]:
                         last_mb[0] = sent_mb
-                        total_mb = total // 1024 // 1024
                         pct = int(sent * 100 / total) if total else 0
-                        self._broadcast(_evt(
-                            ProvisionStep.INSTALL_CODE_SERVER, "started",
-                            detail=f"Uploading {sent_mb}/{total_mb}MB ({pct}%)"
-                        ))
-
-                await self.ssh.upload_file(cs_tar, f"/tmp/{CS_FILE}",
-                                           progress_callback=_cs_progress)
-                self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
-                                     detail="Extracting..."))
+                        self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
+                                             detail=f"Uploading {sent_mb}/{cs_size_mb}MB ({pct}%)"))
+                await self.ssh.upload_file(cs_tar, f"/tmp/{CS_FILE}", progress_callback=_cs_progress)
+                self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started", detail="Extracting..."))
                 await self.ssh.run(
                     f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
                     f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
                     f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && "
-                    f"rm -f /tmp/{CS_FILE}",
-                    timeout=60,
-                )
-                _, _, verify_ec = await self.ssh.run(
-                    f"test -f {REMOTE_CODE_SERVER_PATH}/bin/code-server", timeout=5)
-                if verify_ec == 0:
+                    f"rm -f /tmp/{CS_FILE}", timeout=60)
+                if await self._check_remote(f"test -f {REMOTE_CODE_SERVER_PATH}/bin/code-server"):
                     yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed")
                 else:
-                    yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "failed",
-                               detail="Extraction failed")
+                    yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "failed", detail="Extraction failed")
             else:
                 yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "skipped",
-                           detail="code-server.tar.gz not found in deps/")
-        else:
-            yield _evt(ProvisionStep.CHECK_CODE_SERVER, "completed", detail="Already installed")
+                           detail="code-server.tar.gz not in deps/")
 
