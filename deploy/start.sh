@@ -98,6 +98,18 @@ case "$MODE" in
         exit 1 ;;
 esac
 
+# ─── Build frontend if source changed ───
+if [ -d "$PROJECT_DIR/frontend" ] && command -v npm &>/dev/null; then
+    FRONTEND_BUILD="$PROJECT_DIR/frontend/build/client/index.html"
+    FRONTEND_SRC="$PROJECT_DIR/frontend/src"
+    # Rebuild if no build exists or source is newer than build
+    if [ ! -f "$FRONTEND_BUILD" ] || [ -n "$(find "$FRONTEND_SRC" -newer "$FRONTEND_BUILD" -print -quit 2>/dev/null)" ]; then
+        echo "[0/3] Building frontend..."
+        cd "$PROJECT_DIR/frontend" && npm run build 2>&1 | tail -3
+        cd "$PROJECT_DIR"
+    fi
+fi
+
 echo "=== Starting HiClaw Services ==="
 echo "  Python: $($PYTHON --version 2>&1)"
 echo "  Data:   $HICLAW_DIR"
