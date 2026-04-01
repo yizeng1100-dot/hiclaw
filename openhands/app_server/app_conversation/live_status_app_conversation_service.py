@@ -1639,7 +1639,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         # Get the token that Worker Manager read from remote ~/.comagic/userToken.json
         # and inject it into the LLM config so the remote agent-server uses it directly.
         if sandbox is None:  # remote worker
-            base_url = llm.config.base_url or ''
+            base_url = llm.base_url or ''
             if 'hihonor' in base_url.lower():
                 try:
                     from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
@@ -1647,21 +1647,18 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     for _m in _resp.json():
                         if _m.get('status') == 'ready' and _m.get('comagic_token'):
                             import uuid as _uuid
-                            llm.config.api_key = _m['comagic_token']
-                            custom_headers = {
+                            llm.api_key = _m['comagic_token']
+                            llm.extra_headers = {
+                                **(llm.extra_headers or {}),
                                 'X-User-Id': _m.get('comagic_user_id', ''),
                                 'X-Enterprise-Id': 'copilot',
                                 'X-Request-ID': str(_uuid.uuid4()),
                                 'User-Agent': 'CLI/0.0.0 CoMagic/0.1.66',
                             }
-                            if hasattr(llm.config, 'extra_headers') and llm.config.extra_headers:
-                                llm.config.extra_headers.update(custom_headers)
-                            else:
-                                llm.config.extra_headers = custom_headers
-                            if hasattr(llm.config, 'extra_body') and llm.config.extra_body:
-                                llm.config.extra_body['model_option_id'] = 204
-                            else:
-                                llm.config.extra_body = {'model_option_id': 204}
+                            llm.litellm_extra_body = {
+                                **(llm.litellm_extra_body or {}),
+                                'model_option_id': 204,
+                            }
                             _logger.info(f'[COMAGIC] Injected remote token into LLM config')
                             break
                 except Exception as e:
