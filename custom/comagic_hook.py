@@ -7,21 +7,28 @@ Token is read from /tmp/token.txt on each request (supports rotation).
 X-Request-ID is generated fresh per request.
 """
 
+import json
 import os
 import uuid
 from pathlib import Path
 
-TOKEN_FILE = os.getenv("COMAGIC_TOKEN_FILE", "/tmp/token.txt")
-USER_ID_FILE = os.getenv("COMAGIC_USER_ID_FILE", "/tmp/xuerid.txt")
+# Auto-enable LLM request logger
+try:
+    import custom.llm_logger  # noqa: F401
+except Exception:
+    pass
+
+COMAGIC_CONFIG = os.getenv("COMAGIC_CONFIG", str(Path.home() / ".comagic" / "userToken.json"))
 ENTERPRISE_ID = os.getenv("COMAGIC_ENTERPRISE_ID", "copilot")
 MODEL_OPTION_ID = int(os.getenv("COMAGIC_MODEL_OPTION_ID", "204"))
 
 
-def _read_file(path: str) -> str:
+def _read_comagic_config() -> dict:
+    """Read token and xUserId from ~/.comagic/userToken.json"""
     try:
-        return Path(path).read_text().strip()
+        return json.loads(Path(COMAGIC_CONFIG).read_text())
     except Exception:
-        return ""
+        return {}
 
 
 def inject_comagic_headers(config, kwargs: dict) -> dict:
@@ -30,13 +37,14 @@ def inject_comagic_headers(config, kwargs: dict) -> dict:
     if "hihonor" not in base_url.lower():
         return kwargs
 
-    # Dynamic token from file
-    token = _read_file(TOKEN_FILE)
+    # Read token and userId from ~/.comagic/userToken.json
+    comagic = _read_comagic_config()
+    token = comagic.get("token", "")
+    user_id = comagic.get("xUserId", "")
+
     if token:
         kwargs["api_key"] = token
 
-    # Dynamic headers
-    user_id = _read_file(USER_ID_FILE)
     extra_headers = kwargs.get("extra_headers", {})
     extra_headers.update({
         "X-User-Id": user_id or "default",
