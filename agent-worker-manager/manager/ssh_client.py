@@ -158,14 +158,14 @@ class SSHClient:
         except Exception as e:
             logger.debug(f"[{self.host}] SCP failed ({e}), trying SFTP...")
 
-        # Method 2: Try SFTP
+        # Method 2: Try SFTP with larger block size for better throughput
         try:
             def _progress(src_path, dst_path, bytes_sent, total_bytes):
                 if progress_callback and callable(progress_callback):
                     progress_callback(bytes_sent, total_bytes)
 
             async with self._conn.start_sftp_client() as sftp:
-                await sftp.put(local_path, remote_path, progress_handler=_progress, block_size=65536)
+                await sftp.put(local_path, remote_path, progress_handler=_progress, block_size=1024*1024)
             logger.info(f"[{self.host}] Uploaded via SFTP: {local_path} → {remote_path} ({total} bytes)")
             return
         except Exception as e:
@@ -173,7 +173,7 @@ class SSHClient:
 
         # Method 3: Pipe through SSH stdin (works even if SFTP is disabled)
         logger.info(f"[{self.host}] Uploading via pipe: {local_path} ({total} bytes)")
-        chunk_size = 64 * 1024
+        chunk_size = 512 * 1024  # 512KB chunks for pipe mode
         sent = 0
         process = await self._conn.create_process(f"cat > {remote_path}")
         with open(local_path, 'rb') as f:
