@@ -421,6 +421,12 @@ class MachineManager:
         env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "
         # >>> CUSTOM: HiClaw — redirect public skills to internal Gitea <<<
         public_skills_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
+        if not public_skills_repo:
+            try:
+                from openhands.server.routes.hiclaw_config import PUBLIC_SKILLS_REPO
+                public_skills_repo = PUBLIC_SKILLS_REPO
+            except ImportError:
+                pass
         if public_skills_repo:
             env_vars += f"OH_PUBLIC_SKILLS_REPO='{public_skills_repo}' "
         # >>> END CUSTOM <<<

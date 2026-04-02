@@ -36,6 +36,14 @@ GITEA_REPO_AUTH_URL = f'http://{GITEA_ADMIN_USER}:{GITEA_ADMIN_PASSWORD}@localho
 # ─── Defaults ───
 DEFAULT_WORKSPACE = os.environ.get('HICLAW_DEFAULT_WORKSPACE', '/root/workspace')
 
+# ─── Public Skills ───
+# Mirror of github.com/OpenHands/extensions on internal Gitea
+# Agent-server clones from here instead of GitHub (works in air-gapped networks)
+PUBLIC_SKILLS_REPO = os.environ.get(
+    'OH_PUBLIC_SKILLS_REPO',
+    f'http://{GITEA_ADMIN_USER}:{GITEA_ADMIN_PASSWORD}@localhost:{GITEA_PORT}/{GITEA_ADMIN_USER}/extensions.git'
+)
+
 # App server IP reachable from remote machines (for MCP URL replacement)
 # MUST be set in internal networks where icanhazip.com is not accessible
 APP_IP = os.environ.get('HICLAW_APP_IP', '')
