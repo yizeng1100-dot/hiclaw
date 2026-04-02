@@ -90,6 +90,50 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             _conn.close()
 
         seed_skills()
+
+        # Auto-import OpenHands extensions to Gitea (public skills mirror)
+        _bundle = _Path(__file__).resolve().parent.parent.parent / 'agent-worker-manager' / 'deps' / 'openhands-extensions.bundle'
+        if _bundle.exists():
+            try:
+                from openhands.server.routes.hiclaw_config import GITEA_URL, GITEA_ADMIN_USER, GITEA_ADMIN_PASSWORD
+                import subprocess as _sp
+                import httpx as _httpx
+
+                # Check if repo already exists in Gitea
+                _check = _httpx.get(
+                    f'{GITEA_URL}/api/v1/repos/{GITEA_ADMIN_USER}/extensions',
+                    auth=(GITEA_ADMIN_USER, GITEA_ADMIN_PASSWORD),
+                    timeout=5,
+                )
+                if _check.status_code == 404:
+                    _logging.getLogger(__name__).info('Importing OpenHands extensions to Gitea...')
+                    # Create repo
+                    _httpx.post(
+                        f'{GITEA_URL}/api/v1/user/repos',
+                        json={'name': 'extensions', 'private': False},
+                        auth=(GITEA_ADMIN_USER, GITEA_ADMIN_PASSWORD),
+                        timeout=10,
+                    )
+                    # Clone from bundle and push
+                    _tmp_dir = _Path('/tmp/_extensions_import')
+                    _tmp_dir.mkdir(exist_ok=True)
+                    _sp.run(['git', 'clone', str(_bundle), str(_tmp_dir / 'repo')],
+                            capture_output=True, timeout=30)
+                    _gitea_url = f'http://{GITEA_ADMIN_USER}:{GITEA_ADMIN_PASSWORD}@localhost:{GITEA_URL.split(":")[-1]}/{GITEA_ADMIN_USER}/extensions.git'
+                    _sp.run(['git', '-C', str(_tmp_dir / 'repo'), 'remote', 'add', 'gitea', _gitea_url],
+                            capture_output=True, timeout=5)
+                    _sp.run(['git', '-C', str(_tmp_dir / 'repo'), 'push', 'gitea', '--all'],
+                            capture_output=True, timeout=30)
+                    _sp.run(['git', '-C', str(_tmp_dir / 'repo'), 'push', 'gitea', '--tags'],
+                            capture_output=True, timeout=30)
+                    import shutil
+                    shutil.rmtree(_tmp_dir, ignore_errors=True)
+                    _logging.getLogger(__name__).info('OpenHands extensions imported to Gitea')
+                else:
+                    _logging.getLogger(__name__).debug('Extensions repo already in Gitea')
+            except Exception as _e:
+                _logging.getLogger(__name__).debug(f'Extensions import skipped: {_e}')
+
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f'HiClaw startup: {e}')
