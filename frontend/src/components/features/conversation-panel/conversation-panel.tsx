@@ -120,12 +120,21 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
   };
 
   const handleBatchDelete = () => {
+    const count = selectedIds.size;
+    let completed = 0;
     selectedIds.forEach((id) => {
       deleteConversation(
         { conversationId: id },
         {
           onSuccess: () => {
+            completed++;
             if (id === currentConversationId) navigate("/");
+            if (completed === count) {
+              // Show feedback when all deletions complete
+              import("#/utils/custom-toast-handlers").then(({ displaySuccessToast }) => {
+                displaySuccessToast(`Deleted ${count} conversation${count > 1 ? "s" : ""}`);
+              });
+            }
           },
         },
       );
@@ -231,23 +240,23 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
     >
       {/* >>> CUSTOM: HiClaw — batch delete toolbar <<< */}
       {conversations.length > 0 && (
-        <div className="sticky top-0 z-10 bg-[#25272D] border-b border-[#525252] px-3 py-2 flex items-center justify-between">
+        <div className="sticky top-0 z-10 bg-tertiary border-b border-neutral-600 px-3 py-2">
           {!batchMode ? (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); e.preventDefault(); setBatchMode(true); }}
-              className="text-xs text-neutral-400 hover:text-neutral-200"
+              className="text-xs text-neutral-500 hover:text-neutral-300 transition"
             >
-              Batch Delete
+              Manage
             </button>
           ) : (
-            <div className="flex items-center gap-2 w-full">
+            <div className="flex items-center gap-3 w-full">
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); selectAll(); }}
-                className="text-xs text-blue-400 hover:text-blue-300"
+                className="text-xs text-blue-400 hover:text-blue-300 transition"
               >
-                {selectedIds.size === conversations.length ? "Deselect All" : "Select All"}
+                {selectedIds.size === conversations.length ? "Deselect" : "All"}
               </button>
               <span className="text-xs text-neutral-500 flex-1">
                 {selectedIds.size} selected
@@ -256,16 +265,16 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
                 type="button"
                 onClick={(e) => { e.stopPropagation(); handleBatchDelete(); }}
                 disabled={selectedIds.size === 0}
-                className="text-xs text-red-400 hover:text-red-300 disabled:text-neutral-600"
+                className="text-xs px-2 py-0.5 rounded-md bg-danger/10 text-danger hover:bg-danger/20 disabled:opacity-30 disabled:cursor-not-allowed transition"
               >
-                Delete ({selectedIds.size})
+                Delete
               </button>
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); setBatchMode(false); setSelectedIds(new Set()); }}
-                className="text-xs text-neutral-400 hover:text-neutral-200"
+                className="text-xs text-neutral-500 hover:text-neutral-300 transition"
               >
-                Cancel
+                Done
               </button>
             </div>
           )}
