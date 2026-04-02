@@ -383,22 +383,20 @@ class MachineManager:
             # >>> CUSTOM: HiClaw — reuse agent-server regardless of workspace <<<
             # One agent-server serves ALL workspaces. Each conversation specifies
             # its own working_dir via StartConversationRequest.
-            # But check if the running agent-server uses the correct FILE_STORE_PATH
-            # Check if the running agent-server uses workspace-specific FILE_STORE_PATH (old pattern)
-            # Old pattern: FILE_STORE_PATH=/root/workspace_xxx/.hiclaw
-            # New pattern: FILE_STORE_PATH=/root/.hiclaw (or $HOME/.hiclaw)
+            # Check if running agent-server has correct FILE_STORE_PATH=$HOME/.hiclaw
+            # If not (old version, or not set), kill and restart with correct config
             check_stdout, _, _ = await ssh.run(
                 f"ps aux | grep 'agent.server.*--port {port}' | grep -v grep | head -1", timeout=5)
-            import re
-            old_store = re.search(r'FILE_STORE_PATH=\S*/workspace[^/]*/\.hiclaw', check_stdout)
-            if old_store:
-                # Old agent-server with workspace-specific path — kill and restart
-                logger.info(f"Agent-server running with old FILE_STORE_PATH ({old_store.group()}), restarting")
+            home_out, _, _ = await ssh.run("echo $HOME", timeout=3)
+            remote_home = home_out.strip() or "/root"
+            correct_store = f"FILE_STORE_PATH={remote_home}/.hiclaw"
+            if check_stdout and correct_store not in check_stdout:
+                logger.info(f"Agent-server missing '{correct_store}' in cmd, restarting")
                 await ssh.run(f"pkill -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5)
                 await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
                 await asyncio.sleep(2)
             else:
-                logger.info(f"Agent-server already healthy on port {port}, reusing for workspace {machine.workspace}")
+                logger.info(f"Agent-server healthy with correct config on port {port}, reusing")
                 await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
                 return
             # >>> END CUSTOM <<<
