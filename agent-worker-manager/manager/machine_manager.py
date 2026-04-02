@@ -419,6 +419,11 @@ class MachineManager:
         # >>> CUSTOM: HiClaw — use user home for FILE_STORE_PATH (not workspace-specific) <<<
         # This allows one agent-server to serve multiple workspaces
         env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "
+        # >>> CUSTOM: HiClaw — redirect public skills to internal Gitea <<<
+        public_skills_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
+        if public_skills_repo:
+            env_vars += f"OH_PUBLIC_SKILLS_REPO='{public_skills_repo}' "
+        # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
         # Read CoMagic token from remote machine's ~/.comagic/userToken.json

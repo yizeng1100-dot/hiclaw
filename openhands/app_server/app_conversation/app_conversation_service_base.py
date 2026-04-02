@@ -131,7 +131,10 @@ class AppConversationServiceBase(AppConversationService, ABC):
             sandbox_config = build_sandbox_config(sandbox) if sandbox else None
 
             # Single API call to agent-server for ALL skills
-            # >>> CUSTOM: HiClaw — disable public skills in air-gapped networks <<<
+            # >>> CUSTOM: HiClaw — control public skills source <<<
+            # OH_PUBLIC_SKILLS_REPO: set to Gitea URL for air-gapped networks
+            #   e.g., http://localhost:3300/hiclaw-admin/extensions.git
+            # OH_LOAD_PUBLIC_SKILLS: set to "false" to disable entirely
             import os as _os
             _load_public = _os.environ.get('OH_LOAD_PUBLIC_SKILLS', 'true').lower() != 'false'
             # >>> END CUSTOM <<<
