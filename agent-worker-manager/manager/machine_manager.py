@@ -196,7 +196,7 @@ class MachineManager:
                     if h_out.strip() == "200":
                         # Verify workspace matches
                         ps_out, _, _ = await ssh.run(
-                            f"ps aux | grep 'agent-server.*--port {port}' | grep -v grep | head -1",
+                            f"ps aux | grep 'agent.server.*--port {port}' | grep -v grep | head -1",
                             timeout=5,
                         )
                         if machine.workspace in ps_out:
@@ -388,13 +388,13 @@ class MachineManager:
             # Old pattern: FILE_STORE_PATH=/root/workspace_xxx/.hiclaw
             # New pattern: FILE_STORE_PATH=/root/.hiclaw (or $HOME/.hiclaw)
             check_stdout, _, _ = await ssh.run(
-                f"ps aux | grep 'agent-server.*--port {port}' | grep -v grep | head -1", timeout=5)
+                f"ps aux | grep 'agent.server.*--port {port}' | grep -v grep | head -1", timeout=5)
             import re
             old_store = re.search(r'FILE_STORE_PATH=\S*/workspace[^/]*/\.hiclaw', check_stdout)
             if old_store:
                 # Old agent-server with workspace-specific path — kill and restart
                 logger.info(f"Agent-server running with old FILE_STORE_PATH ({old_store.group()}), restarting")
-                await ssh.run(f"pkill -f 'agent-server.*--port {port}' 2>/dev/null || true", timeout=5)
+                await ssh.run(f"pkill -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5)
                 await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
                 await asyncio.sleep(2)
             else:
@@ -404,7 +404,7 @@ class MachineManager:
             # >>> END CUSTOM <<<
         else:
             # Port not healthy — kill any leftover agent-server process on this port
-            await ssh.run(f"pkill -f 'agent-server.*--port {port}' 2>/dev/null || true", timeout=5)
+            await ssh.run(f"pkill -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5)
             # Also kill anything else holding the port
             await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
             await asyncio.sleep(1)
@@ -519,7 +519,7 @@ class MachineManager:
 
             # Check if process is still alive — fail fast if it crashed
             proc_out, _, _ = await ssh.run(
-                f"pgrep -f 'agent-server --port {port}' >/dev/null 2>&1 && echo ALIVE || echo DEAD",
+                f"pgrep -f 'agent.server --port {port}' >/dev/null 2>&1 && echo ALIVE || echo DEAD",
                 timeout=5,
             )
             if proc_out.strip() == "DEAD":
@@ -596,7 +596,7 @@ class MachineManager:
                 if machine.mode == WorkerMode.DOCKER:
                     await ssh.run(f"docker rm -f agent-server-{machine_id}", timeout=30)
                 else:
-                    await ssh.run(f"pkill -f 'agent-server --port {machine.agent_server_port}' || true", timeout=10)
+                    await ssh.run(f"pkill -f 'agent.server --port {machine.agent_server_port}' || true", timeout=10)
         except Exception as e:
             logger.warning(f"Cleanup error for machine {machine_id}: {e}")
 
