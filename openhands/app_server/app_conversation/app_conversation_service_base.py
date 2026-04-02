@@ -131,13 +131,17 @@ class AppConversationServiceBase(AppConversationService, ABC):
             sandbox_config = build_sandbox_config(sandbox) if sandbox else None
 
             # Single API call to agent-server for ALL skills
+            # >>> CUSTOM: HiClaw — disable public skills in air-gapped networks <<<
+            import os as _os
+            _load_public = _os.environ.get('OH_LOAD_PUBLIC_SKILLS', 'true').lower() != 'false'
+            # >>> END CUSTOM <<<
             all_skills = await load_skills_from_agent_server(
                 agent_server_url=agent_server_url,
                 session_api_key=sandbox.session_api_key if sandbox else '',
                 project_dir=project_dir,
                 org_config=org_config,
                 sandbox_config=sandbox_config,
-                load_public=True,
+                load_public=_load_public,
                 load_user=True,
                 load_project=True,
                 load_org=True,
