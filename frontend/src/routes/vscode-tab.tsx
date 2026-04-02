@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { I18nKey } from "#/i18n/declaration";
-import { RUNTIME_INACTIVE_STATES } from "#/types/agent-state";
 import { useUnifiedVSCodeUrl } from "#/hooks/query/use-unified-vscode-url";
 import { useActiveConversation } from "#/hooks/query/use-active-conversation";
+import { useAgentState } from "#/hooks/use-agent-state";
+import { RUNTIME_STARTING_STATES } from "#/types/agent-state";
 import { VSCODE_IN_NEW_TAB } from "#/utils/feature-flags";
 import { WaitingForRuntimeMessage } from "#/components/features/chat/waiting-for-runtime-message";
-import { useAgentState } from "#/hooks/use-agent-state";
 
 function VSCodeTab() {
   const { t } = useTranslation();
@@ -15,7 +15,7 @@ function VSCodeTab() {
   // >>> CUSTOM: HiClaw — remote sandboxes have independent code-server, skip runtime check <<<
   const { data: conversation } = useActiveConversation();
   const isRemoteSandbox = conversation?.sandbox_id?.startsWith("remote-");
-  const isRuntimeInactive = !isRemoteSandbox && RUNTIME_INACTIVE_STATES.includes(curAgentState);
+  const isRuntimeStarting = !isRemoteSandbox && RUNTIME_STARTING_STATES.includes(curAgentState);
   // >>> END CUSTOM <<<
   const iframeRef = React.useRef<HTMLIFrameElement>(null);
   const [isCrossProtocol, setIsCrossProtocol] = useState(false);
@@ -44,7 +44,7 @@ function VSCodeTab() {
     }
   };
 
-  if (isRuntimeInactive) {
+  if (isRuntimeStarting) {
     return <WaitingForRuntimeMessage />;
   }
 

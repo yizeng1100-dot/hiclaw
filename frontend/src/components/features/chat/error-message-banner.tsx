@@ -77,13 +77,36 @@ export function ErrorMessageBanner({ message, onDismiss }: ErrorMessageBannerPro
   const isCollapsed = shouldShowToggle && !isExpanded;
 
   return (
-    <div className="w-full rounded-lg p-2 border border-[#FF0006] bg-[#4A0709] flex flex-col gap-2 text-white" data-testid="error-message-banner">
+    <div
+      className="w-full rounded-lg p-2 border border-[#FF0006] bg-[#4A0709] flex flex-col gap-2 text-white"
+      data-testid="error-message-banner"
+    >
       <div className="flex gap-2 items-start">
         <div className="min-w-0 flex-1">
-          <div className={cn("whitespace-pre-wrap wrap-break-words text-sm", isCollapsed && "line-clamp-3")} data-testid="error-message-banner-content">
+          <div
+            className={cn(
+              "whitespace-pre-wrap break-words",
+              isCollapsed && "line-clamp-3",
+            )}
+            data-testid="error-message-banner-content"
+          >
             {isI18nKey ? (
-              <Trans i18nKey={message} components={{ a: <Link className="underline font-bold cursor-pointer" to="/settings/billing">link</Link> }} />
-            ) : message}
+              <Trans
+                i18nKey={message}
+                components={{
+                  a: (
+                    <Link
+                      className="underline font-bold cursor-pointer"
+                      to="/settings/billing"
+                    >
+                      link
+                    </Link>
+                  ),
+                }}
+              />
+            ) : (
+              message
+            )}
           </div>
           <div className="flex items-center gap-2 mt-1.5">
             {shouldShowToggle && (

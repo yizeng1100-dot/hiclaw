@@ -17,9 +17,13 @@ import { SkillActiveBadge } from "#/components/features/custom/skill-management/
 
 interface InteractiveChatBoxProps {
   onSubmit: (message: string, images: File[], files: File[]) => void;
+  disabled?: boolean;
 }
 
-export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
+export function InteractiveChatBox({
+  onSubmit,
+  disabled = false,
+}: InteractiveChatBoxProps) {
   const {
     images,
     files,
@@ -161,6 +165,7 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
   // Allow users to submit messages during LOADING state - they will be
   // queued server-side and delivered when the conversation becomes ready
   const isDisabled =
+    disabled ||
     curAgentState === AgentState.AWAITING_USER_CONFIRMATION ||
     isTaskPolling(subConversationTaskStatus);
 
@@ -175,6 +180,7 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
       {/* >>> END CUSTOM <<< */}
       <CustomChatInput
         disabled={isDisabled}
+        isNewConversationPending={disabled}
         onSubmit={handleSubmit}
         onFilesPaste={handleUpload}
         conversationStatus={conversation?.status || null}

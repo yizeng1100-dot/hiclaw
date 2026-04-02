@@ -43,6 +43,8 @@ import { useTaskPolling } from "#/hooks/query/use-task-polling";
 import { useConversationWebSocket } from "#/contexts/conversation-websocket-context";
 import ChatStatusIndicator from "./chat-status-indicator";
 import { getStatusColor, getStatusText } from "#/utils/utils";
+import { useNewConversationCommand } from "#/hooks/mutation/use-new-conversation-command";
+import { I18nKey } from "#/i18n/declaration";
 
 function getEntryPoint(
   hasRepository: boolean | null,
@@ -151,6 +153,10 @@ export function ChatInterface() {
     setHitBottom,
   } = useScrollToBottom(scrollRef);
   const { data: config } = useConfig();
+  const {
+    mutate: newConversationCommand,
+    isPending: isNewConversationPending,
+  } = useNewConversationCommand();
 
   const { curAgentState } = useAgentState();
   const { handleBuildPlanClick } = useHandleBuildPlanClick();
@@ -217,6 +223,27 @@ export function ChatInterface() {
     originalImages: File[],
     originalFiles: File[],
   ) => {
+    // Handle /new command for V1 conversations
+    if (content.trim() === "/new") {
+      if (!isV1Conversation) {
+        displayErrorToast(t(I18nKey.CONVERSATION$CLEAR_V1_ONLY));
+        return;
+      }
+      if (!params.conversationId) {
+        displayErrorToast(t(I18nKey.CONVERSATION$CLEAR_NO_ID));
+        return;
+      }
+      if (totalEvents === 0) {
+        displayErrorToast(t(I18nKey.CONVERSATION$CLEAR_EMPTY));
+        return;
+      }
+      if (isNewConversationPending) {
+        return;
+      }
+      newConversationCommand();
+      return;
+    }
+
     // Create mutable copies of the arrays
     const images = [...originalImages];
     const files = [...originalFiles];
@@ -416,7 +443,10 @@ export function ChatInterface() {
           {/* >>> CUSTOM: HiClaw — skills commit bar <<< */}
           <SkillsCommitBar />
           {/* >>> END CUSTOM <<< */}
-          <InteractiveChatBox onSubmit={handleSendMessage} />
+          <InteractiveChatBox
+            onSubmit={handleSendMessage}
+            disabled={isNewConversationPending}
+          />
         </div>
 
         {config?.app_mode !== "saas" && !isV1Conversation && (
