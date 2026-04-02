@@ -200,15 +200,30 @@ class Provisioner:
                 f"{remote_python} -m pip install --break-system-packages --upgrade "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"pip setuptools wheel 2>&1 || true", timeout=60)
+            # Install with --no-deps first to avoid dependency resolution failures
+            # (e.g., tiktoken requires glibc 2.28+ which old systems don't have)
             stdout_all, stderr, ec = await self.ssh.run(
+                f"{remote_python} -m pip install --break-system-packages --upgrade "
+                f"--ignore-installed --prefer-binary --target {venv}/lib "
+                f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1 || true", timeout=300)
+            # Then install the main packages (they'll find deps already installed)
+            stdout2, stderr2, ec2 = await self.ssh.run(
                 f"{remote_python} -m pip install --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{self.tmpl['pip_package']} 2>&1", timeout=300)
-            if ec != 0:
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
-                           detail=(stdout_all + "\n" + stderr).strip()[-2000:])
-                return
+            if ec2 != 0:
+                # Check if the core packages actually installed despite errors
+                check_out, _, _ = await self.ssh.run(
+                    f"PYTHONPATH={venv}/lib {remote_python} -c 'import openhands.agent_server; print(\"OK\")' 2>&1",
+                    timeout=10)
+                if "OK" not in check_out:
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
+                               detail=(stdout2 + "\n" + stderr2).strip()[-2000:])
+                    return
+                else:
+                    logger.warning("Some optional packages failed to install, but core SDK is OK")
             # >>> CUSTOM: HiClaw — wrapper script that patches PUBLIC_SKILLS_REPO <<<
             # Uses a Python launcher script instead of `python -m openhands.agent_server`
             # so we can monkey-patch the SDK constant before the server starts.
