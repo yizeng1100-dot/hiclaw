@@ -407,11 +407,11 @@ class MachineManager:
             await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
             await asyncio.sleep(1)
 
-        # Step 2: Ensure workspace exists
-        await ssh.run(f"mkdir -p {machine.workspace}")
+        # Step 2: Ensure workspace and log dirs exist
+        await ssh.run(f"mkdir -p {machine.workspace} $HOME/.hiclaw/logs $HOME/.hiclaw/tmp")
 
         # Step 3: Start in background
-        log_file = f"/tmp/agent-server-{machine.id}.log"
+        log_file = f"$HOME/.hiclaw/logs/agent-server-{machine.id}.log"
         # no_proxy: corporate proxies intercept localhost + app-server IP connections
         app_ip = os.environ.get('HICLAW_APP_IP', '')
         no_proxy_list = f"localhost,127.0.0.1{f',{app_ip}' if app_ip else ''}"
@@ -491,7 +491,7 @@ class MachineManager:
             return
 
         # >>> CUSTOM: HiClaw — start code-server at $HOME so all workspaces are accessible <<<
-        log_file = f"/tmp/code-server-{machine.id}.log"
+        log_file = f"$HOME/.hiclaw/logs/code-server-{machine.id}.log"
         cmd = (
             f"no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 "
             f"{cs_bin} --port {cs_port} --host 0.0.0.0 "
@@ -517,7 +517,7 @@ class MachineManager:
     async def _wait_healthy(self, ssh: SSHClient, machine: MachineInfo, timeout: int = 180) -> None:
         """Wait for agent-server to become healthy."""
         port = machine.agent_server_port
-        log_file = f"/tmp/agent-server-{machine.id}.log"
+        log_file = f"$HOME/.hiclaw/logs/agent-server-{machine.id}.log"
         start = asyncio.get_event_loop().time()
         attempt = 0
         # Wait a few seconds before first check — agent-server needs time to import modules

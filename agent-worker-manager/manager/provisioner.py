@@ -63,6 +63,14 @@ class Provisioner:
     async def provision(self) -> AsyncGenerator[ProvisionEvent, None]:
         """Run all provisioning steps. Each step checks remote state first, skips if already done."""
 
+        # >>> CUSTOM: HiClaw — resolve remote $HOME and create temp/logs dirs <<<
+        home_out, _, _ = await self.ssh.run("echo $HOME", timeout=5)
+        remote_home = home_out.strip() or "/root"
+        remote_tmp = f"{remote_home}/.hiclaw/tmp"
+        remote_logs = f"{remote_home}/.hiclaw/logs"
+        await self.ssh.run(f"mkdir -p {remote_tmp} {remote_logs}", timeout=5)
+        # >>> END CUSTOM <<<
+
         # ── Step 1: Python ──
         # Check: standalone 3.12 exists? OR system python >= 3.12?
         standalone_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12".replace("$HOME", "~")
@@ -112,11 +120,11 @@ class Provisioner:
                         ))
                 self._broadcast(_evt(ProvisionStep.INSTALL_PYTHON, "started",
                                      detail=f"Uploading Python 3.12 ({tar_size_mb}MB)"))
-                await self.ssh.upload_file(python_tar, "/tmp/python3-standalone.tar.gz",
+                await self.ssh.upload_file(python_tar, f"{remote_tmp}/python3-standalone.tar.gz",
                                            progress_callback=_py_progress)
                 self._broadcast(_evt(ProvisionStep.INSTALL_PYTHON, "started",
                                      detail="Extracting..."))
-                await self.ssh.run(f"mkdir -p {REMOTE_PYTHON_INSTALL_PATH} && tar xzf /tmp/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm /tmp/python3-standalone.tar.gz", timeout=120)
+                await self.ssh.run(f"mkdir -p {REMOTE_PYTHON_INSTALL_PATH} && tar xzf {remote_tmp}/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm {remote_tmp}/python3-standalone.tar.gz", timeout=120)
                 # Override system python3/pip3 with 3.12 — put in front of PATH
                 await self.ssh.run(
                     f"mkdir -p $HOME/.local/bin && "
@@ -176,12 +184,12 @@ class Provisioner:
                         pct = int(sent * 100 / total) if total else 0
                         self._broadcast(_evt(ProvisionStep.SCP_DEPENDENCIES, "started",
                                              detail=f"{sent_mb}/{archive_size_mb}MB ({pct}%)"))
-                await self.ssh.upload_file(wheels_archive, "/tmp/agent-wheels.tar.gz",
+                await self.ssh.upload_file(wheels_archive, f"{remote_tmp}/agent-wheels.tar.gz",
                                            progress_callback=_on_progress)
                 await self.ssh.run(
                     f"mkdir -p {REMOTE_DEPS_PATH} && "
-                    f"tar xzf /tmp/agent-wheels.tar.gz -C {REMOTE_DEPS_PATH}/ && "
-                    f"rm -f /tmp/agent-wheels.tar.gz", timeout=60)
+                    f"tar xzf {remote_tmp}/agent-wheels.tar.gz -C {REMOTE_DEPS_PATH}/ && "
+                    f"rm -f {remote_tmp}/agent-wheels.tar.gz", timeout=60)
                 os.remove(wheels_archive)
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "completed", detail=f"{archive_size_mb}MB uploaded")
 
@@ -244,13 +252,13 @@ class Provisioner:
                         pct = int(sent * 100 / total) if total else 0
                         self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started",
                                              detail=f"Uploading {sent_mb}/{cs_size_mb}MB ({pct}%)"))
-                await self.ssh.upload_file(cs_tar, f"/tmp/{CS_FILE}", progress_callback=_cs_progress)
+                await self.ssh.upload_file(cs_tar, f"{remote_tmp}/{CS_FILE}", progress_callback=_cs_progress)
                 self._broadcast(_evt(ProvisionStep.INSTALL_CODE_SERVER, "started", detail="Extracting..."))
                 await self.ssh.run(
                     f"mkdir -p {REMOTE_CODE_SERVER_PATH} && "
-                    f"tar xzf /tmp/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
+                    f"tar xzf {remote_tmp}/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && "
                     f"mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && "
-                    f"rm -f /tmp/{CS_FILE}", timeout=60)
+                    f"rm -f {remote_tmp}/{CS_FILE}", timeout=60)
                 if await self._check_remote(f"test -f {REMOTE_CODE_SERVER_PATH}/bin/code-server"):
                     yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed")
                 else:
