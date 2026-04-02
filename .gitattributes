@@ -5,3 +5,10 @@
 # Git incorrectly thinks some media is text
 *.png -text
 *.mp4 -text
+# >>> CUSTOM: HiClaw — binary files must not have line-ending conversion <<<
+*.whl binary
+*.bundle binary
+*.tar.gz binary
+*.gz binary
+*.zip binary
+# >>> END CUSTOM <<<
