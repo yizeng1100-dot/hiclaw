@@ -10,6 +10,93 @@ import { MachineProvisioningPanel } from "#/components/features/custom/machine-p
 import axios from "axios";
 // >>> END CUSTOM <<<
 
+// >>> CUSTOM: HiClaw — workspace autocomplete component <<<
+function WorkspaceInput({
+  value, onChange, config, workerManagerUrl, inputCls,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  config: { host: string; port: number; username: string; password: string };
+  workerManagerUrl: string;
+  inputCls: string;
+}) {
+  const [suggestions, setSuggestions] = React.useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+  const wrapperRef = React.useRef<HTMLDivElement>(null);
+
+  const fetchDirs = React.useCallback(async () => {
+    if (!config.host || !config.username || !config.password) return;
+    setLoading(true);
+    try {
+      const resp = await axios.post(`${workerManagerUrl}/api/list-dirs`, {
+        host: config.host, port: config.port,
+        username: config.username, password: config.password,
+        mode: "host", template: "openhands", workspace: "",
+      }, { timeout: 15000 });
+      setSuggestions(resp.data?.dirs || []);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, [config.host, config.port, config.username, config.password, workerManagerUrl]);
+
+  React.useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node))
+        setShowSuggestions(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filtered = value
+    ? suggestions.filter((s) => s.toLowerCase().includes(value.toLowerCase()))
+    : suggestions;
+
+  const handleFocus = () => {
+    if (suggestions.length === 0 && config.host && config.password) fetchDirs();
+    setShowSuggestions(true);
+  };
+
+  const handleSelect = (dir: string) => {
+    const now = new Date();
+    const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+    onChange(`${dir}/workspace_${ts}`);
+    setShowSuggestions(false);
+  };
+
+  return (
+    <div className="flex-1" ref={wrapperRef}>
+      <label className="block text-xs text-neutral-500 mb-1">Workspace</label>
+      <div className="relative">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={handleFocus}
+          placeholder="/home/user/project"
+          className={inputCls}
+        />
+        {showSuggestions && (filtered.length > 0 || loading) && (
+          <div className="absolute left-0 right-0 bottom-full mb-1 max-h-40 overflow-y-auto bg-neutral-800 border border-neutral-600 rounded-lg shadow-lg z-50">
+            {loading && <div className="px-3 py-2 text-xs text-neutral-500">Loading...</div>}
+            {filtered.map((dir) => (
+              <button
+                key={dir}
+                type="button"
+                onClick={() => handleSelect(dir)}
+                className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-700 transition truncate"
+              >
+                {dir}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// >>> END CUSTOM <<<
+
 export function CreateConversationButton() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -228,48 +315,15 @@ export function CreateConversationButton() {
                         className={inputCls} />
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <input type="hidden" value="host" />
-                    <div className="flex-1">
-                      <label className="block text-xs text-neutral-500 mb-1">
-                        Workspace
-                        {config.host && config.password && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                const resp = await axios.post(`${workerManagerUrl}/api/list-dirs`, {
-                                  host: config.host, port: config.port,
-                                  username: config.username, password: config.password,
-                                  mode: "host", template: "openhands", workspace: "",
-                                }, { timeout: 15000 });
-                                const dirs: string[] = resp.data?.dirs || [];
-                                if (dirs.length > 0) {
-                                  const sel = document.getElementById("hiclaw-dir-select") as HTMLSelectElement;
-                                  if (sel) { sel.innerHTML = '<option value="">-- Select --</option>' + dirs.map((d: string) => `<option value="${d}">${d}</option>`).join(''); sel.style.display = 'block'; }
-                                }
-                              } catch { /* ignore */ }
-                            }}
-                            className="ml-2 text-blue-400 hover:text-blue-300 text-[10px]"
-                          >
-                            Browse
-                          </button>
-                        )}
-                      </label>
-                      <input type="text" value={config.workspace}
-                        onChange={(e) => setConfig({ workspace: e.target.value })}
-                        placeholder="/home/user/project"
-                        className={inputCls} />
-                      <select
-                        id="hiclaw-dir-select"
-                        style={{ display: 'none' }}
-                        onChange={(e) => { if (e.target.value) setConfig({ workspace: e.target.value }); }}
-                        className="w-full mt-1 px-2.5 py-1.5 bg-neutral-900 border border-neutral-600 rounded text-neutral-200 text-xs"
-                      >
-                        <option value="">-- Select --</option>
-                      </select>
-                    </div>
-                  </div>
+                  {/* >>> CUSTOM: HiClaw — workspace autocomplete <<< */}
+                  <WorkspaceInput
+                    value={config.workspace}
+                    onChange={(v: string) => setConfig({ workspace: v })}
+                    config={config}
+                    workerManagerUrl={workerManagerUrl}
+                    inputCls={inputCls}
+                  />
+                  {/* >>> END CUSTOM <<< */}
                 </div>
                 <div className="flex justify-end gap-3">
                   <button type="button" onClick={() => setShowModal(false)}
