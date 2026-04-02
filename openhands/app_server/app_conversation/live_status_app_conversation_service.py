@@ -426,6 +426,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 # >>> CUSTOM: HiClaw <<<
                 remote_agent_url=request.remote_agent_url if hasattr(request, 'remote_agent_url') else None,
                 remote_working_dir=working_dir,
+                remote_host=_remote_host or None,
                 # >>> END CUSTOM <<<
             )
             await self.app_conversation_info_service.save_app_conversation_info(

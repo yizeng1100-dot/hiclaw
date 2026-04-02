@@ -154,15 +154,20 @@ async def _get_agent_server_context(
                     raise Exception('not healthy')
         except Exception:
             # Stored URL is dead (tunnel port changed after restart). Get current one.
+            # MUST match by remote_host to avoid routing to wrong machine
+            conv_host = getattr(conversation, 'remote_host', None)
             try:
                 async with _httpx.AsyncClient() as _client:
                     _resp = await _client.get('http://localhost:9090/api/machines', timeout=3)
                     for _m in _resp.json():
-                        if _m.get('status') == 'ready' and _m.get('proxy_url'):
-                            agent_url = _m['proxy_url']
-                            # Update stored URL for future use
-                            conversation.remote_agent_url = agent_url
-                            break
+                        if not _m.get('proxy_url') or _m.get('status') != 'ready':
+                            continue
+                        # Match by host IP if we have it stored
+                        if conv_host and _m.get('host') != conv_host:
+                            continue
+                        agent_url = _m['proxy_url']
+                        conversation.remote_agent_url = agent_url
+                        break
             except Exception:
                 pass
 

@@ -80,6 +80,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             _new_cols = {
                 'remote_working_dir': 'TEXT',
                 'runtime_mode': 'TEXT',
+                'remote_host': 'TEXT',
             }
             for col, typ in _new_cols.items():
                 if col not in _existing:

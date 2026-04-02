@@ -94,6 +94,7 @@ class AppConversationInfo(BaseModel):
     # >>> CUSTOM: HiClaw <<<
     remote_agent_url: str | None = None
     remote_working_dir: str | None = None
+    remote_host: str | None = None  # IP of the remote machine this conversation belongs to
     # >>> END CUSTOM <<<
 
     created_at: datetime = Field(default_factory=utc_now)
