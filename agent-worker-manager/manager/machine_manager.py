@@ -414,6 +414,13 @@ class MachineManager:
         log_file = f"$HOME/.hiclaw/logs/agent-server-{machine.id}.log"
         # no_proxy: corporate proxies intercept localhost + app-server IP connections
         app_ip = os.environ.get('HICLAW_APP_IP', '')
+        if not app_ip:
+            # Try to detect app-server IP from SSH connection (remote sees us as this IP)
+            try:
+                ip_out, _, _ = await ssh.run("echo $SSH_CLIENT | awk '{print $1}'", timeout=3)
+                app_ip = ip_out.strip()
+            except Exception:
+                pass
         no_proxy_list = f"localhost,127.0.0.1{f',{app_ip}' if app_ip else ''}"
         env_vars = f"no_proxy={no_proxy_list} NO_PROXY={no_proxy_list} "
         # >>> CUSTOM: HiClaw — use user home for FILE_STORE_PATH (not workspace-specific) <<<
