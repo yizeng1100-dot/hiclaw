@@ -384,11 +384,16 @@ class MachineManager:
             # One agent-server serves ALL workspaces. Each conversation specifies
             # its own working_dir via StartConversationRequest.
             # But check if the running agent-server uses the correct FILE_STORE_PATH
+            # Check if the running agent-server uses workspace-specific FILE_STORE_PATH (old pattern)
+            # Old pattern: FILE_STORE_PATH=/root/workspace_xxx/.hiclaw
+            # New pattern: FILE_STORE_PATH=/root/.hiclaw (or $HOME/.hiclaw)
             check_stdout, _, _ = await ssh.run(
                 f"ps aux | grep 'agent-server.*--port {port}' | grep -v grep | head -1", timeout=5)
-            if '.hiclaw' in check_stdout and 'FILE_STORE_PATH=$HOME/.hiclaw' not in check_stdout:
-                # Old agent-server with workspace-specific FILE_STORE_PATH — kill and restart
-                logger.info(f"Agent-server running with old FILE_STORE_PATH, restarting with $HOME/.hiclaw")
+            import re
+            old_store = re.search(r'FILE_STORE_PATH=\S*/workspace[^/]*/\.hiclaw', check_stdout)
+            if old_store:
+                # Old agent-server with workspace-specific path — kill and restart
+                logger.info(f"Agent-server running with old FILE_STORE_PATH ({old_store.group()}), restarting")
                 await ssh.run(f"pkill -f 'agent-server.*--port {port}' 2>/dev/null || true", timeout=5)
                 await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
                 await asyncio.sleep(2)
