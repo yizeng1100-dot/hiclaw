@@ -23,20 +23,36 @@ function WorkspaceInput({
   const [suggestions, setSuggestions] = React.useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
   const wrapperRef = React.useRef<HTMLDivElement>(null);
 
   const fetchDirs = React.useCallback(async () => {
-    if (!config.host || !config.username || !config.password) return;
+    if (!config.host || !config.username || !config.password) {
+      setError("Please fill in Host, Username and Password first");
+      return;
+    }
     setLoading(true);
+    setError(null);
     try {
       const resp = await axios.post(`${workerManagerUrl}/api/list-dirs`, {
         host: config.host, port: config.port,
         username: config.username, password: config.password,
         mode: "host", template: "openhands", workspace: "",
       }, { timeout: 15000 });
-      setSuggestions(resp.data?.dirs || []);
-    } catch { /* silent */ }
-    finally { setLoading(false); }
+      const dirs = resp.data?.dirs || [];
+      setSuggestions(dirs);
+      if (dirs.length === 0) setError("No directories found on remote machine");
+    } catch (e: unknown) {
+      const msg = axios.isAxiosError(e)
+        ? e.response?.status === 401 || e.response?.status === 403
+          ? "Authentication failed — check username/password"
+          : e.code === "ECONNABORTED"
+            ? "Connection timeout — check host IP and network"
+            : e.response?.data?.detail || e.message || "Connection failed"
+        : "Connection failed — check host IP and port";
+      setError(msg);
+      setSuggestions([]);
+    } finally { setLoading(false); }
   }, [config.host, config.port, config.username, config.password, workerManagerUrl]);
 
   React.useEffect(() => {
@@ -76,9 +92,15 @@ function WorkspaceInput({
           placeholder="/home/user/project"
           className={inputCls}
         />
-        {showSuggestions && (filtered.length > 0 || loading) && (
+        {showSuggestions && (filtered.length > 0 || loading || error) && (
           <div className="absolute left-0 right-0 bottom-full mb-1 max-h-40 overflow-y-auto bg-neutral-800 border border-neutral-600 rounded-lg shadow-lg z-50">
-            {loading && <div className="px-3 py-2 text-xs text-neutral-500">Loading...</div>}
+            {loading && <div className="px-3 py-2 text-xs text-neutral-500">Connecting to {config.host}...</div>}
+            {error && !loading && (
+              <div className="px-3 py-2 text-xs text-red-400 flex items-center gap-1.5">
+                <span className="shrink-0">&#9888;</span>
+                <span>{error}</span>
+              </div>
+            )}
             {filtered.map((dir) => (
               <button
                 key={dir}
