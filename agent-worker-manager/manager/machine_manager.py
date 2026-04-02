@@ -383,10 +383,19 @@ class MachineManager:
             # >>> CUSTOM: HiClaw — reuse agent-server regardless of workspace <<<
             # One agent-server serves ALL workspaces. Each conversation specifies
             # its own working_dir via StartConversationRequest.
-            logger.info(f"Agent-server already healthy on port {port}, reusing for workspace {machine.workspace}")
-            # Ensure workspace directory exists
-            await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
-            return
+            # But check if the running agent-server uses the correct FILE_STORE_PATH
+            check_stdout, _, _ = await ssh.run(
+                f"ps aux | grep 'agent-server.*--port {port}' | grep -v grep | head -1", timeout=5)
+            if '.hiclaw' in check_stdout and 'FILE_STORE_PATH=$HOME/.hiclaw' not in check_stdout:
+                # Old agent-server with workspace-specific FILE_STORE_PATH — kill and restart
+                logger.info(f"Agent-server running with old FILE_STORE_PATH, restarting with $HOME/.hiclaw")
+                await ssh.run(f"pkill -f 'agent-server.*--port {port}' 2>/dev/null || true", timeout=5)
+                await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
+                await asyncio.sleep(2)
+            else:
+                logger.info(f"Agent-server already healthy on port {port}, reusing for workspace {machine.workspace}")
+                await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
+                return
             # >>> END CUSTOM <<<
         else:
             # Port not healthy — kill any leftover agent-server process on this port
