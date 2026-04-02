@@ -61,8 +61,11 @@ export const useUnifiedVSCodeUrl = () => {
                 m.code_server_port > 0 && m.status === "ready",
             );
             if (machine?.host && machine?.code_server_port) {
+              // >>> CUSTOM: HiClaw — use conversation's own workspace path <<<
+              const folder = appConversation?.remote_working_dir || machine.workspace || "/root/workspace";
+              // >>> END CUSTOM <<<
               return {
-                url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(machine.workspace || "/root/workspace")}`,
+                url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(folder)}`,
                 error: null,
               };
             }
@@ -120,10 +123,12 @@ export const useUnifiedVSCodeUrl = () => {
         error: t(I18nKey.VSCODE$URL_NOT_AVAILABLE),
       };
     },
+    // >>> CUSTOM: HiClaw — remote sandboxes don't need runtime to be ready <<<
     enabled:
-      runtimeIsReady &&
+      (runtimeIsReady || sandboxId?.startsWith("remote-")) &&
       !!conversationId &&
-      (!isV1Conversation || !!sandboxesQuery.data),
+      (!isV1Conversation || !!sandboxesQuery.data || sandboxId?.startsWith("remote-")),
+    // >>> END CUSTOM <<<
     refetchOnMount: true,
     retry: 3,
   });

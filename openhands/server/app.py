@@ -61,15 +61,37 @@ def combine_lifespans(*lifespans):
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # >>> CUSTOM: HiClaw — seed skills from custom/skill_examples/ on startup <<<
+    # >>> CUSTOM: HiClaw — DB migration + seed skills on startup <<<
     try:
         from custom.skill_mgmt.seed import seed_skills
+        import logging as _logging
+        import os as _os
+        import sqlite3 as _sqlite3
+        from pathlib import Path as _Path
+
+        # Auto-migrate: add missing columns to conversation_metadata
+        _db_path = _os.environ.get('OH_PERSISTENCE_DIR', str(_Path.home() / '.openhands'))
+        _db_file = str(_Path(_db_path) / 'openhands.db')
+        if _Path(_db_file).exists():
+            _conn = _sqlite3.connect(_db_file)
+            _cur = _conn.cursor()
+            _cur.execute('PRAGMA table_info(conversation_metadata)')
+            _existing = {r[1] for r in _cur.fetchall()}
+            _new_cols = {
+                'remote_working_dir': 'TEXT',
+                'runtime_mode': 'TEXT',
+            }
+            for col, typ in _new_cols.items():
+                if col not in _existing:
+                    _cur.execute(f'ALTER TABLE conversation_metadata ADD COLUMN {col} {typ}')
+                    _logging.getLogger(__name__).info(f'DB migration: added column {col}')
+            _conn.commit()
+            _conn.close()
 
         seed_skills()
     except Exception as e:
         import logging
-
-        logging.getLogger(__name__).warning(f'Skill seed skipped: {e}')
+        logging.getLogger(__name__).warning(f'HiClaw startup: {e}')
     # >>> END CUSTOM <<<
     async with conversation_manager:
         yield

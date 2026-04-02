@@ -106,13 +106,16 @@ function AppContent() {
   ]);
 
   // 2. Task Error Display Effect
+  // >>> CUSTOM: HiClaw — suppress for remote sandboxes (they recover via Worker Manager) <<<
+  const isRemoteConversation = conversation?.sandbox_id?.startsWith("remote-");
   React.useEffect(() => {
-    if (isTask && taskStatus === "ERROR") {
+    if (isTask && taskStatus === "ERROR" && !isRemoteConversation) {
       displayErrorToast(
         taskDetail || t(I18nKey.CONVERSATION$FAILED_TO_START_FROM_TASK),
       );
     }
-  }, [isTask, taskStatus, taskDetail, t]);
+  }, [isTask, taskStatus, taskDetail, t, isRemoteConversation]);
+  // >>> END CUSTOM <<<
 
   // 3. Handle conversation not found
   // NOTE: Resuming STOPPED conversations is handled by useSandboxRecovery in WebSocketProviderWrapper

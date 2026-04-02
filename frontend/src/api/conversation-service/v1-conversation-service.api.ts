@@ -71,6 +71,7 @@ class V1ConversationService {
     // >>> CUSTOM: HiClaw <<<
     remote_agent_url?: string,
     remote_session_api_key?: string,
+    remote_working_dir?: string,
     // >>> END CUSTOM <<<
   ): Promise<V1AppConversationStartTask> {
     const body: V1AppConversationStartRequest = {
@@ -85,6 +86,7 @@ class V1ConversationService {
       // >>> CUSTOM: HiClaw <<<
       remote_agent_url: remote_agent_url || null,
       remote_session_api_key: remote_session_api_key || null,
+      remote_working_dir: remote_working_dir || null,
       // >>> END CUSTOM <<<
     };
 

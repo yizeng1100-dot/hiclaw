@@ -102,6 +102,7 @@ class StoredConversationMetadata(Base):  # type: ignore
     public = Column(Boolean, nullable=True, index=True)
     # >>> CUSTOM: HiClaw <<<
     remote_agent_url = Column(String, nullable=True)
+    remote_working_dir = Column(String, nullable=True)
     # >>> END CUSTOM <<<
 
 
@@ -361,6 +362,7 @@ class SQLAppConversationInfoService(AppConversationInfoService):
             public=info.public,
             # >>> CUSTOM: HiClaw <<<
             remote_agent_url=info.remote_agent_url,
+            remote_working_dir=info.remote_working_dir,
             # >>> END CUSTOM <<<
         )
 
@@ -551,6 +553,7 @@ class SQLAppConversationInfoService(AppConversationInfoService):
             public=stored.public,
             # >>> CUSTOM: HiClaw <<<
             remote_agent_url=getattr(stored, 'remote_agent_url', None),
+            remote_working_dir=getattr(stored, 'remote_working_dir', None),
             # >>> END CUSTOM <<<
             created_at=created_at,
             updated_at=updated_at,

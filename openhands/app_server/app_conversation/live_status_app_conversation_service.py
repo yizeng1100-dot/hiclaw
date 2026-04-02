@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -256,11 +257,16 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         try:
             # >>> CUSTOM: HiClaw — remote worker support <<<
             if request.remote_agent_url:
-                # Skip sandbox creation — use external agent-server directly
+                # Use existing remote agent-server (shared across conversations).
+                # Each conversation gets its own working_dir passed via StartConversationRequest.
+                # The agent-server does NOT need to be restarted per conversation.
                 _logger.info(f'[STARTUP] Using remote agent-server: {request.remote_agent_url}')
                 agent_server_url = request.remote_agent_url.rstrip('/')
                 session_api_key = request.remote_session_api_key or ''
-                sandbox_id = f'remote-{uuid4().hex[:8]}'
+
+                # Reuse existing sandbox_id for the same agent-server URL,
+                # so multiple conversations share one remote agent-server
+                sandbox_id = f'remote-{hashlib.md5(agent_server_url.encode()).hexdigest()[:8]}'
                 task.sandbox_id = sandbox_id
                 task.status = AppConversationStartTaskStatus.STARTING_CONVERSATION
                 task.agent_server_url = agent_server_url
@@ -268,22 +274,27 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
                 conversation_id = request.conversation_id or uuid4()
 
-                # >>> CUSTOM: HiClaw — use actual workspace from Worker Manager <<<
-                working_dir = '/workspace/project'  # default fallback
+                # Working dir: use explicit value from request, or query Worker Manager
+                working_dir = getattr(request, 'remote_working_dir', None) or ''
                 _remote_host = ''
                 _remote_user = ''
+                # Always query Worker Manager for host/user info (needed for title)
                 try:
-                    from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+                    from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL, DEFAULT_WORKSPACE
                     _resp = await self.httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
                     for _m in _resp.json():
                         if _m.get('status') == 'ready':
-                            working_dir = _m.get('workspace', working_dir)
                             _remote_host = _m.get('host', '')
                             _remote_user = _m.get('username', '')
+                            if not working_dir:
+                                working_dir = _m.get('workspace', '')
                             break
+                    if not working_dir:
+                        working_dir = DEFAULT_WORKSPACE
                 except Exception:
-                    pass
-                _logger.info(f'[STARTUP] Remote working_dir={working_dir}')
+                    if not working_dir:
+                        working_dir = '/workspace/project'
+                _logger.info(f'[STARTUP] Remote working_dir={working_dir}, sandbox_id={sandbox_id}')
                 # >>> END CUSTOM <<<
 
                 remote_workspace = AsyncRemoteWorkspace(
@@ -414,6 +425,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 parent_conversation_id=request.parent_conversation_id,
                 # >>> CUSTOM: HiClaw <<<
                 remote_agent_url=request.remote_agent_url if hasattr(request, 'remote_agent_url') else None,
+                remote_working_dir=working_dir,
                 # >>> END CUSTOM <<<
             )
             await self.app_conversation_info_service.save_app_conversation_info(

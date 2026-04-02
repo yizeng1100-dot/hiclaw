@@ -41,6 +41,7 @@ export const useCreateConversation = () => {
   // >>> CUSTOM: HiClaw <<<
   const remoteEnabled = useRemoteWorkerStore((s) => s.enabled);
   const proxyUrl = useRemoteWorkerStore((s) => s.proxyUrl);
+  const remoteWorkspace = useRemoteWorkerStore((s) => s.config.workspace);
   // >>> END CUSTOM <<<
 
   return useMutation({
@@ -58,8 +59,9 @@ export const useCreateConversation = () => {
         agentType,
       } = variables;
 
-      // >>> CUSTOM: HiClaw — use proxyUrl from store (machine already provisioned) <<<
+      // >>> CUSTOM: HiClaw — use proxyUrl and workspace from store <<<
       const remoteAgentUrl = remoteEnabled && proxyUrl ? proxyUrl : undefined;
+      const remoteWorkingDir = remoteEnabled && remoteWorkspace ? remoteWorkspace : undefined;
       // >>> END CUSTOM <<<
 
       const useV1 = !!settings?.v1_enabled && !createMicroagent;
@@ -77,6 +79,8 @@ export const useCreateConversation = () => {
           agentType,
           // >>> CUSTOM: HiClaw <<<
           remoteAgentUrl,
+          undefined, // remote_session_api_key
+          remoteWorkingDir,
           // >>> END CUSTOM <<<
         );
 

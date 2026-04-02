@@ -143,13 +143,35 @@ async def _get_agent_server_context(
     # >>> CUSTOM: HiClaw — remote worker shortcut <<<
     if (conversation.sandbox_id and conversation.sandbox_id.startswith('remote-')
             and conversation.remote_agent_url):
-        # For remote workers, use the stored remote_agent_url directly
+        import httpx as _httpx
+        agent_url = conversation.remote_agent_url
+
+        # Check if stored URL still works; if not, get current tunnel from Worker Manager
+        try:
+            async with _httpx.AsyncClient() as _client:
+                _health = await _client.get(f'{agent_url}/health', timeout=3)
+                if _health.status_code != 200:
+                    raise Exception('not healthy')
+        except Exception:
+            # Stored URL is dead (tunnel port changed after restart). Get current one.
+            try:
+                async with _httpx.AsyncClient() as _client:
+                    _resp = await _client.get('http://localhost:9090/api/machines', timeout=3)
+                    for _m in _resp.json():
+                        if _m.get('status') == 'ready' and _m.get('proxy_url'):
+                            agent_url = _m['proxy_url']
+                            # Update stored URL for future use
+                            conversation.remote_agent_url = agent_url
+                            break
+            except Exception:
+                pass
+
         sandbox_spec = await sandbox_spec_service.get_default_sandbox_spec()
         return AgentServerContext(
             conversation=conversation,
             sandbox=None,
             sandbox_spec=sandbox_spec,
-            agent_server_url=conversation.remote_agent_url,
+            agent_server_url=agent_url,
             session_api_key='',
         )
     # >>> END CUSTOM <<<

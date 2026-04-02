@@ -48,19 +48,17 @@ class MachineManager:
             if machine.status == MachineStatus.READY:
                 machine.active_conversations += 1
                 ssh = self._ssh_clients.get(machine_id)
-                # Update workspace if changed — restart agent-server + code-server
+                # >>> CUSTOM: HiClaw — workspace change no longer restarts agent-server <<<
+                # One agent-server serves all workspaces. Just update the record
+                # and ensure the new workspace directory exists.
                 if req.workspace != machine.workspace:
                     old_workspace = machine.workspace
                     machine.workspace = req.workspace
                     logger.info(f"Machine {machine_id} workspace changed: {old_workspace} → {req.workspace}")
                     if ssh and ssh.connected:
-                        # Restart agent-server with new workspace
-                        await self._start_agent_server(ssh, machine)
-                        # Restart code-server with new workspace
-                        port = machine.agent_server_port
-                        await ssh.run(f"pkill -f 'code-server.*--port {machine.code_server_port}' 2>/dev/null || true", timeout=5)
-                        await asyncio.sleep(1)
-                        await self._start_code_server(ssh, machine)
+                        await ssh.run(f"mkdir -p {req.workspace}", timeout=5)
+                        # code-server runs at $HOME, no restart needed
+                # >>> END CUSTOM <<<
                 # Always sync skills on reconnect
                 if ssh and ssh.connected:
                     asyncio.create_task(self._clone_skills_repo(ssh, machine))
@@ -382,16 +380,14 @@ class MachineManager:
         port_healthy = health_out.strip() == "200"
 
         if port_healthy:
-            # Something healthy on the port — check if it's our agent-server with right workspace
-            check_stdout, _, _ = await ssh.run(
-                f"ps aux | grep 'agent-server.*--port {port}' | grep -v grep | head -1", timeout=5)
-            if machine.workspace in check_stdout:
-                logger.info(f"Agent-server already running in {machine.workspace}, reusing")
-                return
-            else:
-                logger.info(f"Port {port} occupied (wrong workspace or other process), killing")
-                await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || pkill -f 'agent-server.*--port {port}' || true", timeout=5)
-                await asyncio.sleep(2)
+            # >>> CUSTOM: HiClaw — reuse agent-server regardless of workspace <<<
+            # One agent-server serves ALL workspaces. Each conversation specifies
+            # its own working_dir via StartConversationRequest.
+            logger.info(f"Agent-server already healthy on port {port}, reusing for workspace {machine.workspace}")
+            # Ensure workspace directory exists
+            await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
+            return
+            # >>> END CUSTOM <<<
         else:
             # Port not healthy — kill any leftover agent-server process on this port
             await ssh.run(f"pkill -f 'agent-server.*--port {port}' 2>/dev/null || true", timeout=5)
@@ -400,7 +396,7 @@ class MachineManager:
             await asyncio.sleep(1)
 
         # Step 2: Ensure workspace exists
-        await ssh.run(f"mkdir -p {machine.workspace}/.hiclaw")
+        await ssh.run(f"mkdir -p {machine.workspace}")
 
         # Step 3: Start in background
         log_file = f"/tmp/agent-server-{machine.id}.log"
@@ -408,8 +404,9 @@ class MachineManager:
         app_ip = os.environ.get('HICLAW_APP_IP', '')
         no_proxy_list = f"localhost,127.0.0.1{f',{app_ip}' if app_ip else ''}"
         env_vars = f"no_proxy={no_proxy_list} NO_PROXY={no_proxy_list} "
-        # Store conversation data in workspace/.hiclaw/ (separate from project files)
-        env_vars += f"FILE_STORE_PATH={machine.workspace}/.hiclaw "
+        # >>> CUSTOM: HiClaw — use user home for FILE_STORE_PATH (not workspace-specific) <<<
+        # This allows one agent-server to serve multiple workspaces
+        env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
         # Read CoMagic token from remote machine's ~/.comagic/userToken.json
@@ -430,7 +427,8 @@ class MachineManager:
                 logger.info(f"CoMagic token loaded for {machine.host}")
         except Exception:
             pass
-        cmd = f"cd {machine.workspace} && {env_vars}{binary} --port {port}"
+        # >>> CUSTOM: HiClaw — cd to $HOME, not workspace (one agent-server for all workspaces) <<<
+        cmd = f"cd $HOME && {env_vars}{binary} --port {port}"
         await ssh.run_background(cmd, log_file=log_file)
         logger.info(f"Started agent-server on {machine.host}:{port}")
 
@@ -469,14 +467,15 @@ class MachineManager:
             machine.code_server_port = cs_port
             return
 
-        # Start code-server with full path, no auth, bound to workspace
+        # >>> CUSTOM: HiClaw — start code-server at $HOME so all workspaces are accessible <<<
         log_file = f"/tmp/code-server-{machine.id}.log"
         cmd = (
             f"no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 "
             f"{cs_bin} --port {cs_port} --host 0.0.0.0 "
             f"--auth none --disable-telemetry "
-            f"{machine.workspace}"
+            f"$HOME"
         )
+        # >>> END CUSTOM <<<
         await ssh.run_background(cmd, log_file=log_file)
         machine.code_server_port = cs_port
 

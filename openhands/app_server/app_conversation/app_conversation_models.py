@@ -93,6 +93,7 @@ class AppConversationInfo(BaseModel):
 
     # >>> CUSTOM: HiClaw <<<
     remote_agent_url: str | None = None
+    remote_working_dir: str | None = None
     # >>> END CUSTOM <<<
 
     created_at: datetime = Field(default_factory=utc_now)
@@ -171,6 +172,10 @@ class AppConversationStartRequest(OpenHandsModel):
         description='External agent-server URL (from Agent Worker Manager). When set, skips local sandbox creation.',
     )
     remote_session_api_key: str | None = Field(default=None)
+    remote_working_dir: str | None = Field(
+        default=None,
+        description='Working directory on the remote machine. If not set, defaults to Worker Manager config.',
+    )
     # >>> END CUSTOM <<<
 
     public: bool | None = None

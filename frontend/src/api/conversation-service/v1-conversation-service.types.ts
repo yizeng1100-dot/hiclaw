@@ -57,6 +57,7 @@ export interface V1AppConversationStartRequest {
   // >>> CUSTOM: HiClaw — remote worker <<<
   remote_agent_url?: string | null;
   remote_session_api_key?: string | null;
+  remote_working_dir?: string | null;
   // >>> END CUSTOM <<<
 }
 
@@ -121,6 +122,9 @@ export interface V1AppConversation {
   conversation_url: string | null;
   session_api_key: string | null;
   public?: boolean;
+  // >>> CUSTOM: HiClaw <<<
+  remote_working_dir?: string | null;
+  // >>> END CUSTOM <<<
 }
 
 export interface V1AppConversationPage {
