@@ -245,22 +245,27 @@ class Provisioner:
                 f"pip setuptools wheel 2>&1 || true", timeout=60)
 
             # Step 2b: Install all wheels with --no-deps first (avoid resolution failures)
+            # Use -q (quiet) to reduce output volume — large output can block SSH channel
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 1/2)...")
             stdout_all, stderr, ec = await self.ssh.run(
-                f"{pip_env} {remote_python} -m pip install --break-system-packages --upgrade "
+                f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1 || true", timeout=300)
-            logger.info(f"Pip pass 1 exit={ec}, output={stdout_all[-500:]}")
+                f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1; echo EXIT_CODE=$?", timeout=600)
+            logger.info(f"Pip pass 1 output tail: {stdout_all[-300:]}")
 
             # Step 2c: Install main packages with deps (they'll find deps from pass 1)
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
             stdout2, stderr2, ec2 = await self.ssh.run(
-                f"{pip_env} {remote_python} -m pip install --break-system-packages --upgrade "
+                f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"{self.tmpl['pip_package']} 2>&1", timeout=300)
-            logger.info(f"Pip pass 2 exit={ec2}, output={stdout2[-500:]}")
+                f"{self.tmpl['pip_package']} 2>&1; echo EXIT_CODE=$?", timeout=600)
+            # Parse real exit code from output (since we used ; instead of &&)
+            ec2 = 1
+            if "EXIT_CODE=0" in stdout2:
+                ec2 = 0
+            logger.info(f"Pip pass 2 output tail: {stdout2[-300:]}")
 
             # Step 2d: Verify core import works
             check_out, _, _ = await self.ssh.run(
