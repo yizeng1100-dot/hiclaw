@@ -84,6 +84,10 @@ async def pause_sandbox(
     sandbox_id: str,
     sandbox_service: SandboxService = sandbox_service_dependency,
 ) -> Success:
+    # >>> CUSTOM: HiClaw — remote sandboxes don't need pause <<<
+    if sandbox_id.startswith('remote-'):
+        return Success()
+    # >>> END CUSTOM <<<
     exists = await sandbox_service.pause_sandbox(sandbox_id)
     if not exists:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
@@ -95,6 +99,10 @@ async def resume_sandbox(
     sandbox_id: str,
     sandbox_service: SandboxService = sandbox_service_dependency,
 ) -> Success:
+    # >>> CUSTOM: HiClaw — remote sandboxes don't need resume <<<
+    if sandbox_id.startswith('remote-'):
+        return Success()
+    # >>> END CUSTOM <<<
     exists = await sandbox_service.resume_sandbox(sandbox_id)
     if not exists:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
