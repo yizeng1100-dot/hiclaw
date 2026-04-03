@@ -71,7 +71,7 @@ export const useUnifiedVSCodeUrl = () => {
               const folder = appConversation?.remote_working_dir || machine.workspace || `/home/${machine.username || "root"}`;
               // >>> END CUSTOM <<<
               return {
-                url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(folder)}`,
+                url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(folder)}&trust=true`,
                 error: null,
               };
             }

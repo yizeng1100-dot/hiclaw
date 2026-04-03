@@ -684,7 +684,7 @@ class MachineManager:
         cmd = (
             f"no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 "
             f"{cs_bin} --port {cs_port} --host 0.0.0.0 "
-            f"--auth none --disable-telemetry "
+            f"--auth none --disable-telemetry --disable-workspace-trust "
             f"$HOME"
         )
         # >>> END CUSTOM <<<
