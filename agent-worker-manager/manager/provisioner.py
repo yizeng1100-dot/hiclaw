@@ -192,6 +192,8 @@ class Provisioner:
                     f"~/.hiclaw/agent-deps/python3-standalone",  # old python path
                     timeout=30)
                 logger.info("Cleaned up broken SDK install (including legacy paths)")
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
+                           detail="Cleanup done. Re-uploading and reinstalling...")
             # >>> END CUSTOM <<<
 
         if not sdk_healthy:
@@ -231,17 +233,21 @@ class Provisioner:
             # Install SDK from wheels
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
 
+            # Pip commands need no_proxy to avoid corporate proxy interference
+            pip_env = "no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1"
+
             # Step 2a: Ensure pip is available
-            await self.ssh.run(f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true", timeout=30)
+            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Setting up pip...")
+            await self.ssh.run(f"{pip_env} {remote_python} -m ensurepip --upgrade 2>/dev/null || true", timeout=30)
             await self.ssh.run(
-                f"{remote_python} -m pip install --break-system-packages --upgrade "
+                f"{pip_env} {remote_python} -m pip install --break-system-packages --upgrade "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"pip setuptools wheel 2>&1 || true", timeout=60)
 
             # Step 2b: Install all wheels with --no-deps first (avoid resolution failures)
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 1/2)...")
             stdout_all, stderr, ec = await self.ssh.run(
-                f"{remote_python} -m pip install --break-system-packages --upgrade "
+                f"{pip_env} {remote_python} -m pip install --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1 || true", timeout=300)
@@ -250,7 +256,7 @@ class Provisioner:
             # Step 2c: Install main packages with deps (they'll find deps from pass 1)
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
             stdout2, stderr2, ec2 = await self.ssh.run(
-                f"{remote_python} -m pip install --break-system-packages --upgrade "
+                f"{pip_env} {remote_python} -m pip install --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{self.tmpl['pip_package']} 2>&1", timeout=300)
