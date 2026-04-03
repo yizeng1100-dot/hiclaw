@@ -506,7 +506,14 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             if sandbox and sandbox.status == SandboxStatus.RUNNING
         ]
         if tasks:
-            sandbox_conversation_infos = await asyncio.gather(*tasks)
+            # >>> CUSTOM: HiClaw — add timeout to prevent one slow sandbox from blocking all <<<
+            sandbox_conversation_infos = await asyncio.gather(
+                *[asyncio.wait_for(t, timeout=5) for t in tasks],
+                return_exceptions=True,
+            )
+            # Filter out exceptions (timeouts, connection errors)
+            sandbox_conversation_infos = [r for r in sandbox_conversation_infos if not isinstance(r, BaseException)]
+            # >>> END CUSTOM <<<
         else:
             sandbox_conversation_infos = []
 
@@ -525,7 +532,10 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     self._get_remote_conversation_info(info)
                 )
         if remote_tasks:
-            remote_results = await asyncio.gather(*remote_tasks, return_exceptions=True)
+            remote_results = await asyncio.gather(
+                *[asyncio.wait_for(t, timeout=5) for t in remote_tasks],
+                return_exceptions=True,
+            )
             for result in remote_results:
                 if isinstance(result, ConversationInfo):
                     conversation_info_by_id[result.id] = result
@@ -588,6 +598,31 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             return []
 
     # >>> CUSTOM: HiClaw <<<
+    _tunnel_cache: dict = {}  # class-level cache: {'port': int|None, 'ts': float}
+
+    def _get_cached_tunnel_port(self) -> int | None:
+        """Get tunnel port from worker-manager with short cache to avoid blocking."""
+        import time
+        cache = LiveStatusAppConversationService._tunnel_cache
+        now = time.time()
+        # Cache for 5 seconds to avoid hammering worker-manager on every conversation
+        if cache.get('ts', 0) > now - 5:
+            return cache.get('port')
+        try:
+            from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+            import httpx as _httpx
+            _resp = _httpx.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=2)
+            for _m in _resp.json():
+                if _m.get('status') == 'ready' and _m.get('tunnel_port'):
+                    cache['port'] = _m['tunnel_port']
+                    cache['ts'] = now
+                    return cache['port']
+        except Exception:
+            pass
+        cache['port'] = None
+        cache['ts'] = now
+        return None
+
     async def _get_remote_conversation_info(
         self,
         info: AppConversationInfo,
@@ -625,22 +660,12 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         if is_remote:
             # For remote workers: sandbox doesn't exist locally.
             # Build conversation_url through the /runtime/{port}/ proxy.
-            # Always use the CURRENT tunnel port from Worker Manager (not the stored one),
-            # because tunnels are lost on service restart.
+            # Use cached tunnel info to avoid blocking the conversation list.
             conversation_url = None
             tunnel_port = None
             sandbox_status = SandboxStatus.PAUSED  # default: assume tunnel is dead
 
-            try:
-                from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
-                import httpx as _httpx
-                _resp = _httpx.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
-                for _m in _resp.json():
-                    if _m.get('status') == 'ready' and _m.get('tunnel_port'):
-                        tunnel_port = _m['tunnel_port']
-                        break
-            except Exception:
-                pass
+            tunnel_port = self._get_cached_tunnel_port()
 
             if tunnel_port:
                 conversation_url = f'/runtime/{tunnel_port}/api/conversations/{app_conversation_info.id.hex}'
