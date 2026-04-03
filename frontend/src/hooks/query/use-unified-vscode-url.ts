@@ -47,6 +47,11 @@ export const useUnifiedVSCodeUrl = () => {
     ],
     queryFn: async () => {
       if (!conversationId) throw new Error("No conversation ID");
+      // >>> CUSTOM: HiClaw — skip vscode-url during task polling <<<
+      if (conversationId.startsWith("task-")) {
+        return { url: null, error: null };
+      }
+      // >>> END CUSTOM <<<
 
       // V1: Get VSCode URL from sandbox exposed_urls
       if (isV1Conversation) {
