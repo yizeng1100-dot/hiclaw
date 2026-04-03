@@ -375,9 +375,23 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
         <NavLink
           key={project.conversation_id}
           to={`/conversations/${project.conversation_id}`}
-          onClick={(e) => {
-            // >>> CUSTOM: HiClaw — remote conversations require password <<<
+          onClick={async (e) => {
+            // >>> CUSTOM: HiClaw — remote conversations: check if already connected <<<
             if (project.sandbox_id?.startsWith("remote-")) {
+              try {
+                const resp = await fetch(`${workerManagerUrl}/api/machines`);
+                const machines = await resp.json();
+                const readyMachine = machines.find(
+                  (m: { status: string; tunnel_port: number }) =>
+                    m.status === "ready" && m.tunnel_port > 0,
+                );
+                if (readyMachine) {
+                  // Machine already connected — go directly to conversation
+                  onClose();
+                  return; // let NavLink navigate normally
+                }
+              } catch { /* fall through to password prompt */ }
+              // Not connected — show password prompt
               handleRemoteConversationClick(project.conversation_id, e);
               return;
             }
