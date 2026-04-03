@@ -587,11 +587,12 @@ class MachineManager:
         # >>> CUSTOM: HiClaw — redirect public skills to internal Gitea <<<
         public_skills_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
         if not public_skills_repo:
-            try:
-                from openhands.server.routes.hiclaw_config import PUBLIC_SKILLS_REPO
-                public_skills_repo = PUBLIC_SKILLS_REPO
-            except ImportError:
-                pass
+            # Build Gitea URL from env vars (worker-manager can't import openhands)
+            _gitea_port = os.environ.get('HICLAW_GITEA_PORT', '3300')
+            _gitea_user = os.environ.get('HICLAW_GITEA_USER', 'hiclaw-admin')
+            _gitea_pass = os.environ.get('HICLAW_GITEA_PASSWORD', 'HiClaw2026!')
+            _gitea_host = f'{app_ip}:{_gitea_port}' if app_ip else f'localhost:{_gitea_port}'
+            public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@{_gitea_host}/{_gitea_user}/extensions.git'
         if public_skills_repo:
             env_vars += f"OH_PUBLIC_SKILLS_REPO='{public_skills_repo}' "
         # >>> END CUSTOM <<<
