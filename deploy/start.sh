@@ -145,6 +145,21 @@ mkdir -p "$LOG_DIR"
 export no_proxy="${no_proxy:+$no_proxy,}localhost,127.0.0.1"
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1"
 
+# ─── Secret key for encrypting API keys in persisted conversations ───
+# Without this, LLM API keys are NOT saved to disk and conversations break on restart.
+# Generate a random key if not set.
+if [ -z "$OH_SECRET_KEY" ]; then
+    SECRET_FILE="$HICLAW_DIR/.secret_key"
+    if [ -f "$SECRET_FILE" ]; then
+        export OH_SECRET_KEY="$(cat "$SECRET_FILE")"
+    else
+        export OH_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null || head -c 64 /dev/urandom | base64 | head -c 64)"
+        echo "$OH_SECRET_KEY" > "$SECRET_FILE"
+        chmod 600 "$SECRET_FILE"
+        echo "  Generated new OH_SECRET_KEY (saved to $SECRET_FILE)"
+    fi
+fi
+
 # ─── Disable Docker image auto-pull (for offline/intranet environments) ───
 # Images must be pre-loaded via: docker load < agent-server-x.xx.tar.gz
 export SANDBOX_NO_PULL="${SANDBOX_NO_PULL:-1}"

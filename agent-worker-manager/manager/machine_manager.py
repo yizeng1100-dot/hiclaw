@@ -584,6 +584,10 @@ class MachineManager:
         # >>> CUSTOM: HiClaw — use user home for FILE_STORE_PATH (not workspace-specific) <<<
         # This allows one agent-server to serve multiple workspaces
         env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "
+        # >>> CUSTOM: HiClaw — pass secret key for encrypting API keys in persisted conversations <<<
+        _secret_key = os.environ.get('OH_SECRET_KEY', '')
+        if _secret_key:
+            env_vars += f"OH_SECRET_KEY='{_secret_key}' "
         # >>> CUSTOM: HiClaw — redirect public skills to internal Gitea <<<
         # Use app-server's IP so remote agent-server can access Gitea over internal network.
         # No reverse tunnel needed — internal network ports are open.
