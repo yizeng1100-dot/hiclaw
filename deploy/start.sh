@@ -8,6 +8,10 @@
 #   bash deploy/start.sh dev    — 开发模式 (Poetry venv)
 #   bash deploy/start.sh        — 自动检测
 #
+#   bash deploy/start.sh restart [app|manager|gitea]  — 只重启指定服务
+#   bash deploy/start.sh restart app    — 只重启 OpenHands App Server（最常用）
+#   bash deploy/start.sh restart        — 重启全部
+#
 # ─── 环境变量 ───
 #   HICLAW_DIR            数据目录         默认: ~/.hiclaw
 #   HICLAW_GITEA_PORT     Gitea 端口       默认: 3300
@@ -20,6 +24,109 @@
 # ═══════════════════════════════════════════════════════════════════════════
 
 set -e
+
+# ─── Handle restart subcommand ───
+if [ "${1:-}" = "restart" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+    HICLAW_DIR="${HICLAW_DIR:-$HOME/.hiclaw}"
+    APP_PORT="${HICLAW_APP_PORT:-3000}"
+    GITEA_PORT="${HICLAW_GITEA_PORT:-3300}"
+    MANAGER_PORT="${HICLAW_MANAGER_PORT:-9090}"
+    MANAGER_DIR="$PROJECT_DIR/agent-worker-manager"
+    LOG_DIR="$HICLAW_DIR/logs"
+    SERVICE="${2:-all}"
+
+    # Detect Python/uvicorn (same logic as main flow, simplified)
+    RUNTIME_DIR="$HICLAW_DIR/runtime"
+    if [ -f "$RUNTIME_DIR/hiclaw-python" ]; then
+        PYTHON="$RUNTIME_DIR/hiclaw-python"
+        UVICORN="$RUNTIME_DIR/hiclaw-uvicorn"
+    else
+        PYTHON="$(cd "$PROJECT_DIR" && poetry env info -e 2>/dev/null || echo python3)"
+        UVICORN="$(dirname "$PYTHON")/uvicorn"
+    fi
+
+    # Bypass proxy for localhost
+    export no_proxy="${no_proxy:+$no_proxy,}localhost,127.0.0.1"
+    export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1"
+
+    restart_app() {
+        echo "  Stopping OpenHands..."
+        pkill -f "uvicorn openhands.server.listen.*$APP_PORT" 2>/dev/null || true
+        sleep 2
+        echo "  Starting OpenHands (port $APP_PORT)..."
+        cd "$PROJECT_DIR" && $UVICORN openhands.server.listen:app \
+            --host 0.0.0.0 --port $APP_PORT \
+            > "$LOG_DIR/openhands.log" 2>&1 &
+        disown
+        cd "$PROJECT_DIR"
+    }
+
+    restart_manager() {
+        echo "  Stopping Worker Manager..."
+        pkill -f "python.*run.py" 2>/dev/null || true
+        sleep 1
+        echo "  Starting Worker Manager (port $MANAGER_PORT)..."
+        cd "$MANAGER_DIR" && $PYTHON run.py > "$LOG_DIR/manager.log" 2>&1 &
+        disown
+        cd "$PROJECT_DIR"
+    }
+
+    restart_gitea() {
+        echo "  Stopping Gitea..."
+        pkill -f "gitea web" 2>/dev/null || true
+        sleep 1
+        GITEA_BIN="$HICLAW_DIR/bin/gitea"
+        [ ! -f "$GITEA_BIN" ] && GITEA_BIN="$(which gitea 2>/dev/null || echo gitea)"
+        GITEA_CONF="$HICLAW_DIR/gitea/custom/conf/app.ini"
+        echo "  Starting Gitea (port $GITEA_PORT)..."
+        GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
+            --config "$GITEA_CONF" \
+            > "$LOG_DIR/gitea.log" 2>&1 &
+        disown
+    }
+
+    case "$SERVICE" in
+        app|openhands)
+            echo "=== Restarting OpenHands App Server ==="
+            restart_app
+            sleep 10
+            if ss -tlnp | grep -q ":$APP_PORT "; then
+                echo "  ✓ OpenHands restarted (port $APP_PORT)"
+            else
+                echo "  ✗ OpenHands failed to start. Check: tail $LOG_DIR/openhands.log"
+            fi
+            ;;
+        manager)
+            echo "=== Restarting Worker Manager ==="
+            restart_manager
+            sleep 3
+            echo "  ✓ Worker Manager restarted"
+            ;;
+        gitea)
+            echo "=== Restarting Gitea ==="
+            restart_gitea
+            sleep 3
+            echo "  ✓ Gitea restarted"
+            ;;
+        all|"")
+            echo "=== Restarting All Services ==="
+            restart_app
+            restart_manager
+            restart_gitea
+            sleep 10
+            echo "  Done. Check status with: ss -tlnp | grep -E '$APP_PORT|$GITEA_PORT|$MANAGER_PORT'"
+            ;;
+        *)
+            echo "Unknown service: $SERVICE"
+            echo "Usage: bash deploy/start.sh restart [app|manager|gitea|all]"
+            exit 1
+            ;;
+    esac
+    exit 0
+fi
+
 MODE="${1:-auto}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
