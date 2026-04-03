@@ -299,7 +299,7 @@ if ss -tlnp | grep -q ":$GITEA_PORT "; then
     EXTENSIONS_EMPTY=$(echo "$EXTENSIONS_CHECK" | python3 -c "import sys,json; print(json.load(sys.stdin).get('empty', True))" 2>/dev/null)
 
     if [ "$EXTENSIONS_EMPTY" = "True" ] || ! echo "$EXTENSIONS_CHECK" | grep -q '"full_name"'; then
-        echo "  Syncing extensions from GitHub to Gitea..."
+        echo "  Syncing extensions to Gitea..."
         # Create repo if not exists
         if ! echo "$EXTENSIONS_CHECK" | grep -q '"full_name"'; then
             curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
@@ -307,19 +307,41 @@ if ss -tlnp | grep -q ":$GITEA_PORT "; then
                 -u "$GITEA_USER:$GITEA_PASS" \
                 -d '{"name":"extensions","description":"OpenHands extensions (mirrored)","default_branch":"main","auto_init":false}' >/dev/null 2>&1
         fi
-        # Clone from GitHub and push to Gitea
         _TMPDIR=$(mktemp -d)
-        if git clone --depth 1 https://github.com/OpenHands/extensions.git "$_TMPDIR/ext" 2>/dev/null; then
-            cd "$_TMPDIR/ext"
-            git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/extensions.git" 2>/dev/null || true
-            if git push gitea main --force 2>/dev/null; then
-                echo "  ✓ Extensions synced to Gitea"
-            else
-                echo "  ⚠ Extensions push failed"
+        _SYNCED=false
+
+        # Source 1: Local bundle (for offline/intranet environments)
+        EXTENSIONS_BUNDLE="$SCRIPT_DIR/extensions.bundle"
+        if [ -f "$EXTENSIONS_BUNDLE" ] && ! $_SYNCED; then
+            echo "  Using local extensions.bundle..."
+            if git clone "$EXTENSIONS_BUNDLE" "$_TMPDIR/ext" 2>/dev/null; then
+                cd "$_TMPDIR/ext"
+                git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/extensions.git" 2>/dev/null || true
+                if git push gitea main --force 2>/dev/null; then
+                    echo "  ✓ Extensions synced from bundle"
+                    _SYNCED=true
+                fi
+                cd "$PROJECT_DIR"
+                rm -rf "$_TMPDIR/ext"
             fi
-            cd "$PROJECT_DIR"
-        else
-            echo "  ⚠ Could not clone extensions from GitHub (offline?)"
+        fi
+
+        # Source 2: GitHub (if online)
+        if ! $_SYNCED; then
+            echo "  Trying GitHub..."
+            if git clone --depth 1 https://github.com/OpenHands/extensions.git "$_TMPDIR/ext" 2>/dev/null; then
+                cd "$_TMPDIR/ext"
+                git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/extensions.git" 2>/dev/null || true
+                if git push gitea main --force 2>/dev/null; then
+                    echo "  ✓ Extensions synced from GitHub"
+                    _SYNCED=true
+                fi
+                cd "$PROJECT_DIR"
+            fi
+        fi
+
+        if ! $_SYNCED; then
+            echo "  ⚠ Could not sync extensions (no bundle, no GitHub access)"
         fi
         rm -rf "$_TMPDIR"
     else
