@@ -439,15 +439,6 @@ class MachineManager:
                         except Exception as cs_e:
                             logger.warning(f"Code-server tunnel failed (non-fatal): {cs_e}")
 
-                    # >>> CUSTOM: HiClaw — reverse tunnel for Gitea (extensions repo) <<<
-                    _gitea_port = int(os.environ.get('HICLAW_GITEA_PORT', '3300'))
-                    try:
-                        await ssh._conn.forward_remote_port("", _gitea_port, "localhost", _gitea_port)
-                        logger.info(f"Gitea reverse tunnel: remote:localhost:{_gitea_port} → app-server:{_gitea_port}")
-                    except Exception as gitea_e:
-                        logger.warning(f"Gitea reverse tunnel failed (non-fatal): {gitea_e}")
-                    # >>> END CUSTOM <<<
-
                     evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="completed",
                                          detail=f"agent:localhost:{local_port}" + (f" vscode:localhost:{machine.code_server_tunnel_port}" if machine.vscode_url else ""))
                     self._broadcast_event(machine_id, evt)
@@ -594,14 +585,15 @@ class MachineManager:
         # This allows one agent-server to serve multiple workspaces
         env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "
         # >>> CUSTOM: HiClaw — redirect public skills to internal Gitea <<<
-        # Use localhost URL — Gitea is accessible via SSH reverse tunnel (port forwarded
-        # in _setup_gitea_tunnel). Remote agent-server accesses Gitea through the tunnel.
+        # Use app-server's IP so remote agent-server can access Gitea over internal network.
+        # No reverse tunnel needed — internal network ports are open.
         public_skills_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
         if not public_skills_repo:
             _gitea_port = os.environ.get('HICLAW_GITEA_PORT', '3300')
             _gitea_user = os.environ.get('HICLAW_GITEA_USER', 'hiclaw-admin')
             _gitea_pass = os.environ.get('HICLAW_GITEA_PASSWORD', 'HiClaw2026!')
-            public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@localhost:{_gitea_port}/{_gitea_user}/extensions.git'
+            _gitea_host = app_ip or 'localhost'
+            public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@{_gitea_host}:{_gitea_port}/{_gitea_user}/extensions.git'
         if public_skills_repo:
             env_vars += f"OH_PUBLIC_SKILLS_REPO='{public_skills_repo}' "
         # >>> END CUSTOM <<<

@@ -275,6 +275,43 @@ else
     echo "[1/3] Gitea already running (port $GITEA_PORT)"
 fi
 
+# ─── Sync extensions repo to Gitea (if empty) ───
+# App-server machine can access GitHub; remote agent-servers can't.
+# Mirror GitHub extensions into Gitea so agent-servers access it locally.
+if ss -tlnp | grep -q ":$GITEA_PORT "; then
+    EXTENSIONS_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+        "http://localhost:$GITEA_PORT/api/v1/repos/$GITEA_USER/extensions" 2>/dev/null)
+    EXTENSIONS_EMPTY=$(echo "$EXTENSIONS_CHECK" | python3 -c "import sys,json; print(json.load(sys.stdin).get('empty', True))" 2>/dev/null)
+
+    if [ "$EXTENSIONS_EMPTY" = "True" ] || ! echo "$EXTENSIONS_CHECK" | grep -q '"full_name"'; then
+        echo "  Syncing extensions from GitHub to Gitea..."
+        # Create repo if not exists
+        if ! echo "$EXTENSIONS_CHECK" | grep -q '"full_name"'; then
+            curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
+                -H "Content-Type: application/json" \
+                -u "$GITEA_USER:$GITEA_PASS" \
+                -d '{"name":"extensions","description":"OpenHands extensions (mirrored)","default_branch":"main","auto_init":false}' >/dev/null 2>&1
+        fi
+        # Clone from GitHub and push to Gitea
+        _TMPDIR=$(mktemp -d)
+        if git clone --depth 1 https://github.com/OpenHands/extensions.git "$_TMPDIR/ext" 2>/dev/null; then
+            cd "$_TMPDIR/ext"
+            git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/extensions.git" 2>/dev/null || true
+            if git push gitea main --force 2>/dev/null; then
+                echo "  ✓ Extensions synced to Gitea"
+            else
+                echo "  ⚠ Extensions push failed"
+            fi
+            cd "$PROJECT_DIR"
+        else
+            echo "  ⚠ Could not clone extensions from GitHub (offline?)"
+        fi
+        rm -rf "$_TMPDIR"
+    else
+        echo "  Extensions repo OK"
+    fi
+fi
+
 # ─── 2. Worker Manager ───
 if ! ss -tlnp | grep -q ":$MANAGER_PORT "; then
     echo "[2/3] Starting Worker Manager (port $MANAGER_PORT)..."
