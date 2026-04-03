@@ -145,6 +145,10 @@ mkdir -p "$LOG_DIR"
 export no_proxy="${no_proxy:+$no_proxy,}localhost,127.0.0.1"
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1"
 
+# ─── Disable Docker image auto-pull (for offline/intranet environments) ───
+# Images must be pre-loaded via: docker load < agent-server-x.xx.tar.gz
+export SANDBOX_NO_PULL="${SANDBOX_NO_PULL:-1}"
+
 # ─── LLM model info for models not in LiteLLM's database ───
 # Without this, context window shows 0/0 and token-based condensation won't trigger.
 # Add custom models here as needed. Format: {"model_name": {max_tokens, max_input_tokens, ...}}
