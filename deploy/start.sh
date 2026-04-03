@@ -38,6 +38,14 @@ mkdir -p "$LOG_DIR"
 export no_proxy="${no_proxy:+$no_proxy,}localhost,127.0.0.1"
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1"
 
+# ─── LLM model info for models not in LiteLLM's database ───
+# Without this, context window shows 0/0 and token-based condensation won't trigger.
+# Add custom models here as needed. Format: {"model_name": {max_tokens, max_input_tokens, ...}}
+export LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-$(cat <<'COSTMAP'
+{"qianfan-code-latest": {"max_tokens": 131072, "max_input_tokens": 204800, "max_output_tokens": 131072, "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002, "litellm_provider": "openai"}, "glm-4.7": {"max_tokens": 4096, "max_input_tokens": 131072, "max_output_tokens": 4096, "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002, "litellm_provider": "openai"}}
+COSTMAP
+)}"
+
 # ─── Auto-detect app-server IP for internal networks ───
 # Remote agent-servers need this IP to callback to app-server (MCP, webhooks)
 # Priority: env var > ip route default > hostname -I

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import logging
 import random
@@ -23,6 +24,50 @@ from .ssh_client import SSHClient
 
 logger = logging.getLogger(__name__)
 
+# >>> CUSTOM: HiClaw — persist machine state to disk <<<
+HICLAW_DIR = os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))
+STATE_FILE = os.path.join(HICLAW_DIR, 'machines-state.json')
+
+
+def _save_machines_state(machines: dict[str, MachineInfo]) -> None:
+    """Save machine info to disk so it survives restarts."""
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        data = {mid: m.model_dump() for mid, m in machines.items()}
+        with open(STATE_FILE, 'w') as f:
+            json.dump(data, f, default=str)
+    except Exception as e:
+        logger.warning(f'Failed to save machine state: {e}')
+
+
+def _load_machines_state() -> dict[str, MachineInfo]:
+    """Load previously saved machine state from disk."""
+    try:
+        if not os.path.exists(STATE_FILE):
+            return {}
+        with open(STATE_FILE) as f:
+            data = json.load(f)
+        machines = {}
+        for mid, mdata in data.items():
+            try:
+                # Reset transient state — tunnels/connections need to be re-established
+                mdata['tunnel_port'] = 0
+                mdata['code_server_tunnel_port'] = 0
+                mdata['proxy_url'] = ''
+                mdata['vscode_url'] = ''
+                mdata['status'] = MachineStatus.PAUSED.value
+                mdata['provision_steps'] = []
+                machines[mid] = MachineInfo(**mdata)
+            except Exception as e:
+                logger.warning(f'Failed to restore machine {mid}: {e}')
+        if machines:
+            logger.info(f'Restored {len(machines)} machines from {STATE_FILE}')
+        return machines
+    except Exception as e:
+        logger.warning(f'Failed to load machine state: {e}')
+        return {}
+# >>> END CUSTOM <<<
+
 
 def _pick_port() -> int:
     return random.randint(20000, 50000)
@@ -32,12 +77,116 @@ class MachineManager:
     """Manages remote machines. One machine = one agent-server, many conversations."""
 
     def __init__(self):
-        self._machines: dict[str, MachineInfo] = {}
+        # >>> CUSTOM: HiClaw — restore machines from disk <<<
+        self._machines: dict[str, MachineInfo] = _load_machines_state()
+        # >>> END CUSTOM <<<
         self._ssh_clients: dict[str, SSHClient] = {}
         self._local_ports: dict[str, int] = {}
         self._listeners: dict[str, object] = {}
         self._event_queues: dict[str, list[asyncio.Queue]] = {}
         self._provision_locks: dict[str, asyncio.Lock] = {}
+
+    # >>> CUSTOM: HiClaw — reconnect to previously saved machines <<<
+    async def reconnect_saved_machines(self, passwords: dict[str, str] | None = None) -> int:
+        """Reconnect to machines that were saved before restart.
+
+        For each machine in PAUSED state (restored from disk), attempt to:
+        1. SSH connect
+        2. Check if agent-server is still running
+        3. Re-establish SSH tunnel
+        4. Mark as READY
+
+        Args:
+            passwords: mapping of machine_id → SSH password (needed because
+                       passwords are NOT persisted to disk for security)
+
+        Returns:
+            Number of machines successfully reconnected.
+        """
+        paused = {mid: m for mid, m in self._machines.items()
+                  if m.status == MachineStatus.PAUSED}
+        if not paused:
+            return 0
+
+        logger.info(f'Attempting to reconnect {len(paused)} saved machines...')
+        reconnected = 0
+
+        for machine_id, machine in paused.items():
+            try:
+                # Need password — check env or passed dict
+                password = None
+                if passwords:
+                    password = passwords.get(machine_id)
+                if not password:
+                    password = os.environ.get(f'HICLAW_SSH_PASS_{machine_id}')
+                if not password:
+                    password = os.environ.get('HICLAW_SSH_PASSWORD')
+                if not password:
+                    logger.warning(f'No password for machine {machine_id} ({machine.host}), skipping reconnect')
+                    continue
+
+                # SSH connect
+                ssh = SSHClient(machine.host, machine.port, machine.username, password)
+                await ssh.connect()
+
+                # Check if agent-server is still running
+                if machine.mode == WorkerMode.DOCKER:
+                    check_cmd = f"docker ps --filter 'name=agent-server-{machine_id}' --format '{{{{.Status}}}}'"
+                else:
+                    check_cmd = f"pgrep -f 'agent.server.*--port {machine.agent_server_port}' > /dev/null && echo running || echo stopped"
+                stdout, _, ec = await ssh.run(check_cmd, timeout=10)
+                is_running = 'running' in stdout.lower() or ('Up' in stdout)
+
+                if not is_running:
+                    logger.info(f'Machine {machine_id} ({machine.host}): agent-server not running, skipping')
+                    await ssh.close()
+                    continue
+
+                # Re-establish SSH tunnel
+                local_port = _pick_port()
+                tunnel = await ssh.forward_local_port(local_port, machine.agent_server_port)
+                self._ssh_clients[machine_id] = ssh
+                self._local_ports[machine_id] = local_port
+                self._listeners[machine_id] = tunnel
+
+                # Verify health
+                try:
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.get(f'http://localhost:{local_port}/health', timeout=5)
+                        if resp.status_code != 200:
+                            raise Exception(f'Health check failed: {resp.status_code}')
+                except Exception as e:
+                    logger.warning(f'Machine {machine_id} health check failed: {e}')
+                    await ssh.close()
+                    continue
+
+                # Success — update state
+                machine.status = MachineStatus.READY
+                machine.tunnel_port = local_port
+                machine.proxy_url = f'http://localhost:{local_port}'
+
+                # Also try to re-establish code-server tunnel
+                try:
+                    cs_local_port = _pick_port()
+                    cs_tunnel = await ssh.forward_local_port(cs_local_port, machine.code_server_port)
+                    machine.code_server_tunnel_port = cs_local_port
+                    machine.vscode_url = f'http://localhost:{cs_local_port}'
+                except Exception:
+                    pass  # code-server tunnel is optional
+
+                self._event_queues[machine_id] = []
+                self._provision_locks[machine_id] = asyncio.Lock()
+                reconnected += 1
+                logger.info(f'Machine {machine_id} ({machine.host}) reconnected: tunnel localhost:{local_port} → {machine.agent_server_port}')
+
+            except Exception as e:
+                logger.warning(f'Failed to reconnect machine {machine_id} ({machine.host}): {e}')
+
+        if reconnected > 0:
+            _save_machines_state(self._machines)
+            logger.info(f'Reconnected {reconnected}/{len(paused)} machines')
+        return reconnected
+    # >>> END CUSTOM <<<
 
     async def connect_machine(self, req: ConnectMachineRequest) -> MachineInfo:
         """Idempotent connect. Returns existing machine if already ready."""
@@ -68,6 +217,12 @@ class MachineManager:
                 return machine
             if machine.status == MachineStatus.ERROR:
                 await self._cleanup_machine(machine_id)
+            # >>> CUSTOM: HiClaw — handle PAUSED machines (restored from disk) <<<
+            if machine.status == MachineStatus.PAUSED:
+                logger.info(f"Machine {machine_id} is PAUSED (restored from disk), re-provisioning...")
+                await self._cleanup_machine(machine_id)
+                # Fall through to create new machine entry and re-provision
+            # >>> END CUSTOM <<<
 
         # New machine
         machine = MachineInfo(
@@ -83,6 +238,7 @@ class MachineManager:
         self._machines[machine_id] = machine
         self._event_queues[machine_id] = []
         self._provision_locks[machine_id] = asyncio.Lock()
+        _save_machines_state(self._machines)  # >>> CUSTOM: HiClaw <<<
 
         # Start provisioning in background
         asyncio.create_task(self._run_provisioning(machine_id, req))
@@ -296,11 +452,13 @@ class MachineManager:
                 # Done!
                 machine.status = MachineStatus.READY
                 machine.active_conversations = 1
+                _save_machines_state(self._machines)  # >>> CUSTOM: HiClaw <<<
                 logger.info(f"Machine {machine_id} ready: {req.host}:{machine.agent_server_port} → localhost:{local_port}")
 
             except Exception as e:
                 machine.status = MachineStatus.ERROR
                 machine.error = str(e) or repr(e)
+                _save_machines_state(self._machines)  # >>> CUSTOM: HiClaw <<<
                 logger.error(f"Machine {machine_id} provisioning failed: {e}", exc_info=True)
 
     async def _clone_skills_repo(self, ssh: SSHClient, machine: MachineInfo) -> None:
@@ -628,4 +786,5 @@ class MachineManager:
         self._machines.pop(machine_id, None)
         self._event_queues.pop(machine_id, None)
         self._provision_locks.pop(machine_id, None)
+        _save_machines_state(self._machines)  # >>> CUSTOM: HiClaw <<<
         logger.info(f"Machine {machine_id} cleaned up")

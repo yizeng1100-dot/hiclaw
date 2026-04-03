@@ -34,10 +34,22 @@ manager = MachineManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Agent Worker Manager starting")
+    # >>> CUSTOM: HiClaw — reconnect to saved machines on startup <<<
+    try:
+        count = await manager.reconnect_saved_machines()
+        if count > 0:
+            logger.info(f"Reconnected {count} saved machines")
+    except Exception as e:
+        logger.warning(f"Machine reconnect failed: {e}")
+    # >>> END CUSTOM <<<
     yield
-    for mid in list(manager._machines.keys()):
-        await manager.disconnect_machine(mid)
-    logger.info("Agent Worker Manager stopped")
+    # On shutdown: DON'T cleanup remote processes — they should keep running
+    # Only close local SSH connections and tunnels
+    for mid in list(manager._ssh_clients.keys()):
+        ssh = manager._ssh_clients.get(mid)
+        if ssh:
+            await ssh.close()
+    logger.info("Agent Worker Manager stopped (remote processes kept alive)")
 
 
 app = FastAPI(
