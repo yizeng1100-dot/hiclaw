@@ -280,14 +280,35 @@ class Provisioner:
             # >>> CUSTOM: HiClaw — wrapper script that patches PUBLIC_SKILLS_REPO <<<
             # Uses a Python launcher script instead of `python -m openhands.agent_server`
             # so we can monkey-patch the SDK constant before the server starts.
+            # Create launcher script that monkey-patches PUBLIC_SKILLS_REPO
+            # before starting agent-server (SDK hardcodes github.com URL)
             await self.ssh.run(
                 f"mkdir -p {venv}/bin && "
+                f"cat > {venv}/bin/_launcher.py << 'PYEOF'\n"
+                "import os, sys\n"
+                "# Ensure venv lib is in path\n"
+                "venv_lib = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'lib')\n"
+                "if venv_lib not in sys.path:\n"
+                "    sys.path.insert(0, venv_lib)\n"
+                "repo = os.environ.get('OH_PUBLIC_SKILLS_REPO')\n"
+                "if repo:\n"
+                "    try:\n"
+                "        import openhands.sdk.context.skills.skill as sk\n"
+                "        sk.PUBLIC_SKILLS_REPO = repo\n"
+                "        print(f'[HiClaw] PUBLIC_SKILLS_REPO -> {repo}', file=sys.stderr)\n"
+                "    except Exception:\n"
+                "        pass\n"
+                "from openhands.agent_server.__main__ import main\n"
+                "sys.exit(main())\n"
+                "PYEOF\n", timeout=10)
+            # Create wrapper shell script
+            await self.ssh.run(
                 f"cat > {venv}/bin/agent-server << 'WRAPPER_EOF'\n"
                 f"#!/bin/bash\n"
                 f"export PYTHONPATH={venv}/lib:$PYTHONPATH\n"
                 f"export no_proxy=localhost,127.0.0.1\n"
                 f"export NO_PROXY=localhost,127.0.0.1\n"
-                f"exec {remote_python} -m openhands.agent_server \"$@\"\n"
+                f"exec {remote_python} {venv}/bin/_launcher.py \"$@\"\n"
                 f"WRAPPER_EOF\n"
                 f"chmod +x {venv}/bin/agent-server", timeout=10)
             # >>> END CUSTOM <<<
