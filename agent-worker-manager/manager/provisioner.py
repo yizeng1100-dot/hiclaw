@@ -271,18 +271,13 @@ class Provisioner:
             # so we can monkey-patch the SDK constant before the server starts.
             await self.ssh.run(
                 f"mkdir -p {venv}/bin && "
-                f"cat > {venv}/bin/_launcher.py << 'PYEOF'\n"
-                "import os, sys\n"
-                "repo = os.environ.get('OH_PUBLIC_SKILLS_REPO')\n"
-                "if repo:\n"
-                "    import openhands.sdk.context.skills.skill as sk\n"
-                "    sk.PUBLIC_SKILLS_REPO = repo\n"
-                "    print(f'[HiClaw] PUBLIC_SKILLS_REPO -> {repo}', file=sys.stderr)\n"
-                "from openhands.agent_server.__main__ import main\n"
-                "main()\n"
-                "PYEOF\n"
-                f"echo '#!/bin/bash' > {venv}/bin/agent-server && "
-                f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec {remote_python} {venv}/bin/_launcher.py \"$@\"' >> {venv}/bin/agent-server && "
+                f"cat > {venv}/bin/agent-server << 'WRAPPER_EOF'\n"
+                f"#!/bin/bash\n"
+                f"export PYTHONPATH={venv}/lib:$PYTHONPATH\n"
+                f"export no_proxy=localhost,127.0.0.1\n"
+                f"export NO_PROXY=localhost,127.0.0.1\n"
+                f"exec {remote_python} -m openhands.agent_server \"$@\"\n"
+                f"WRAPPER_EOF\n"
                 f"chmod +x {venv}/bin/agent-server", timeout=10)
             # >>> END CUSTOM <<<
 
