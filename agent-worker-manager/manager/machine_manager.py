@@ -195,23 +195,41 @@ class MachineManager:
         if machine_id in self._machines:
             machine = self._machines[machine_id]
             if machine.status == MachineStatus.READY:
-                machine.active_conversations += 1
-                ssh = self._ssh_clients.get(machine_id)
-                # >>> CUSTOM: HiClaw — workspace change no longer restarts agent-server <<<
-                # One agent-server serves all workspaces. Just update the record
-                # and ensure the new workspace directory exists.
-                if req.workspace != machine.workspace:
-                    old_workspace = machine.workspace
-                    machine.workspace = req.workspace
-                    logger.info(f"Machine {machine_id} workspace changed: {old_workspace} → {req.workspace}")
+                # >>> CUSTOM: HiClaw — verify agent-server is still alive before reusing <<<
+                still_healthy = False
+                try:
+                    if machine.tunnel_port:
+                        async with httpx.AsyncClient() as client:
+                            resp = await client.get(
+                                f"http://localhost:{machine.tunnel_port}/health",
+                                timeout=5,
+                            )
+                            still_healthy = resp.status_code == 200
+                except Exception as e:
+                    logger.warning(f"Machine {machine_id} health check failed: {e}")
+
+                if not still_healthy:
+                    logger.warning(f"Machine {machine_id} was READY but agent-server is dead, re-provisioning...")
+                    machine.status = MachineStatus.ERROR
+                    machine.error = "Agent server not responding, reconnecting..."
+                    await self._cleanup_machine(machine_id)
+                    # Fall through to create new machine
+                else:
+                    # >>> END CUSTOM <<<
+                    machine.active_conversations += 1
+                    ssh = self._ssh_clients.get(machine_id)
+                    # >>> CUSTOM: HiClaw — workspace change no longer restarts agent-server <<<
+                    if req.workspace != machine.workspace:
+                        old_workspace = machine.workspace
+                        machine.workspace = req.workspace
+                        logger.info(f"Machine {machine_id} workspace changed: {old_workspace} → {req.workspace}")
+                        if ssh and ssh.connected:
+                            await ssh.run(f"mkdir -p {req.workspace}", timeout=5)
+                    # >>> END CUSTOM <<<
+                    # Always sync skills on reconnect
                     if ssh and ssh.connected:
-                        await ssh.run(f"mkdir -p {req.workspace}", timeout=5)
-                        # code-server runs at $HOME, no restart needed
-                # >>> END CUSTOM <<<
-                # Always sync skills on reconnect
-                if ssh and ssh.connected:
-                    asyncio.create_task(self._clone_skills_repo(ssh, machine))
-                return machine
+                        asyncio.create_task(self._clone_skills_repo(ssh, machine))
+                    return machine
             if machine.status in (MachineStatus.CONNECTING, MachineStatus.PROVISIONING, MachineStatus.STARTING):
                 # Already in progress — caller should subscribe to SSE
                 return machine
