@@ -79,10 +79,19 @@ class Provisioner:
         python_ok = False
 
         if has_standalone:
-            remote_python = standalone_python
-            python_ok = True
-            yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail="Python 3.12 already installed")
-            logger.info(f"Python: standalone exists at {standalone_python}")
+            # >>> CUSTOM: HiClaw — verify it actually works <<<
+            py_ver, _, py_ec = await self.ssh.run(f"{standalone_python} --version 2>&1", timeout=5)
+            if py_ec == 0 and "3.12" in py_ver:
+                remote_python = standalone_python
+                python_ok = True
+                yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=f"Python 3.12 verified: {py_ver.strip()}")
+                logger.info(f"Python: standalone exists and works at {standalone_python}")
+            else:
+                # Exists but broken — clean up
+                logger.warning(f"Standalone Python broken (ec={py_ec}): {py_ver.strip()}")
+                yield _evt(ProvisionStep.CHECK_PYTHON, "started", detail="Existing Python broken, will reinstall...")
+                await self.ssh.run(f"rm -rf {REMOTE_PYTHON_INSTALL_PATH}", timeout=15)
+            # >>> END CUSTOM <<<
         else:
             yield _evt(ProvisionStep.CHECK_PYTHON, "started")
             sys_ok = await self._check_remote(
@@ -151,17 +160,35 @@ class Provisioner:
                 return
 
         # ── Step 2: Agent SDK ──
-        # Check: wrapper script exists?
+        # Check: binary exists AND actually works (import test)
         binary = self.tmpl["binary"].replace("$HOME", "~")
+        venv = self.tmpl["venv_path"]
         has_sdk = await self._check_remote(
             f"test -f {binary} || test -f /opt/agent-venv/bin/agent-server"
         )
+        sdk_healthy = False
         if has_sdk:
-            yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Already installed")
-            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed")
-            logger.info("SDK: already installed, skipping")
-        else:
-            venv = self.tmpl["venv_path"]
+            # >>> CUSTOM: HiClaw — verify SDK actually works, not just file exists <<<
+            verify_out, _, verify_ec = await self.ssh.run(
+                f"PYTHONPATH={venv}/lib {remote_python} -c '"
+                "import openhands.agent_server; print(\"VERIFY_OK\")"
+                "' 2>&1", timeout=15)
+            if "VERIFY_OK" in verify_out:
+                sdk_healthy = True
+                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Already installed")
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed & verified")
+                logger.info("SDK: already installed and verified, skipping")
+            else:
+                # Binary exists but broken — clean up and reinstall
+                logger.warning(f"SDK binary exists but broken: {verify_out.strip()[-200:]}")
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
+                           detail="Existing install is broken, cleaning up and reinstalling...")
+                await self.ssh.run(
+                    f"rm -rf {venv} {REMOTE_DEPS_PATH}/wheels", timeout=30)
+                logger.info("Cleaned up broken SDK install")
+            # >>> END CUSTOM <<<
+
+        if not sdk_healthy:
             # Check: wheels already on remote?
             has_wheels = await self._check_remote(f"test -d {REMOTE_DEPS_PATH}/wheels")
             if has_wheels:
