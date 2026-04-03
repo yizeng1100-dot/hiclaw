@@ -76,7 +76,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
     setReconnectLoading(true);
     setReconnectError(null);
     try {
-      await axios.post(`${workerManagerUrl}/api/machines/connect`, {
+      const resp = await axios.post(`${workerManagerUrl}/api/machines/connect`, {
         host: config.host,
         port: config.port,
         username: config.username,
@@ -87,6 +87,28 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
       }, { timeout: 30000 });
       // Save password for next time
       useRemoteWorkerStore.getState().setConfig({ password: reconnectPassword });
+
+      // >>> CUSTOM: HiClaw — wait for machine to be ready before navigating <<<
+      const machineId = resp.data?.id;
+      if (machineId && resp.data?.status !== "ready") {
+        // Poll machine status until ready (max 120s)
+        const pollStart = Date.now();
+        while (Date.now() - pollStart < 120000) {
+          await new Promise((r) => setTimeout(r, 2000));
+          try {
+            const statusResp = await axios.get(`${workerManagerUrl}/api/machines/${machineId}`, { timeout: 5000 });
+            if (statusResp.data?.status === "ready") break;
+            if (statusResp.data?.status === "error") {
+              throw new Error(statusResp.data?.error || "Connection failed");
+            }
+          } catch (pollErr) {
+            if (axios.isAxiosError(pollErr) && pollErr.response?.status === 404) continue;
+            throw pollErr;
+          }
+        }
+      }
+      // >>> END CUSTOM <<<
+
       setReconnectModalVisible(false);
       onClose();
       navigate(`/conversations/${reconnectConversationId}`);
