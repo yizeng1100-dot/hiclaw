@@ -138,11 +138,13 @@ class Provisioner:
                 await self.ssh.run("grep -q '.local/bin' $HOME/.bashrc || echo 'export PATH=$HOME/.local/bin:$PATH' >> $HOME/.bashrc", timeout=5)
                 # Verify with full path
                 remote_python = f"{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12"
-                _, _, ec = await self.ssh.run(f"{remote_python} --version", timeout=5)
-                if ec == 0:
-                    yield _evt(ProvisionStep.INSTALL_PYTHON, "completed")
+                py_ver_out, _, ec = await self.ssh.run(f"{remote_python} --version 2>&1", timeout=5)
+                if ec == 0 and "3.12" in py_ver_out:
+                    yield _evt(ProvisionStep.INSTALL_PYTHON, "completed",
+                               detail=py_ver_out.strip())
                 else:
-                    yield _evt(ProvisionStep.INSTALL_PYTHON, "failed", detail="Python install failed")
+                    yield _evt(ProvisionStep.INSTALL_PYTHON, "failed",
+                               detail=f"Python verify failed (ec={ec}): {py_ver_out.strip()}")
                     return
             else:
                 yield _evt(ProvisionStep.INSTALL_PYTHON, "failed", detail="python3-standalone.tar.gz not found")
@@ -195,35 +197,42 @@ class Provisioner:
 
             # Install SDK from wheels
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing from wheels")
+
+            # Step 2a: Ensure pip is available
             await self.ssh.run(f"{remote_python} -m ensurepip --upgrade 2>/dev/null || true", timeout=30)
             await self.ssh.run(
                 f"{remote_python} -m pip install --break-system-packages --upgrade "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"pip setuptools wheel 2>&1 || true", timeout=60)
-            # Install with --no-deps first to avoid dependency resolution failures
-            # (e.g., tiktoken requires glibc 2.28+ which old systems don't have)
+
+            # Step 2b: Install all wheels with --no-deps first (avoid resolution failures)
+            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 1/2)...")
             stdout_all, stderr, ec = await self.ssh.run(
                 f"{remote_python} -m pip install --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1 || true", timeout=300)
-            # Then install the main packages (they'll find deps already installed)
+            logger.info(f"Pip pass 1 exit={ec}, output={stdout_all[-500:]}")
+
+            # Step 2c: Install main packages with deps (they'll find deps from pass 1)
+            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
             stdout2, stderr2, ec2 = await self.ssh.run(
                 f"{remote_python} -m pip install --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{self.tmpl['pip_package']} 2>&1", timeout=300)
+            logger.info(f"Pip pass 2 exit={ec2}, output={stdout2[-500:]}")
+
+            # Step 2d: Verify core import works
+            check_out, _, _ = await self.ssh.run(
+                f"PYTHONPATH={venv}/lib {remote_python} -c 'import openhands.agent_server; print(\"OK\")' 2>&1",
+                timeout=10)
+            if "OK" not in check_out:
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
+                           detail=f"Core import failed: {check_out.strip()[-1000:]}\n\npip output: {(stdout2 + stderr2).strip()[-1000:]}")
+                return
             if ec2 != 0:
-                # Check if the core packages actually installed despite errors
-                check_out, _, _ = await self.ssh.run(
-                    f"PYTHONPATH={venv}/lib {remote_python} -c 'import openhands.agent_server; print(\"OK\")' 2>&1",
-                    timeout=10)
-                if "OK" not in check_out:
-                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
-                               detail=(stdout2 + "\n" + stderr2).strip()[-2000:])
-                    return
-                else:
-                    logger.warning("Some optional packages failed to install, but core SDK is OK")
+                logger.warning("Some optional packages failed to install, but core SDK is OK")
             # >>> CUSTOM: HiClaw — wrapper script that patches PUBLIC_SKILLS_REPO <<<
             # Uses a Python launcher script instead of `python -m openhands.agent_server`
             # so we can monkey-patch the SDK constant before the server starts.
@@ -243,6 +252,29 @@ class Provisioner:
                 f"echo 'PYTHONPATH={venv}/lib:$PYTHONPATH exec {remote_python} {venv}/bin/_launcher.py \"$@\"' >> {venv}/bin/agent-server && "
                 f"chmod +x {venv}/bin/agent-server", timeout=10)
             # >>> END CUSTOM <<<
+
+            # >>> CUSTOM: HiClaw — final verification: can agent-server actually run? <<<
+            verify_out, _, verify_ec = await self.ssh.run(
+                f"PYTHONPATH={venv}/lib {remote_python} -c '"
+                "import openhands.agent_server; "
+                "import openhands.sdk; "
+                "import openhands.tools; "
+                "print(\"VERIFY_OK\")"
+                "' 2>&1", timeout=15)
+            if "VERIFY_OK" not in verify_out:
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
+                           detail=f"Post-install verification failed: {verify_out.strip()[-500:]}")
+                return
+            # Also verify the binary wrapper works
+            binary_check, _, binary_ec = await self.ssh.run(
+                f"{venv}/bin/agent-server --help 2>&1 | head -3", timeout=10)
+            if binary_ec != 0 and "usage" not in binary_check.lower() and "error" not in binary_check.lower():
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
+                           detail=f"agent-server binary check failed (ec={binary_ec}): {binary_check.strip()[-500:]}")
+                return
+            logger.info(f"SDK install verified: imports OK, binary OK")
+            # >>> END CUSTOM <<<
+
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
 
         # ── Step 3: code-server ──

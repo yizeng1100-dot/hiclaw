@@ -141,8 +141,10 @@ class WorkerManager:
         await ssh.run(f"mkdir -p {worker.workspace}")
 
         # Start in background with log file
+        # >>> CUSTOM: HiClaw — bypass proxy on remote machine for localhost <<<
         log_file = f"/tmp/agent-worker-{worker.id}.log"
-        pid_str = await ssh.run_background(f"cd {worker.workspace} && {cmd}", log_file=log_file)
+        env_prefix = "export no_proxy=localhost,127.0.0.1; export NO_PROXY=localhost,127.0.0.1; "
+        pid_str = await ssh.run_background(f"{env_prefix}cd {worker.workspace} && {cmd}", log_file=log_file)
         try:
             worker.pid = int(pid_str)
         except (ValueError, TypeError):
@@ -159,8 +161,9 @@ class WorkerManager:
 
         while asyncio.get_event_loop().time() - start < timeout:
             try:
+                # >>> CUSTOM: HiClaw — bypass proxy for localhost health check <<<
                 stdout, stderr, exit_code = await ssh.run(
-                    f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{remote_port}{health_path}",
+                    f"curl --noproxy localhost -s -o /dev/null -w '%{{http_code}}' http://localhost:{remote_port}{health_path}",
                     timeout=5,
                 )
                 if stdout.strip() == "200":
