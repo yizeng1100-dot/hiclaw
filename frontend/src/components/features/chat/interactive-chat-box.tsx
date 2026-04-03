@@ -17,6 +17,8 @@ import type { AgentInfo } from "#/api/custom-skill-service/agent-service.api";
 import { TaskService } from "#/api/custom-skill-service/task-service.api";
 import { useCreateConversation } from "#/hooks/mutation/use-create-conversation";
 import { PerfAnalysisInlinePanel } from "#/components/features/custom/skill-management/perf-analysis-inline-panel";
+import { PerfReportDownload } from "#/components/features/custom/skill-management/perf-report-download";
+import { useConversationId } from "#/hooks/use-conversation-id";
 // >>> END CUSTOM <<<
 
 interface InteractiveChatBoxProps {
@@ -38,6 +40,11 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
     subConversationTaskId,
     setShouldHideSuggestions,
   } = useConversationStore();
+
+  const { curAgentState } = useAgentState();
+  const { data: conversation } = useActiveConversation();
+
+  const { conversationId: currentConvId } = useConversationId();
 
   // >>> CUSTOM: HiClaw — Agent selection <<<
   const [activeAgentName, setActiveAgentName] = React.useState<string | null>(
@@ -92,12 +99,22 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
     [navigate, createConversation, setShouldHideSuggestions],
   );
 
+  // Track the HiClaw task ID for status updates
+  const [hicTaskId, setHicTaskId] = React.useState<string | null>(null);
+
   // Perf panel: submit analysis in current conversation
   const handlePerfPanelSubmit = React.useCallback(
-    (_tracePath: string, message: string) => {
-      // Track HiClaw task in background (non-blocking)
+    async (_tracePath: string, message: string) => {
+      // Track HiClaw task and link to conversation
       if (perfAgentId) {
-        TaskService.createTask({ agent_id: perfAgentId }).catch(() => {});
+        try {
+          const taskResult = await TaskService.createTask({ agent_id: perfAgentId });
+          setHicTaskId(taskResult.task_id);
+          // Link task to current conversation
+          if (currentConvId && !currentConvId.startsWith("task-")) {
+            TaskService.startTask(taskResult.task_id, currentConvId).catch(() => {});
+          }
+        } catch { /* non-blocking */ }
       }
       // Submit message to current conversation
       onSubmit(message, [], []);
@@ -105,12 +122,21 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
       setPerfAgentId(null);
       setShouldHideSuggestions(false);
     },
-    [perfAgentId, onSubmit, setShouldHideSuggestions],
+    [perfAgentId, onSubmit, setShouldHideSuggestions, currentConvId],
   );
-  // >>> END CUSTOM <<<
 
-  const { curAgentState } = useAgentState();
-  const { data: conversation } = useActiveConversation();
+  // Auto-update task status when agent finishes
+  React.useEffect(() => {
+    if (!hicTaskId) return;
+    if (curAgentState === AgentState.STOPPED || curAgentState === AgentState.FINISHED) {
+      TaskService.updateTask(hicTaskId, { status: "completed" }).catch(() => {});
+      setHicTaskId(null);
+    } else if (curAgentState === AgentState.ERROR) {
+      TaskService.updateTask(hicTaskId, { status: "failed" }).catch(() => {});
+      setHicTaskId(null);
+    }
+  }, [curAgentState, hicTaskId]);
+  // >>> END CUSTOM <<<
 
   // Poll sub-conversation task to check if it's loading
   const { taskStatus: subConversationTaskStatus } =
@@ -232,6 +258,12 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
 
   return (
     <div data-testid="interactive-chat-box">
+      {/* >>> CUSTOM: HiClaw — Performance report download (only after agent finishes) <<< */}
+      {(curAgentState === AgentState.STOPPED || curAgentState === AgentState.FINISHED) &&
+        conversation?.conversation_id && (
+        <PerfReportDownload conversationId={conversation.conversation_id} />
+      )}
+      {/* >>> END CUSTOM <<< */}
       {/* >>> CUSTOM: HiClaw — Perf analysis inline panel <<< */}
       {showPerfPanel && (
         <PerfAnalysisInlinePanel

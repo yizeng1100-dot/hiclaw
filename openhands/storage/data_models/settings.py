@@ -70,7 +70,7 @@ class Settings(BaseModel):
     git_user_email: str | None = None
     v1_enabled: bool = True
     sandbox_grouping_strategy: SandboxGroupingStrategy = (
-        SandboxGroupingStrategy.NO_GROUPING
+        SandboxGroupingStrategy.GROUP_BY_NEWEST
     )
 
     model_config = ConfigDict(

@@ -1,6 +1,9 @@
+/* eslint-disable i18next/no-literal-string */
 import React from "react";
 import { useParams, useNavigate } from "react-router";
 import { TaskService, type TaskInfo } from "#/api/custom-skill-service/task-service.api";
+import { AgentService } from "#/api/custom-skill-service/agent-service.api";
+import V1ConversationService from "#/api/conversation-service/v1-conversation-service.api";
 import { cn } from "#/utils/utils";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -19,37 +22,45 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "已取消",
 };
 
-// Workflow phases for perf analysis
-const WORKFLOW_PHASES = [
-  { key: "init", label: "初始化", desc: "启动 Trace Processor" },
-  { key: "target", label: "确定目标", desc: "查找前台进程" },
-  { key: "range", label: "时间范围", desc: "确定启动时间" },
-  { key: "state", label: "状态分析", desc: "主线程状态分布" },
-  { key: "branch", label: "分支分析", desc: "条件分析路径" },
-  { key: "memory", label: "内存分析", desc: "OOM/GC/内存" },
-  { key: "render", label: "渲染分析", desc: "帧率/掉帧" },
-  { key: "cleanup", label: "清理", desc: "停止服务" },
-  { key: "report", label: "生成报告", desc: "HTML 报告" },
-];
-
-function getPhaseStatus(taskStatus: string, phaseIndex: number) {
-  if (taskStatus === "completed") return "done";
-  if (taskStatus === "failed") return phaseIndex < 4 ? "done" : phaseIndex === 4 ? "error" : "pending";
-  if (taskStatus === "running") return phaseIndex < 3 ? "done" : phaseIndex === 3 ? "active" : "pending";
-  return "pending";
+interface WorkflowPhase {
+  key: string;
+  label: string;
+  desc: string;
+  file: string | null;
 }
+
+// Fallback phases if agent has no workflow_phases in config
+const DEFAULT_PHASES: WorkflowPhase[] = [
+  { key: "running", label: "执行中", desc: "任务运行中", file: null },
+];
 
 export function TaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
   const [task, setTask] = React.useState<TaskInfo | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [phases, setPhases] = React.useState<WorkflowPhase[]>(DEFAULT_PHASES);
+  const [phasesDone, setPhasesDone] = React.useState<boolean[]>([false]);
 
+  // Load task and agent workflow phases
   React.useEffect(() => {
     if (!taskId) return;
     setLoading(true);
     TaskService.getTask(taskId)
-      .then(setTask)
+      .then(async (t) => {
+        setTask(t);
+        // Load workflow phases from agent config
+        if (t.agent_id) {
+          try {
+            const agent = await AgentService.getAgent(t.agent_id);
+            const config = JSON.parse(agent.config_json || "{}");
+            if (config.workflow_phases?.length) {
+              setPhases(config.workflow_phases);
+              setPhasesDone(config.workflow_phases.map(() => false));
+            }
+          } catch { /* use default phases */ }
+        }
+      })
       .catch((e) => console.error("Failed to load task:", e))
       .finally(() => setLoading(false));
   }, [taskId]);
@@ -62,6 +73,37 @@ export function TaskDetailPage() {
     }, 5000);
     return () => clearInterval(interval);
   }, [taskId, task?.status]);
+
+  // Check real progress by probing output files from workflow phases
+  React.useEffect(() => {
+    const convId = task?.conversation_id;
+    if (!convId || task?.status === "pending" || task?.status === "cancelled" || phases.length === 0) return;
+
+    const checkFiles = async () => {
+      const results = await Promise.all(
+        phases.map(async (phase) => {
+          if (!phase.file) return false;
+          try {
+            const content = await V1ConversationService.readConversationFile(convId, phase.file);
+            return !!(content && content.length > 0);
+          } catch {
+            return false;
+          }
+        }),
+      );
+      // For phases without file (like cleanup): mark done if next phase is done
+      for (let i = 0; i < results.length - 1; i++) {
+        if (!phases[i].file && results[i + 1]) results[i] = true;
+      }
+      setPhasesDone(results);
+    };
+
+    checkFiles();
+    if (task?.status === "running") {
+      const interval = setInterval(checkFiles, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [task?.conversation_id, task?.status, phases]);
 
   const handleCancel = async () => {
     if (!taskId) return;
@@ -89,6 +131,22 @@ export function TaskDetailPage() {
   const duration = task.started_at && (task.completed_at || task.status === "running")
     ? Math.round(((task.completed_at ? new Date(task.completed_at).getTime() : Date.now()) - new Date(task.started_at).getTime()) / 1000)
     : null;
+
+  // Determine phase status from real file checks
+  const getPhaseStatus = (index: number) => {
+    if (task.status === "completed") return "done";
+    if (task.status === "failed") {
+      // All checked phases are done, first unchecked is error
+      if (phasesDone[index]) return "done";
+      const firstUnchecked = phasesDone.findIndex((d) => !d);
+      return index === firstUnchecked ? "error" : "pending";
+    }
+    if (phasesDone[index]) return "done";
+    // First unchecked phase after last done = active
+    const lastDoneIdx = phasesDone.lastIndexOf(true);
+    if (task.status === "running" && index === lastDoneIdx + 1) return "active";
+    return "pending";
+  };
 
   return (
     <div className="h-full flex flex-col p-6 text-white overflow-auto custom-scrollbar">
@@ -187,8 +245,8 @@ export function TaskDetailPage() {
 
             {/* Flow diagram */}
             <div className="flex flex-col gap-1">
-              {WORKFLOW_PHASES.map((phase, i) => {
-                const status = getPhaseStatus(task.status, i);
+              {phases.map((phase, i) => {
+                const status = getPhaseStatus(i);
                 return (
                   <div key={phase.key} className="flex items-center gap-3">
                     {/* Connector line + Node */}
@@ -204,7 +262,7 @@ export function TaskDetailPage() {
                         "bg-gray-800 border-gray-600 text-gray-500")}>
                         {status === "done" ? "✓" : status === "error" ? "✕" : status === "active" ? "●" : i + 1}
                       </div>
-                      {i < WORKFLOW_PHASES.length - 1 && (
+                      {i < phases.length - 1 && (
                         <div className={cn("w-0.5 h-3",
                           status === "done" ? "bg-green-500" : "bg-gray-700")} />
                       )}
@@ -242,7 +300,7 @@ export function TaskDetailPage() {
               <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse shrink-0" />
               <div>
                 <p className="text-sm text-blue-400">任务正在执行中</p>
-                <p className="text-xs text-gray-500 mt-0.5">每 5 秒自动刷新状态。点击"查看对话"可查看实时输出。</p>
+                <p className="text-xs text-gray-500 mt-0.5">每 10 秒自动检测阶段进度。点击"查看对话"可查看实时输出。</p>
               </div>
             </div>
           )}

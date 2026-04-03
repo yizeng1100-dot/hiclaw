@@ -9,7 +9,8 @@ import { TaskService } from "#/api/custom-skill-service/task-service.api";
 import { useCreateConversation } from "#/hooks/mutation/use-create-conversation";
 import { cn } from "#/utils/utils";
 import { PerfAnalysisInlinePanel } from "../skill-management/perf-analysis-inline-panel";
-import { KernelDiffInlinePanel } from "../skill-management/kernel-diff-inline-panel";
+// KernelDiffInlinePanel only available on merge branch
+// import { KernelDiffInlinePanel } from "../skill-management/kernel-diff-inline-panel";
 
 function getAgentType(agent: AgentDetail | null): string | null {
   if (!agent?.config_json) return null;
@@ -191,13 +192,7 @@ export function AgentDetailPage() {
               onDismiss={() => setShowPerfPanel(false)}
               disabled={starting}
             />
-          ) : (
-            <KernelDiffInlinePanel
-              onSubmit={(msg) => startAgentConversation(msg)}
-              onDismiss={() => setShowPerfPanel(false)}
-              disabled={starting}
-            />
-          )}
+          ) : null}
         </div>
       )}
 

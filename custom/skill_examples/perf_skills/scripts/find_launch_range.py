@@ -26,13 +26,14 @@ def main():
     JOIN track t ON s.track_id = t.id
     WHERE (s.name LIKE '%launching%' OR s.name LIKE '%Launch%' OR s.name LIKE '%bindApplication%')
       AND (s.name LIKE '%{args.process}%' OR t.name LIKE '%{args.process}%')
+      AND s.dur > 0
     ORDER BY s.dur DESC
     LIMIT 5
     """
     result = query_tp(args.port, sql)
     rows = parse_columns(result)
 
-    if rows and rows[0].get("start_ts"):
+    if rows and rows[0].get("start_ts") and rows[0].get("duration_ms", 0) > 0:
         r = rows[0]
         dur_ms = r.get("duration_ms", 0)
         severity = "excellent" if dur_ms < 1000 else "good" if dur_ms < 1500 else "fair" if dur_ms < 2000 else "poor" if dur_ms < 3000 else "critical"
