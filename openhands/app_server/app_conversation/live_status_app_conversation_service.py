@@ -598,12 +598,12 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             return []
 
     # >>> CUSTOM: HiClaw <<<
-    _tunnel_cache: dict = {}  # class-level cache: {'port': int|None, 'ts': float}
-
     def _get_cached_tunnel_port(self) -> int | None:
         """Get tunnel port from worker-manager with short cache to avoid blocking."""
         import time
-        cache = LiveStatusAppConversationService._tunnel_cache
+        if not hasattr(LiveStatusAppConversationService, '_tunnel_cache_data'):
+            LiveStatusAppConversationService._tunnel_cache_data = {}
+        cache = LiveStatusAppConversationService._tunnel_cache_data
         now = time.time()
         # Cache for 5 seconds to avoid hammering worker-manager on every conversation
         if cache.get('ts', 0) > now - 5:
