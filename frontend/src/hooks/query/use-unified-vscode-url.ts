@@ -62,7 +62,8 @@ export const useUnifiedVSCodeUrl = () => {
             );
             if (machine?.host && machine?.code_server_port) {
               // >>> CUSTOM: HiClaw — use conversation's own workspace path <<<
-              const folder = appConversation?.remote_working_dir || machine.workspace || "/root/workspace";
+              // >>> CUSTOM: HiClaw — use remote_working_dir, fallback to home dir <<<
+              const folder = appConversation?.remote_working_dir || machine.workspace || `/home/${machine.username || "root"}`;
               // >>> END CUSTOM <<<
               return {
                 url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(folder)}`,

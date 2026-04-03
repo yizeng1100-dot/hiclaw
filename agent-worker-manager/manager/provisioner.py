@@ -60,6 +60,42 @@ class Provisioner:
         _, _, ec = await self.ssh.run(cmd, timeout=5)
         return ec == 0
 
+    async def _write_wrapper_scripts(self, venv: str, remote_python: str) -> None:
+        """Write _launcher.py and agent-server wrapper script on remote machine.
+
+        _launcher.py monkey-patches PUBLIC_SKILLS_REPO before starting agent-server,
+        redirecting the SDK's github.com clone to the internal Gitea instance.
+        """
+        await self.ssh.run(
+            f"mkdir -p {venv}/bin && "
+            f"cat > {venv}/bin/_launcher.py << 'PYEOF'\n"
+            "import os, sys\n"
+            "# Ensure venv lib is in path\n"
+            "venv_lib = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'lib')\n"
+            "if venv_lib not in sys.path:\n"
+            "    sys.path.insert(0, venv_lib)\n"
+            "repo = os.environ.get('OH_PUBLIC_SKILLS_REPO')\n"
+            "if repo:\n"
+            "    try:\n"
+            "        import openhands.sdk.context.skills.skill as sk\n"
+            "        sk.PUBLIC_SKILLS_REPO = repo\n"
+            "        print(f'[HiClaw] PUBLIC_SKILLS_REPO -> {repo}', file=sys.stderr)\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "from openhands.agent_server.__main__ import main\n"
+            "sys.exit(main())\n"
+            "PYEOF\n", timeout=10)
+        await self.ssh.run(
+            f"cat > {venv}/bin/agent-server << 'WRAPPER_EOF'\n"
+            f"#!/bin/bash\n"
+            f"export PYTHONPATH={venv}/lib:$PYTHONPATH\n"
+            f"export no_proxy=localhost,127.0.0.1\n"
+            f"export NO_PROXY=localhost,127.0.0.1\n"
+            f"exec {remote_python} {venv}/bin/_launcher.py \"$@\"\n"
+            f"WRAPPER_EOF\n"
+            f"chmod +x {venv}/bin/agent-server", timeout=10)
+        logger.info(f"Wrapper scripts written: {venv}/bin/agent-server + _launcher.py")
+
     async def provision(self) -> AsyncGenerator[ProvisionEvent, None]:
         """Run all provisioning steps. Each step checks remote state first, skips if already done."""
 
@@ -179,8 +215,10 @@ class Provisioner:
             if "VERIFY_OK" in verify_out:
                 sdk_healthy = True
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Already installed")
+                # Always regenerate wrapper scripts (ensure monkey-patch is up to date)
+                await self._write_wrapper_scripts(venv, remote_python)
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed & verified")
-                logger.info("SDK: already installed and verified, skipping")
+                logger.info("SDK: already installed and verified, wrapper regenerated")
             else:
                 # Binary exists but broken — clean up everything and reinstall
                 logger.warning(f"SDK binary exists but broken: {verify_out.strip()[-200:]}")
@@ -280,37 +318,8 @@ class Provisioner:
             # >>> CUSTOM: HiClaw — wrapper script that patches PUBLIC_SKILLS_REPO <<<
             # Uses a Python launcher script instead of `python -m openhands.agent_server`
             # so we can monkey-patch the SDK constant before the server starts.
-            # Create launcher script that monkey-patches PUBLIC_SKILLS_REPO
-            # before starting agent-server (SDK hardcodes github.com URL)
-            await self.ssh.run(
-                f"mkdir -p {venv}/bin && "
-                f"cat > {venv}/bin/_launcher.py << 'PYEOF'\n"
-                "import os, sys\n"
-                "# Ensure venv lib is in path\n"
-                "venv_lib = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'lib')\n"
-                "if venv_lib not in sys.path:\n"
-                "    sys.path.insert(0, venv_lib)\n"
-                "repo = os.environ.get('OH_PUBLIC_SKILLS_REPO')\n"
-                "if repo:\n"
-                "    try:\n"
-                "        import openhands.sdk.context.skills.skill as sk\n"
-                "        sk.PUBLIC_SKILLS_REPO = repo\n"
-                "        print(f'[HiClaw] PUBLIC_SKILLS_REPO -> {repo}', file=sys.stderr)\n"
-                "    except Exception:\n"
-                "        pass\n"
-                "from openhands.agent_server.__main__ import main\n"
-                "sys.exit(main())\n"
-                "PYEOF\n", timeout=10)
-            # Create wrapper shell script
-            await self.ssh.run(
-                f"cat > {venv}/bin/agent-server << 'WRAPPER_EOF'\n"
-                f"#!/bin/bash\n"
-                f"export PYTHONPATH={venv}/lib:$PYTHONPATH\n"
-                f"export no_proxy=localhost,127.0.0.1\n"
-                f"export NO_PROXY=localhost,127.0.0.1\n"
-                f"exec {remote_python} {venv}/bin/_launcher.py \"$@\"\n"
-                f"WRAPPER_EOF\n"
-                f"chmod +x {venv}/bin/agent-server", timeout=10)
+            # Write wrapper scripts (launcher + shell wrapper)
+            await self._write_wrapper_scripts(venv, remote_python)
             # >>> END CUSTOM <<<
 
             # >>> CUSTOM: HiClaw — final verification: can agent-server actually run? <<<
