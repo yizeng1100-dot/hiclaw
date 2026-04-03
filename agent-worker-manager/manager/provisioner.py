@@ -87,10 +87,13 @@ class Provisioner:
                 yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=f"Python 3.12 verified: {py_ver.strip()}")
                 logger.info(f"Python: standalone exists and works at {standalone_python}")
             else:
-                # Exists but broken — clean up
+                # Exists but broken — clean up all Python locations
                 logger.warning(f"Standalone Python broken (ec={py_ec}): {py_ver.strip()}")
                 yield _evt(ProvisionStep.CHECK_PYTHON, "started", detail="Existing Python broken, will reinstall...")
-                await self.ssh.run(f"rm -rf {REMOTE_PYTHON_INSTALL_PATH}", timeout=15)
+                await self.ssh.run(
+                    f"rm -rf {REMOTE_PYTHON_INSTALL_PATH}/python "
+                    f"~/.hiclaw/agent-deps/python3-standalone",  # old path
+                    timeout=15)
             # >>> END CUSTOM <<<
         else:
             yield _evt(ProvisionStep.CHECK_PYTHON, "started")
@@ -179,13 +182,16 @@ class Provisioner:
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed & verified")
                 logger.info("SDK: already installed and verified, skipping")
             else:
-                # Binary exists but broken — clean up and reinstall
+                # Binary exists but broken — clean up everything and reinstall
                 logger.warning(f"SDK binary exists but broken: {verify_out.strip()[-200:]}")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
                            detail="Existing install is broken, cleaning up and reinstalling...")
                 await self.ssh.run(
-                    f"rm -rf {venv} {REMOTE_DEPS_PATH}/wheels", timeout=30)
-                logger.info("Cleaned up broken SDK install")
+                    f"rm -rf {venv} {REMOTE_DEPS_PATH}/wheels "
+                    f"/opt/agent-venv "  # legacy path
+                    f"~/.hiclaw/agent-deps/python3-standalone",  # old python path
+                    timeout=30)
+                logger.info("Cleaned up broken SDK install (including legacy paths)")
             # >>> END CUSTOM <<<
 
         if not sdk_healthy:
