@@ -33,10 +33,18 @@ export const useUnifiedGetGitChanges = () => {
     settings?.sandbox_grouping_strategy !== undefined;
 
   // Calculate git path based on selected repository and sandbox grouping strategy
-  const gitPath = React.useMemo(
-    () => getGitPath(conversationId, selectedRepository, useSandboxGrouping),
-    [conversationId, selectedRepository, useSandboxGrouping],
-  );
+  // >>> CUSTOM: HiClaw — use remote_working_dir for remote conversations <<<
+  const isRemote = conversation?.sandbox_id?.startsWith("remote-");
+  const remoteWorkingDir = (conversation as unknown as Record<string, unknown>)?.remote_working_dir as string | undefined;
+  const gitPath = React.useMemo(() => {
+    if (isRemote && remoteWorkingDir) {
+      return selectedRepository
+        ? `${remoteWorkingDir}/${selectedRepository.split("/").pop()}`
+        : remoteWorkingDir;
+    }
+    return getGitPath(conversationId, selectedRepository, useSandboxGrouping);
+  }, [conversationId, selectedRepository, useSandboxGrouping, isRemote, remoteWorkingDir]);
+  // >>> END CUSTOM <<<
 
   const result = useQuery({
     queryKey: [

@@ -35,10 +35,21 @@ export const useUnifiedGitDiff = (config: UseUnifiedGitDiffConfig) => {
     settings?.sandbox_grouping_strategy !== undefined;
 
   // For V1, we need to convert the relative file path to an absolute path
-  // The diff endpoint expects: /workspace/project/RepoName/relative/path
+  // >>> CUSTOM: HiClaw — use remote_working_dir for remote conversations <<<
+  const isRemote = conversation?.sandbox_id?.startsWith("remote-");
+  const remoteWorkingDir = (conversation as unknown as Record<string, unknown>)?.remote_working_dir as string | undefined;
+  // >>> END CUSTOM <<<
   const absoluteFilePath = React.useMemo(() => {
     if (!isV1Conversation) return config.filePath;
 
+    // >>> CUSTOM: HiClaw <<<
+    if (isRemote && remoteWorkingDir) {
+      const base = selectedRepository
+        ? `${remoteWorkingDir}/${selectedRepository.split("/").pop()}`
+        : remoteWorkingDir;
+      return `${base}/${config.filePath}`;
+    }
+    // >>> END CUSTOM <<<
     const gitPath = getGitPath(
       conversationId,
       selectedRepository,
