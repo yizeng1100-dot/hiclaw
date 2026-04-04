@@ -70,7 +70,20 @@ def _load_machines_state() -> dict[str, MachineInfo]:
 
 
 def _pick_port() -> int:
-    return random.randint(20000, 50000)
+    """Pick a random available port in range 20000-50000."""
+    import socket
+    for _ in range(20):
+        port = random.randint(20000, 50000)
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("0.0.0.0", port))
+                return port
+        except OSError:
+            continue
+    # Fallback: let OS pick
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("0.0.0.0", 0))
+        return s.getsockname()[1]
 
 
 class MachineManager:
@@ -436,6 +449,20 @@ class MachineManager:
                 self._broadcast_event(machine_id, evt)
 
                 try:
+                    # Close old tunnels if any (from previous connection)
+                    old_listener = self._listeners.pop(machine_id, None)
+                    if old_listener:
+                        try:
+                            old_listener.close()
+                        except Exception:
+                            pass
+                    old_cs_listener = self._listeners.pop(f"{machine_id}_cs", None)
+                    if old_cs_listener:
+                        try:
+                            old_cs_listener.close()
+                        except Exception:
+                            pass
+
                     # Tunnel for agent-server
                     local_port = _pick_port()
                     logger.info(f"[{machine.host}] Creating agent-server tunnel: localhost:{local_port} → remote:{machine.agent_server_port}")
