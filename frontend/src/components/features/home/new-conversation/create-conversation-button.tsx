@@ -200,18 +200,41 @@ export function CreateConversationButton() {
         }
       } catch (e) {
         if ((e as Error).name === "AbortError") return;
-        // Stream ended without ready/error — poll machine status
-        try {
-          const resp = await axios.get(`${workerManagerUrl}/api/machines/${machineId}`);
-          if (resp.data.status === "ready") {
-            setMachineStatus("ready");
-            setProxyUrl(resp.data.proxy_url || null);
-            setTunnelPort(resp.data.tunnel_port || null);
-          } else if (resp.data.status === "error") {
-            setMachineStatus("error");
-            setError(resp.data.error || "Unknown error");
-          }
-        } catch { /* ignore */ }
+        // SSE stream ended/broken — fall back to polling until ready/error
+        const pollStart = Date.now();
+        const maxPollMs = 10 * 60 * 1000; // 10 minutes max
+        while (Date.now() - pollStart < maxPollMs) {
+          try {
+            const resp = await axios.get(`${workerManagerUrl}/api/machines/${machineId}`, { timeout: 5000 });
+            const st = resp.data?.status;
+            if (st === "ready") {
+              setMachineStatus("ready");
+              setProxyUrl(resp.data.proxy_url || null);
+              setTunnelPort(resp.data.tunnel_port || null);
+              return;
+            }
+            if (st === "error") {
+              setMachineStatus("error");
+              setError(resp.data.error || "Unknown error");
+              return;
+            }
+            // Still provisioning �� update status text and keep polling
+            const steps = resp.data?.provision_steps;
+            if (Array.isArray(steps) && steps.length > 0) {
+              const latest = steps[steps.length - 1];
+              addProvisionEvent({
+                step: latest.step || "provisioning",
+                status: latest.status || "started",
+                detail: latest.detail || "Working...",
+                timestamp: latest.timestamp || new Date().toISOString(),
+              });
+            }
+          } catch { /* ignore poll error, retry */ }
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+        // Timeout
+        setMachineStatus("error");
+        setError("Provisioning timed out (10 min). Refresh and try again.");
       }
     })();
 
