@@ -674,18 +674,37 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         if is_remote:
             # For remote workers: sandbox doesn't exist locally.
             # Build conversation_url through the /runtime/{port}/ proxy.
-            # Use cached tunnel info to avoid blocking the conversation list.
             conversation_url = None
-            tunnel_port = None
             sandbox_status = SandboxStatus.PAUSED  # default: assume tunnel is dead
 
-            tunnel_port = self._get_cached_tunnel_port()
+            # Try multiple sources for tunnel port:
+            # 1. Saved remote_agent_url from conversation creation
+            # 2. Worker Manager cache (for reconnected tunnels with new ports)
+            tunnel_port = None
+            _saved_url = getattr(app_conversation_info, 'remote_agent_url', None) or ''
+            if _saved_url:
+                try:
+                    from urllib.parse import urlparse
+                    _p = urlparse(_saved_url)
+                    if _p.port:
+                        tunnel_port = _p.port
+                except Exception:
+                    pass
+
+            # Also check Worker Manager for latest tunnel port (may have changed after reconnect)
+            _wm_port = self._get_cached_tunnel_port()
+            if _wm_port:
+                tunnel_port = _wm_port  # prefer fresh port from Worker Manager
 
             if tunnel_port:
                 conversation_url = f'/runtime/{tunnel_port}/api/conversations/{app_conversation_info.id.hex}'
                 sandbox_status = SandboxStatus.RUNNING
                 app_conversation_info.remote_agent_url = f'http://localhost:{tunnel_port}'
-            # else: no active tunnel → conversation_url stays None, status stays PAUSED
+            else:
+                _logger.debug(
+                    f'[REMOTE] No tunnel port for conversation {app_conversation_info.id.hex}: '
+                    f'saved_url={_saved_url}, wm_port={_wm_port}'
+                )
 
             return AppConversation(
                 **app_conversation_info.model_dump(),
