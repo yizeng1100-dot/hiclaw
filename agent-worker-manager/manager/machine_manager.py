@@ -218,31 +218,10 @@ class MachineManager:
                     # >>> END CUSTOM <<<
                     machine.active_conversations += 1
                     ssh = self._ssh_clients.get(machine_id)
-                    # >>> CUSTOM: HiClaw — workspace change no longer restarts agent-server <<<
-                    if req.workspace != machine.workspace:
-                        old_workspace = machine.workspace
-                        machine.workspace = req.workspace
-                        logger.info(f"Machine {machine_id} workspace changed: {old_workspace} → {req.workspace}")
-                        if ssh and ssh.connected:
-                            await ssh.run(f"mkdir -p {req.workspace}", timeout=5)
-                    # >>> END CUSTOM <<<
-                    # >>> CUSTOM: HiClaw — verify code-server is also healthy on reconnect <<<
-                    if ssh and ssh.connected and machine.code_server_port:
-                        try:
-                            cs_out, _, cs_ec = await ssh.run(
-                                f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' "
-                                f"--max-time 3 http://localhost:{machine.code_server_port}/healthz",
-                                timeout=5,
-                            )
-                            if cs_out.strip() != "200":
-                                logger.warning(f"Code-server on port {machine.code_server_port} not healthy, restarting")
-                                await self._start_code_server(ssh, machine)
-                        except Exception as cs_e:
-                            logger.warning(f"Code-server health check failed: {cs_e}")
-                    # >>> END CUSTOM <<<
-                    # Always sync skills on reconnect
+                    # >>> CUSTOM: HiClaw — full reconnect health checks <<<
                     if ssh and ssh.connected:
-                        asyncio.create_task(self._clone_skills_repo(ssh, machine))
+                        asyncio.create_task(self._reconnect_health_checks(ssh, machine, req))
+                    # >>> END CUSTOM <<<
                     return machine
             if machine.status in (MachineStatus.CONNECTING, MachineStatus.PROVISIONING, MachineStatus.STARTING):
                 # Already in progress — caller should subscribe to SSE
@@ -791,6 +770,80 @@ class MachineManager:
         )
 
     # ─── Query / Lifecycle ──────────────────────────────
+
+    async def _reconnect_health_checks(self, ssh: SSHClient, machine: MachineInfo, req: ConnectMachineRequest) -> None:
+        """Run all health checks when reusing an existing READY machine.
+
+        Checks (in background, non-blocking):
+        1. Workspace directory exists
+        2. Code-server is healthy, restart if not
+        3. Public skills cache exists, clone from Gitea if not
+        4. Custom skills repo is synced
+        """
+        try:
+            # 1. Workspace change
+            if req.workspace != machine.workspace:
+                old_workspace = machine.workspace
+                machine.workspace = req.workspace
+                logger.info(f"Machine {machine.id} workspace changed: {old_workspace} → {req.workspace}")
+                await ssh.run(f"mkdir -p {req.workspace}", timeout=5)
+            else:
+                # Ensure workspace dir exists even if unchanged
+                await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
+
+            # 2. Code-server health
+            if machine.code_server_port:
+                try:
+                    cs_out, _, _ = await ssh.run(
+                        f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' "
+                        f"--max-time 3 http://localhost:{machine.code_server_port}/healthz",
+                        timeout=5,
+                    )
+                    if cs_out.strip() != "200":
+                        logger.warning(f"Code-server not healthy on reconnect, restarting")
+                        await self._start_code_server(ssh, machine)
+                except Exception as e:
+                    logger.warning(f"Code-server health check failed on reconnect: {e}")
+
+            # 3. Public skills cache
+            public_skills_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
+            if not public_skills_repo:
+                _gitea_port = os.environ.get('HICLAW_GITEA_PORT', '3300')
+                _gitea_user = os.environ.get('HICLAW_GITEA_USER', 'hiclaw-admin')
+                _gitea_pass = os.environ.get('HICLAW_GITEA_PASSWORD', 'HiClaw2026!')
+                # Get app-server IP from SSH connection
+                try:
+                    ip_out, _, _ = await ssh.run("echo $SSH_CLIENT | awk '{print $1}'", timeout=3)
+                    _app_ip = ip_out.strip()
+                except Exception:
+                    _app_ip = 'localhost'
+                public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@{_app_ip}:{_gitea_port}/{_gitea_user}/extensions.git'
+            if public_skills_repo:
+                _skills_cache = "$HOME/.openhands/cache/skills"
+                _has_cache, _, _ = await ssh.run(
+                    f"test -d {_skills_cache}/public-skills/.git && echo YES || echo NO",
+                    timeout=5,
+                )
+                if "YES" not in _has_cache:
+                    logger.info("Public skills cache missing on reconnect, cloning from Gitea")
+                    await ssh.run(
+                        f"mkdir -p {_skills_cache} && "
+                        f"git clone --depth 1 '{public_skills_repo}' {_skills_cache}/public-skills",
+                        timeout=60,
+                    )
+                else:
+                    # Try to update (pull latest), but don't fail if it can't
+                    await ssh.run(
+                        f"cd {_skills_cache}/public-skills && "
+                        f"git pull --rebase origin main 2>/dev/null || true",
+                        timeout=15,
+                    )
+
+            # 4. Custom skills sync
+            await self._clone_skills_repo(ssh, machine)
+
+        except Exception as e:
+            logger.warning(f"Reconnect health checks failed (non-fatal): {e}")
 
     def get_machine(self, machine_id: str) -> MachineInfo | None:
         return self._machines.get(machine_id)
