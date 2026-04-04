@@ -1730,11 +1730,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                                 'X-User-Id': _m.get('comagic_user_id', ''),
                                 'X-Enterprise-Id': 'copilot',
                                 'X-Request-ID': str(_uuid.uuid4()),
-                                'User-Agent': 'CLI/0.0.0 CoMagic/0.1.66',
-                            }
-                            llm.litellm_extra_body = {
-                                **(llm.litellm_extra_body or {}),
-                                'model_option_id': 204,
+                                'User-Agent': 'CLI/0.0.0 CoMagic/0.1.77',
                             }
                             _logger.info(f'[COMAGIC] Injected remote token into LLM config')
                             break

@@ -220,7 +220,14 @@ class MachineManager:
                     ssh = self._ssh_clients.get(machine_id)
                     # >>> CUSTOM: HiClaw — full reconnect health checks <<<
                     if ssh and ssh.connected:
-                        asyncio.create_task(self._reconnect_health_checks(ssh, machine, req))
+                        async def _run_checks():
+                            try:
+                                await self._reconnect_health_checks(ssh, machine, req)
+                            except Exception as exc:
+                                logger.error(f"Reconnect health checks crashed: {exc}", exc_info=True)
+                        asyncio.create_task(_run_checks())
+                    else:
+                        logger.warning(f"Machine {machine_id} reuse: SSH not connected, skipping health checks")
                     # >>> END CUSTOM <<<
                     return machine
             if machine.status in (MachineStatus.CONNECTING, MachineStatus.PROVISIONING, MachineStatus.STARTING):
@@ -765,6 +772,8 @@ class MachineManager:
         4. Custom skills repo is synced
         """
         try:
+            logger.info(f"[RECONNECT] Starting health checks for {machine.host}")
+
             # 1. Workspace change
             if req.workspace != machine.workspace:
                 old_workspace = machine.workspace
@@ -800,12 +809,13 @@ class MachineManager:
                 f"test -d {_skills_cache}/public-skills/.git && echo YES || echo NO",
                 timeout=5,
             )
+            logger.info(f"[RECONNECT] Public skills cache check: {_has_cache.strip()}, path={_skills_cache}")
             if "YES" not in _has_cache:
                 extensions_bundle = os.path.join(
                     os.path.dirname(os.path.dirname(__file__)), "deps", "openhands-extensions.bundle"
                 )
+                logger.info(f"[RECONNECT] Bundle path: {extensions_bundle}, exists={os.path.exists(extensions_bundle)}")
                 if os.path.exists(extensions_bundle):
-                    logger.info("Public skills cache missing on reconnect, uploading bundle via SSH")
                     await ssh.run(f"mkdir -p {_remote_tmp} {_skills_cache}", timeout=5)
                     await ssh.upload_file(
                         extensions_bundle,
@@ -816,7 +826,12 @@ class MachineManager:
                         f"rm -f {_remote_tmp}/openhands-extensions.bundle",
                         timeout=30,
                     )
-                    logger.info("Public skills uploaded from bundle on reconnect")
+                    # Verify it worked
+                    _verify, _, _ = await ssh.run(
+                        f"test -d {_skills_cache}/public-skills/skills && echo OK || echo FAIL",
+                        timeout=5,
+                    )
+                    logger.info(f"[RECONNECT] Public skills upload result: {_verify.strip()}")
                 else:
                     logger.info(f"No extensions bundle found at {extensions_bundle}, skipping")
 
