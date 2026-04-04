@@ -667,7 +667,9 @@ class MachineManager:
         env_vars += "OH_LOAD_PUBLIC_SKILLS=false "
         # Use local model cost map — prevents litellm from fetching from GitHub
         env_vars += "LITELLM_LOCAL_MODEL_COST_MAP=true "
-        # LLM error details are logged by _launcher.py's retry_mixin monkey-patch
+        # Enable detailed litellm logging so LLM errors show full response body
+        env_vars += "LITELLM_LOG=DEBUG "
+        env_vars += "SET_VERBOSE=True "
         # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
