@@ -373,7 +373,10 @@ class Provisioner:
                 await self.ssh.run(
                     f"mkdir -p {skills_cache} && "
                     f"git clone {remote_tmp}/openhands-extensions.bundle {skills_cache}/public-skills && "
-                    f"rm -f {remote_tmp}/openhands-extensions.bundle",
+                    f"rm -f {remote_tmp}/openhands-extensions.bundle && "
+                    # Point remote to /dev/null so SDK's git fetch fails instantly
+                    # instead of trying to reach GitHub and timing out
+                    f"git -C {skills_cache}/public-skills remote set-url origin /dev/null",
                     timeout=30,
                 )
                 # Verify

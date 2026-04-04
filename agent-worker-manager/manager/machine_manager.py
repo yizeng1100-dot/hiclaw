@@ -825,7 +825,10 @@ class MachineManager:
                     )
                     clone_out, clone_err, clone_ec = await ssh.run(
                         f"git clone {_remote_tmp}/openhands-extensions.bundle {_skills_cache}/public-skills 2>&1 && "
-                        f"rm -f {_remote_tmp}/openhands-extensions.bundle",
+                        f"rm -f {_remote_tmp}/openhands-extensions.bundle && "
+                        # Point remote to /dev/null so SDK's git fetch fails instantly
+                        # instead of trying to reach GitHub and timing out
+                        f"git -C {_skills_cache}/public-skills remote set-url origin /dev/null",
                         timeout=30,
                     )
                     # Verify
