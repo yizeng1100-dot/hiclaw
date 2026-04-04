@@ -73,7 +73,9 @@ export const useUnifiedGetGitChanges = () => {
     staleTime: 1000 * 60 * 5, // 5 minutes
     gcTime: 1000 * 60 * 15, // 15 minutes
     refetchOnMount: "always", // Always refetch when mounting (e.g. navigating between conversations that share a sandbox)
-    enabled: runtimeIsReady && !!conversationId,
+    // For V1/remote conversations, also require conversationUrl to be set
+    // to prevent falling through to V0 path which tries local /workspace/project
+    enabled: runtimeIsReady && !!conversationId && (!isV1Conversation || !!conversationUrl),
     meta: {
       disableToast: true,
     },
