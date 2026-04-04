@@ -346,6 +346,22 @@ class Provisioner:
 
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
 
+        # ── Step 2.5: Git URL rewrite for air-gapped networks ──
+        # >>> CUSTOM: HiClaw — redirect GitHub extensions repo to internal Gitea <<<
+        # The SDK hardcodes PUBLIC_SKILLS_REPO="https://github.com/OpenHands/extensions"
+        # as a default parameter in load_public_skills(), which captures the value at
+        # function definition time. Monkey-patching the module constant has no effect.
+        # Instead, use git's native url.<>.insteadOf to transparently rewrite the URL.
+        gitea_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
+        if gitea_repo:
+            await self.ssh.run(
+                f'git config --global url."{gitea_repo}".insteadOf '
+                f'"https://github.com/OpenHands/extensions"',
+                timeout=5,
+            )
+            logger.info(f"Git insteadOf configured: github.com/OpenHands/extensions -> {gitea_repo}")
+        # >>> END CUSTOM <<<
+
         # ── Step 3: code-server ──
         # Check: code-server binary exists?
         cs_path = REMOTE_CODE_SERVER_PATH.replace("$HOME", "~")

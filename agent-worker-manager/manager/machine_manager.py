@@ -618,6 +618,14 @@ class MachineManager:
             public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@{_gitea_host}:{_gitea_port}/{_gitea_user}/extensions.git'
         if public_skills_repo:
             env_vars += f"OH_PUBLIC_SKILLS_REPO='{public_skills_repo}' "
+            # Also configure git url rewrite so SDK's hardcoded GitHub URL is
+            # transparently redirected to internal Gitea (default param capture
+            # in load_public_skills() makes env-var monkey-patch ineffective).
+            await ssh.run(
+                f'git config --global url."{public_skills_repo}".insteadOf '
+                f'"https://github.com/OpenHands/extensions"',
+                timeout=5,
+            )
         # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "

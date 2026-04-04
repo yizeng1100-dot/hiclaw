@@ -63,14 +63,17 @@ def combine_lifespans(*lifespans):
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # >>> CUSTOM: HiClaw — DB migration + seed skills on startup <<<
     try:
-        from custom.skill_mgmt.seed import seed_skills
         import logging as _logging
         import os as _os
         import sqlite3 as _sqlite3
         from pathlib import Path as _Path
 
+        from custom.skill_mgmt.seed import seed_skills
+
         # Auto-migrate: add missing columns to conversation_metadata
-        _db_path = _os.environ.get('OH_PERSISTENCE_DIR', str(_Path.home() / '.openhands'))
+        _db_path = _os.environ.get(
+            'OH_PERSISTENCE_DIR', str(_Path.home() / '.openhands')
+        )
         _db_file = str(_Path(_db_path) / 'openhands.db')
         if _Path(_db_file).exists():
             _conn = _sqlite3.connect(_db_file)
@@ -84,20 +87,35 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             }
             for col, typ in _new_cols.items():
                 if col not in _existing:
-                    _cur.execute(f'ALTER TABLE conversation_metadata ADD COLUMN {col} {typ}')
-                    _logging.getLogger(__name__).info(f'DB migration: added column {col}')
+                    _cur.execute(
+                        f'ALTER TABLE conversation_metadata ADD COLUMN {col} {typ}'
+                    )
+                    _logging.getLogger(__name__).info(
+                        f'DB migration: added column {col}'
+                    )
             _conn.commit()
             _conn.close()
 
         seed_skills()
 
         # Auto-import OpenHands extensions to Gitea (public skills mirror)
-        _bundle = _Path(__file__).resolve().parent.parent.parent / 'agent-worker-manager' / 'deps' / 'openhands-extensions.bundle'
+        _bundle = (
+            _Path(__file__).resolve().parent.parent.parent
+            / 'agent-worker-manager'
+            / 'deps'
+            / 'openhands-extensions.bundle'
+        )
         if _bundle.exists():
             try:
-                from openhands.server.routes.hiclaw_config import GITEA_URL, GITEA_ADMIN_USER, GITEA_ADMIN_PASSWORD
                 import subprocess as _sp
+
                 import httpx as _httpx
+
+                from openhands.server.routes.hiclaw_config import (
+                    GITEA_ADMIN_PASSWORD,
+                    GITEA_ADMIN_USER,
+                    GITEA_URL,
+                )
 
                 # Check if repo already exists in Gitea
                 _check = _httpx.get(
@@ -106,7 +124,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     timeout=5,
                 )
                 if _check.status_code == 404:
-                    _logging.getLogger(__name__).info('Importing OpenHands extensions to Gitea...')
+                    _logging.getLogger(__name__).info(
+                        'Importing OpenHands extensions to Gitea...'
+                    )
                     # Create repo
                     _httpx.post(
                         f'{GITEA_URL}/api/v1/user/repos',
@@ -117,25 +137,58 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     # Clone from bundle and push
                     _tmp_dir = _Path('/tmp/_extensions_import')
                     _tmp_dir.mkdir(exist_ok=True)
-                    _sp.run(['git', 'clone', str(_bundle), str(_tmp_dir / 'repo')],
-                            capture_output=True, timeout=30)
+                    _sp.run(
+                        ['git', 'clone', str(_bundle), str(_tmp_dir / 'repo')],
+                        capture_output=True,
+                        timeout=30,
+                    )
                     _gitea_url = f'http://{GITEA_ADMIN_USER}:{GITEA_ADMIN_PASSWORD}@localhost:{GITEA_URL.split(":")[-1]}/{GITEA_ADMIN_USER}/extensions.git'
-                    _sp.run(['git', '-C', str(_tmp_dir / 'repo'), 'remote', 'add', 'gitea', _gitea_url],
-                            capture_output=True, timeout=5)
-                    _sp.run(['git', '-C', str(_tmp_dir / 'repo'), 'push', 'gitea', '--all'],
-                            capture_output=True, timeout=30)
-                    _sp.run(['git', '-C', str(_tmp_dir / 'repo'), 'push', 'gitea', '--tags'],
-                            capture_output=True, timeout=30)
+                    _sp.run(
+                        [
+                            'git',
+                            '-C',
+                            str(_tmp_dir / 'repo'),
+                            'remote',
+                            'add',
+                            'gitea',
+                            _gitea_url,
+                        ],
+                        capture_output=True,
+                        timeout=5,
+                    )
+                    _sp.run(
+                        ['git', '-C', str(_tmp_dir / 'repo'), 'push', 'gitea', '--all'],
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    _sp.run(
+                        [
+                            'git',
+                            '-C',
+                            str(_tmp_dir / 'repo'),
+                            'push',
+                            'gitea',
+                            '--tags',
+                        ],
+                        capture_output=True,
+                        timeout=30,
+                    )
                     import shutil
+
                     shutil.rmtree(_tmp_dir, ignore_errors=True)
-                    _logging.getLogger(__name__).info('OpenHands extensions imported to Gitea')
+                    _logging.getLogger(__name__).info(
+                        'OpenHands extensions imported to Gitea'
+                    )
                 else:
-                    _logging.getLogger(__name__).debug('Extensions repo already in Gitea')
+                    _logging.getLogger(__name__).debug(
+                        'Extensions repo already in Gitea'
+                    )
             except Exception as _e:
                 _logging.getLogger(__name__).debug(f'Extensions import skipped: {_e}')
 
     except Exception as e:
         import logging
+
         logging.getLogger(__name__).warning(f'HiClaw startup: {e}')
     # >>> END CUSTOM <<<
     async with conversation_manager:
