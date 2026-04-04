@@ -458,9 +458,9 @@ class MachineManager:
                     machine.tunnel_port = local_port
                     machine.proxy_url = f"http://localhost:{local_port}"
 
-                    # Tunnel for code-server (if running) — fixed port for easy SSH forwarding
+                    # Tunnel for code-server (if running) — per-user dynamic port
                     if machine.code_server_port:
-                        cs_local_port = 18443
+                        cs_local_port = _pick_port()
                         logger.info(f"[{machine.host}] Creating code-server tunnel: localhost:{cs_local_port} → remote:{machine.code_server_port}")
                         try:
                             cs_listener = await ssh.forward_local_port(machine.code_server_port, cs_local_port)
@@ -615,6 +615,8 @@ class MachineManager:
         # >>> CUSTOM: HiClaw — use user home for FILE_STORE_PATH (not workspace-specific) <<<
         # This allows one agent-server to serve multiple workspaces
         env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "
+        # LLM completion logs go to ~/.hiclaw/logs/ (SDK reads LOG_DIR env var)
+        env_vars += "LOG_DIR=$HOME/.hiclaw/logs "
         # >>> CUSTOM: HiClaw — pass secret key for encrypting API keys in persisted conversations <<<
         _secret_key = os.environ.get('OH_SECRET_KEY', '')
         if _secret_key:
@@ -682,11 +684,17 @@ class MachineManager:
 
         cs_port = machine.code_server_port or 8443
 
-        # Check if already running
+        # Per-user code-server port: hash username to get a stable port offset
+        # so different users on the same machine don't conflict
+        _user_hash = hash(machine.username) % 100
+        cs_port = 8443 + _user_hash  # e.g., g0003848 → 8443+N, z0002323 → 8443+M
+        machine.code_server_port = cs_port
+        logger.info(f"[{machine.host}] code-server port for {machine.username}: {cs_port}")
+
+        # Check if already running on this user's port
         stdout, _, ec = await ssh.run(f"no_proxy=localhost,127.0.0.1 curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}", timeout=5)
         if stdout.strip() == "200":
-            logger.info(f"code-server already running on {machine.host}:{cs_port}")
-            machine.code_server_port = cs_port
+            logger.info(f"[{machine.host}] code-server already running on port {cs_port}")
             return
 
         # >>> CUSTOM: HiClaw — start code-server at $HOME so all workspaces are accessible <<<
