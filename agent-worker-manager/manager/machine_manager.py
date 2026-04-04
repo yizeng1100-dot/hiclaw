@@ -618,27 +618,19 @@ class MachineManager:
             public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@{_gitea_host}:{_gitea_port}/{_gitea_user}/extensions.git'
         if public_skills_repo:
             env_vars += f"OH_PUBLIC_SKILLS_REPO='{public_skills_repo}' "
-            # Configure git url rewrite so SDK's hardcoded GitHub URL is
-            # transparently redirected to internal Gitea (default param capture
-            # in load_public_skills() makes env-var monkey-patch ineffective).
-            # Use URL without credentials for insteadOf (avoid bash ! escaping issues),
-            # and configure credentials separately via git credential store.
-            from urllib.parse import urlparse
-            _parsed = urlparse(public_skills_repo)
-            _bare_url = f'{_parsed.scheme}://{_parsed.hostname}:{_parsed.port}{_parsed.path}' if _parsed.port else f'{_parsed.scheme}://{_parsed.hostname}{_parsed.path}'
-            await ssh.run(
-                f"git config --global 'url.{_bare_url}.insteadOf' "
-                f"'https://github.com/OpenHands/extensions'",
+            # Pre-clone extensions into SDK cache dir so SDK finds skills
+            # without needing to access GitHub. If already cloned, skip.
+            _skills_cache = "$HOME/.openhands/cache/skills"
+            _has_cache, _, _ = await ssh.run(
+                f"test -d {_skills_cache}/public-skills/.git && echo YES || echo NO",
                 timeout=5,
             )
-            # Store credentials so git can authenticate to Gitea
-            if _parsed.username and _parsed.password:
-                _cred_line = f'{_parsed.scheme}://{_parsed.username}:{_parsed.password}@{_parsed.hostname}:{_parsed.port or 80}'
+            if "YES" not in _has_cache:
+                logger.info(f"Pre-cloning public skills from Gitea to remote cache")
                 await ssh.run(
-                    "git config --global credential.helper store && "
-                    f"echo '{_cred_line}' >> ~/.git-credentials && "
-                    "sort -u -o ~/.git-credentials ~/.git-credentials",
-                    timeout=5,
+                    f"mkdir -p {_skills_cache} && "
+                    f"git clone --depth 1 '{public_skills_repo}' {_skills_cache}/public-skills",
+                    timeout=60,
                 )
         # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):

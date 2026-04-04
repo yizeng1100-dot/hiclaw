@@ -346,32 +346,26 @@ class Provisioner:
 
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
 
-        # ── Step 2.5: Git URL rewrite for air-gapped networks ──
-        # >>> CUSTOM: HiClaw — redirect GitHub extensions repo to internal Gitea <<<
-        # The SDK hardcodes PUBLIC_SKILLS_REPO="https://github.com/OpenHands/extensions"
-        # as a default parameter in load_public_skills(), which captures the value at
-        # function definition time. Monkey-patching the module constant has no effect.
-        # Instead, use git's native url.<>.insteadOf to transparently rewrite the URL.
+        # ── Step 2.5: Pre-clone public skills for air-gapped networks ──
+        # >>> CUSTOM: HiClaw — clone extensions from internal Gitea into SDK cache dir <<<
+        # The SDK expects public skills at ~/.openhands/cache/skills/public-skills/.
+        # If the repo already exists there, SDK just does git fetch (which can fail
+        # silently in air-gapped networks) and uses the cached version.
+        # By pre-cloning from Gitea here, SDK finds skills immediately without
+        # needing any URL rewrite or credential tricks.
         gitea_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
         if gitea_repo:
-            from urllib.parse import urlparse
-            _parsed = urlparse(gitea_repo)
-            _bare_url = f'{_parsed.scheme}://{_parsed.hostname}:{_parsed.port}{_parsed.path}' if _parsed.port else f'{_parsed.scheme}://{_parsed.hostname}{_parsed.path}'
-            await self.ssh.run(
-                f"git config --global 'url.{_bare_url}.insteadOf' "
-                f"'https://github.com/OpenHands/extensions'",
-                timeout=5,
-            )
-            # Store credentials so git can authenticate to Gitea
-            if _parsed.username and _parsed.password:
-                _cred_line = f'{_parsed.scheme}://{_parsed.username}:{_parsed.password}@{_parsed.hostname}:{_parsed.port or 80}'
+            skills_cache = "$HOME/.openhands/cache/skills"
+            has_skills = await self._check_remote(f"test -d {skills_cache}/public-skills/.git")
+            if not has_skills:
+                logger.info(f"Pre-cloning public skills from {gitea_repo}")
                 await self.ssh.run(
-                    "git config --global credential.helper store && "
-                    f"echo '{_cred_line}' >> ~/.git-credentials && "
-                    "sort -u -o ~/.git-credentials ~/.git-credentials",
-                    timeout=5,
+                    f"mkdir -p {skills_cache} && "
+                    f"git clone --depth 1 '{gitea_repo}' {skills_cache}/public-skills",
+                    timeout=60,
                 )
-            logger.info(f"Git insteadOf configured: github.com/OpenHands/extensions -> {_bare_url}")
+            else:
+                logger.info("Public skills cache already exists, skipping pre-clone")
         # >>> END CUSTOM <<<
 
         # ── Step 3: code-server ──
