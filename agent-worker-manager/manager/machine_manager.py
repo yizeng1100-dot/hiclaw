@@ -449,20 +449,6 @@ class MachineManager:
                 self._broadcast_event(machine_id, evt)
 
                 try:
-                    # Close old tunnels if any (from previous connection)
-                    old_listener = self._listeners.pop(machine_id, None)
-                    if old_listener:
-                        try:
-                            old_listener.close()
-                        except Exception:
-                            pass
-                    old_cs_listener = self._listeners.pop(f"{machine_id}_cs", None)
-                    if old_cs_listener:
-                        try:
-                            old_cs_listener.close()
-                        except Exception:
-                            pass
-
                     # Tunnel for agent-server
                     local_port = _pick_port()
                     logger.info(f"[{machine.host}] Creating agent-server tunnel: localhost:{local_port} → remote:{machine.agent_server_port}")
