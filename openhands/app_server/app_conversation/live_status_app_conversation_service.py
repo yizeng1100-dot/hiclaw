@@ -612,29 +612,44 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             return []
 
     # >>> CUSTOM: HiClaw <<<
-    def _get_cached_tunnel_port(self) -> int | None:
-        """Get tunnel port from worker-manager with short cache to avoid blocking."""
+    def _get_tunnel_port_for_host(self, remote_host: str | None = None) -> int | None:
+        """Get tunnel port from worker-manager, matching by remote_host if provided.
+
+        Args:
+            remote_host: The remote machine IP to match. If None, returns first ready machine.
+
+        Returns:
+            Tunnel port or None.
+        """
         import time
         if not hasattr(LiveStatusAppConversationService, '_tunnel_cache_data'):
             LiveStatusAppConversationService._tunnel_cache_data = {}
         cache = LiveStatusAppConversationService._tunnel_cache_data
+        # Cache key includes host so different machines don't collide
+        cache_key = remote_host or '_any'
         now = time.time()
-        # Cache for 5 seconds to avoid hammering worker-manager on every conversation
-        if cache.get('ts', 0) > now - 5:
-            return cache.get('port')
+        cached = cache.get(cache_key)
+        if cached and cached.get('ts', 0) > now - 5:
+            return cached.get('port')
         try:
             from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
             import httpx as _httpx
             _resp = _httpx.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=2)
-            for _m in _resp.json():
+            machines = _resp.json()
+            # First try exact host match
+            if remote_host:
+                for _m in machines:
+                    if _m.get('host') == remote_host and _m.get('status') == 'ready' and _m.get('tunnel_port'):
+                        cache[cache_key] = {'port': _m['tunnel_port'], 'ts': now}
+                        return _m['tunnel_port']
+            # Fallback: first ready machine
+            for _m in machines:
                 if _m.get('status') == 'ready' and _m.get('tunnel_port'):
-                    cache['port'] = _m['tunnel_port']
-                    cache['ts'] = now
-                    return cache['port']
+                    cache[cache_key] = {'port': _m['tunnel_port'], 'ts': now}
+                    return _m['tunnel_port']
         except Exception:
             pass
-        cache['port'] = None
-        cache['ts'] = now
+        cache[cache_key] = {'port': None, 'ts': now}
         return None
 
     async def _get_remote_conversation_info(
@@ -692,7 +707,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     pass
 
             # Also check Worker Manager for latest tunnel port (may have changed after reconnect)
-            _wm_port = self._get_cached_tunnel_port()
+            _conv_host = getattr(app_conversation_info, 'remote_host', None)
+            _wm_port = self._get_tunnel_port_for_host(_conv_host)
             if _wm_port:
                 tunnel_port = _wm_port  # prefer fresh port from Worker Manager
 

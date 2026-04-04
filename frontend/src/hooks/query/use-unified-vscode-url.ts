@@ -61,9 +61,12 @@ export const useUnifiedVSCodeUrl = () => {
           try {
             const machinesResp = await fetch("/runtime/manager/api/machines");
             const machines = await machinesResp.json();
+            // Match by remote_host from conversation, not just "first ready"
+            const targetHost = appConversation?.remote_host;
             const machine = machines.find(
               (m: { code_server_port: number; host: string; status: string }) =>
-                m.code_server_port > 0 && m.status === "ready",
+                m.code_server_port > 0 && m.status === "ready" &&
+                (!targetHost || m.host === targetHost),
             );
             if (machine?.host && machine?.code_server_port) {
               // >>> CUSTOM: HiClaw — use conversation's own workspace path <<<

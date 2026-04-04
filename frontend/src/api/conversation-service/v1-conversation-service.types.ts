@@ -133,6 +133,7 @@ export interface V1AppConversation {
   public?: boolean;
   // >>> CUSTOM: HiClaw <<<
   remote_working_dir?: string | null;
+  remote_host?: string | null;
   // >>> END CUSTOM <<<
 }
 

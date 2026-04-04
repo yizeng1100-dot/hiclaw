@@ -514,11 +514,14 @@ async def get_conversation(
                             _has_tunnel = False
                             try:
                                 from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+                                _conv_host = getattr(app_conversation, 'remote_host', None)
                                 _mr = await httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=2)
                                 for _m in _mr.json():
                                     if _m.get('status') == 'ready' and _m.get('tunnel_port'):
-                                        _has_tunnel = True
-                                        break
+                                        # Match by host if available, otherwise any ready machine
+                                        if not _conv_host or _m.get('host') == _conv_host:
+                                            _has_tunnel = True
+                                            break
                             except Exception:
                                 pass
                             if _has_tunnel:
