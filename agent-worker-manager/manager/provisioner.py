@@ -347,45 +347,39 @@ class Provisioner:
 
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
 
-        # ── Step 2.5: Upload public skills bundle for air-gapped networks ──
-        # >>> CUSTOM: HiClaw — transfer extensions via SSH, no Gitea/GitHub needed <<<
-        # The SDK expects public skills at ~/.openhands/cache/skills/public-skills/.
-        # Upload the git bundle file and clone from it locally on the remote machine.
-        # This avoids any network auth issues (Gitea 403, GitHub unreachable, etc).
-        _host = self.ssh.host
+        # ── Step 2.5: Deploy public skills to user skills dir ──
+        # >>> CUSTOM: HiClaw — transfer extensions via SSH to ~/.openhands/skills/ <<<
+        # Deploy skills as "user skills" so SDK loads them directly from filesystem.
+        # App-server passes load_public=false for remote workers, preventing any
+        # git clone/fetch from GitHub. Zero network dependency for skills.
         extensions_bundle = os.path.join(DEPS_DIR, "openhands-extensions.bundle")
         if os.path.exists(extensions_bundle):
-            # Use resolved home path (remote_home set earlier) — $HOME won't work in SFTP
-            skills_cache = f"{remote_home}/.openhands/cache/skills"
-            # Check actual skill files exist, not just .git (incomplete clone leaves only .git)
+            user_skills = f"{remote_home}/.openhands/skills"
             has_skills = await self._check_remote(
-                f"test -d {skills_cache}/public-skills/skills"
+                f"find {user_skills} -name '*.md' -type f 2>/dev/null | head -1 | grep -q ."
             )
             if not has_skills:
-                # Clean up incomplete clone if .git exists but skills/ doesn't
-                await self.ssh.run(f"rm -rf {skills_cache}/public-skills", timeout=5)
                 bundle_size_kb = os.path.getsize(extensions_bundle) // 1024
-                logger.info(f"[{_host}] Uploading public skills bundle ({bundle_size_kb}KB)")
+                logger.info(f"[{self._host}] Uploading public skills bundle ({bundle_size_kb}KB) to user skills dir")
                 await self.ssh.upload_file(
                     extensions_bundle,
                     f"{remote_tmp}/openhands-extensions.bundle",
                 )
                 await self.ssh.run(
-                    f"mkdir -p {skills_cache} && "
-                    f"git clone {remote_tmp}/openhands-extensions.bundle {skills_cache}/public-skills && "
-                    f"rm -f {remote_tmp}/openhands-extensions.bundle && "
-                    # Point remote to /dev/null so SDK's git fetch fails instantly
-                    # instead of trying to reach GitHub and timing out
-                    f"git -C {skills_cache}/public-skills remote set-url origin /dev/null",
+                    f"git clone {remote_tmp}/openhands-extensions.bundle {remote_tmp}/_extensions 2>&1 && "
+                    f"mkdir -p {user_skills} && "
+                    f"cp -r {remote_tmp}/_extensions/skills/* {user_skills}/ 2>/dev/null; "
+                    f"rm -rf {remote_tmp}/_extensions {remote_tmp}/openhands-extensions.bundle",
                     timeout=30,
                 )
-                # Verify
-                _ok = await self._check_remote(f"test -d {skills_cache}/public-skills/skills")
-                logger.info(f"[{_host}] Public skills upload: {'OK' if _ok else 'FAILED'}")
+                _ok = await self._check_remote(
+                    f"find {user_skills} -name '*.md' -type f 2>/dev/null | head -1 | grep -q ."
+                )
+                logger.info(f"[{self._host}] Public skills deploy: {'OK' if _ok else 'FAILED'}")
             else:
-                logger.info(f"[{_host}] Public skills already exist, skipping upload")
+                logger.info(f"[{self._host}] User skills already exist, skipping upload")
         else:
-            logger.info(f"[{_host}] No extensions bundle at {extensions_bundle}, skipping")
+            logger.info(f"[{self._host}] No extensions bundle at {extensions_bundle}, skipping")
         # >>> END CUSTOM <<<
 
         # ── Step 3: code-server ──

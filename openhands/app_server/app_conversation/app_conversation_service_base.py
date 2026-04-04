@@ -134,11 +134,13 @@ class AppConversationServiceBase(AppConversationService, ABC):
 
             # Single API call to agent-server for ALL skills
             # >>> CUSTOM: HiClaw — control public skills source <<<
-            # OH_PUBLIC_SKILLS_REPO: set to Gitea URL for air-gapped networks
-            #   e.g., http://localhost:3300/hiclaw-admin/extensions.git
-            # OH_LOAD_PUBLIC_SKILLS: set to "false" to disable entirely
+            # For remote workers (sandbox=None), disable public skills git fetch.
+            # Skills are pre-loaded to ~/.openhands/skills/ (user skills) via SSH bundle.
+            # OH_LOAD_PUBLIC_SKILLS env var can also force disable for all modes.
             import os as _os
             _load_public = _os.environ.get('OH_LOAD_PUBLIC_SKILLS', 'true').lower() != 'false'
+            if sandbox is None:
+                _load_public = False  # remote worker — skills loaded as user skills, no git
             # >>> END CUSTOM <<<
             all_skills = await load_skills_from_agent_server(
                 agent_server_url=agent_server_url,

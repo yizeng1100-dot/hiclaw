@@ -58,6 +58,7 @@ function AppContent() {
   const [reconnectPassword, setReconnectPassword] = React.useState("");
   const [reconnectLoading, setReconnectLoading] = React.useState(false);
   const [reconnectError, setReconnectError] = React.useState<string | null>(null);
+  const reconnectDoneRef = React.useRef(false); // prevents re-trigger after successful reconnect
   const { config, workerManagerUrl } = useRemoteWorkerStore();
 
   const handleReconnect = async () => {
@@ -75,6 +76,7 @@ function AppContent() {
         workspace: config.workspace,
       }, { timeout: 60000 });
       useRemoteWorkerStore.getState().setConfig({ password: reconnectPassword });
+      reconnectDoneRef.current = true; // block useEffect from re-triggering
       setNeedsReconnect(false);
       // Refetch conversation with new tunnel
       setTimeout(() => refetch(), 1000);
@@ -122,6 +124,13 @@ function AppContent() {
   React.useEffect(() => {
     // Wait for data to be fetched
     if (!isFetched || !isAuthed) return;
+    // After a successful reconnect, don't re-trigger until conversation has url
+    if (reconnectDoneRef.current) {
+      if (conversation?.url) {
+        reconnectDoneRef.current = false; // reset for future disconnects
+      }
+      return;
+    }
 
     if (!conversation) {
       // >>> CUSTOM: HiClaw — check if this might be a remote conversation needing reconnect <<<

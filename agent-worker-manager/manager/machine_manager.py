@@ -606,16 +606,10 @@ class MachineManager:
         _secret_key = os.environ.get('OH_SECRET_KEY', '')
         if _secret_key:
             env_vars += f"OH_SECRET_KEY='{_secret_key}' "
-        # >>> CUSTOM: HiClaw — public skills env var (still useful for SDK monkey-patch) <<<
-        public_skills_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
-        if not public_skills_repo:
-            _gitea_port = os.environ.get('HICLAW_GITEA_PORT', '3300')
-            _gitea_user = os.environ.get('HICLAW_GITEA_USER', 'hiclaw-admin')
-            _gitea_pass = os.environ.get('HICLAW_GITEA_PASSWORD', 'HiClaw2026!')
-            _gitea_host = app_ip or 'localhost'
-            public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@{_gitea_host}:{_gitea_port}/{_gitea_user}/extensions.git'
-        if public_skills_repo:
-            env_vars += f"OH_PUBLIC_SKILLS_REPO='{public_skills_repo}' "
+        # >>> CUSTOM: HiClaw — disable SDK's public skills git fetch (we pre-load via SSH bundle) <<<
+        # Skills are uploaded to ~/.openhands/skills/ (user skills dir) by provisioner/reconnect.
+        # Tell agent-server to skip public skills loading (which tries git fetch from GitHub).
+        env_vars += "OH_LOAD_PUBLIC_SKILLS=false "
         # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
@@ -797,46 +791,48 @@ class MachineManager:
                 except Exception as e:
                     logger.warning(f"[{_host}] Code-server check failed: {e}")
 
-            # 3. Public skills — check actual skill files, not just .git
+            # 3. Public skills → deploy to ~/.openhands/skills/ (user skills dir)
+            # SDK loads user skills directly from filesystem, no git involved.
+            # App-server passes load_public=false for remote workers, so SDK
+            # won't try git fetch from GitHub at all.
             _home_out, _, _ = await ssh.run("echo $HOME", timeout=3)
             _remote_home = _home_out.strip() or "/root"
-            _skills_cache = f"{_remote_home}/.openhands/cache/skills"
+            _user_skills = f"{_remote_home}/.openhands/skills"
             _remote_tmp = f"{_remote_home}/.hiclaw/tmp"
 
-            # Check skills/ dir exists (not .git — incomplete clone leaves only .git)
+            # Check if user skills dir has any .md files (actual skills)
             _has_skills, _, _ = await ssh.run(
-                f"test -d {_skills_cache}/public-skills/skills && echo YES || echo NO",
+                f"find {_user_skills} -name '*.md' -type f 2>/dev/null | head -1 | grep -q . && echo YES || echo NO",
                 timeout=5,
             )
-            logger.info(f"[{_host}] Public skills check: {_has_skills.strip()}")
+            logger.info(f"[{_host}] User skills check: {_has_skills.strip()}")
             if "YES" not in _has_skills:
                 extensions_bundle = os.path.join(
                     os.path.dirname(os.path.dirname(__file__)), "deps", "openhands-extensions.bundle"
                 )
                 logger.info(f"[{_host}] Bundle: {extensions_bundle}, exists={os.path.exists(extensions_bundle)}")
                 if os.path.exists(extensions_bundle):
-                    # Clean up incomplete clone
-                    await ssh.run(f"rm -rf {_skills_cache}/public-skills", timeout=5)
-                    await ssh.run(f"mkdir -p {_remote_tmp} {_skills_cache}", timeout=5)
+                    await ssh.run(f"mkdir -p {_remote_tmp}", timeout=5)
                     logger.info(f"[{_host}] Uploading public skills bundle via SSH...")
                     await ssh.upload_file(
                         extensions_bundle,
                         f"{_remote_tmp}/openhands-extensions.bundle",
                     )
-                    clone_out, clone_err, clone_ec = await ssh.run(
-                        f"git clone {_remote_tmp}/openhands-extensions.bundle {_skills_cache}/public-skills 2>&1 && "
-                        f"rm -f {_remote_tmp}/openhands-extensions.bundle && "
-                        # Point remote to /dev/null so SDK's git fetch fails instantly
-                        # instead of trying to reach GitHub and timing out
-                        f"git -C {_skills_cache}/public-skills remote set-url origin /dev/null",
+                    # Clone to temp, then copy skills/ contents to user skills dir
+                    clone_out, _, clone_ec = await ssh.run(
+                        f"rm -rf {_remote_tmp}/_extensions && "
+                        f"git clone {_remote_tmp}/openhands-extensions.bundle {_remote_tmp}/_extensions 2>&1 && "
+                        f"mkdir -p {_user_skills} && "
+                        f"cp -r {_remote_tmp}/_extensions/skills/* {_user_skills}/ 2>/dev/null; "
+                        f"rm -rf {_remote_tmp}/_extensions {_remote_tmp}/openhands-extensions.bundle",
                         timeout=30,
                     )
                     # Verify
                     _verify, _, _ = await ssh.run(
-                        f"test -d {_skills_cache}/public-skills/skills && echo OK || echo FAIL",
+                        f"find {_user_skills} -name '*.md' -type f 2>/dev/null | head -1 | grep -q . && echo OK || echo FAIL",
                         timeout=5,
                     )
-                    logger.info(f"[{_host}] Public skills upload: {_verify.strip()} (clone ec={clone_ec})")
+                    logger.info(f"[{_host}] Public skills deploy to user dir: {_verify.strip()} (clone ec={clone_ec})")
                     if "FAIL" in _verify:
                         logger.warning(f"[{_host}] Clone output: {clone_out.strip()[:500]}")
                 else:
