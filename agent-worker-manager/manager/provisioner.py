@@ -354,12 +354,24 @@ class Provisioner:
         # Instead, use git's native url.<>.insteadOf to transparently rewrite the URL.
         gitea_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
         if gitea_repo:
+            from urllib.parse import urlparse
+            _parsed = urlparse(gitea_repo)
+            _bare_url = f'{_parsed.scheme}://{_parsed.hostname}:{_parsed.port}{_parsed.path}' if _parsed.port else f'{_parsed.scheme}://{_parsed.hostname}{_parsed.path}'
             await self.ssh.run(
-                f'git config --global url."{gitea_repo}".insteadOf '
-                f'"https://github.com/OpenHands/extensions"',
+                f"git config --global 'url.{_bare_url}.insteadOf' "
+                f"'https://github.com/OpenHands/extensions'",
                 timeout=5,
             )
-            logger.info(f"Git insteadOf configured: github.com/OpenHands/extensions -> {gitea_repo}")
+            # Store credentials so git can authenticate to Gitea
+            if _parsed.username and _parsed.password:
+                _cred_line = f'{_parsed.scheme}://{_parsed.username}:{_parsed.password}@{_parsed.hostname}:{_parsed.port or 80}'
+                await self.ssh.run(
+                    "git config --global credential.helper store && "
+                    f"echo '{_cred_line}' >> ~/.git-credentials && "
+                    "sort -u -o ~/.git-credentials ~/.git-credentials",
+                    timeout=5,
+                )
+            logger.info(f"Git insteadOf configured: github.com/OpenHands/extensions -> {_bare_url}")
         # >>> END CUSTOM <<<
 
         # ── Step 3: code-server ──
