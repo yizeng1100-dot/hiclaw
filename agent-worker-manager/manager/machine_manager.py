@@ -226,6 +226,20 @@ class MachineManager:
                         if ssh and ssh.connected:
                             await ssh.run(f"mkdir -p {req.workspace}", timeout=5)
                     # >>> END CUSTOM <<<
+                    # >>> CUSTOM: HiClaw — verify code-server is also healthy on reconnect <<<
+                    if ssh and ssh.connected and machine.code_server_port:
+                        try:
+                            cs_out, _, cs_ec = await ssh.run(
+                                f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' "
+                                f"--max-time 3 http://localhost:{machine.code_server_port}/healthz",
+                                timeout=5,
+                            )
+                            if cs_out.strip() != "200":
+                                logger.warning(f"Code-server on port {machine.code_server_port} not healthy, restarting")
+                                await self._start_code_server(ssh, machine)
+                        except Exception as cs_e:
+                            logger.warning(f"Code-server health check failed: {cs_e}")
+                    # >>> END CUSTOM <<<
                     # Always sync skills on reconnect
                     if ssh and ssh.connected:
                         asyncio.create_task(self._clone_skills_repo(ssh, machine))

@@ -145,7 +145,11 @@ function AppContent() {
     } else {
       setNeedsReconnect(false);
     }
-  }, [conversation, isFetched, isAuthed, navigate, t, config.host, config.password]);
+  }, [conversation, isFetched, isAuthed, navigate, t, config.host]);
+  // Note: config.password intentionally excluded from deps — including it causes
+  // the reconnect modal to re-trigger after password submission (setConfig updates
+  // password → deps change → effect re-runs → conversation not yet refetched →
+  // needsReconnect set to true again → modal loop)
 
   // >>> CUSTOM: HiClaw — reconnect UI <<<
   if (needsReconnect) {
