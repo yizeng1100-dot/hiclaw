@@ -209,20 +209,40 @@ class MachineManager:
             machine = self._machines[machine_id]
             if machine.status == MachineStatus.READY:
                 # >>> CUSTOM: HiClaw — verify agent-server is still alive before reusing <<<
+                # Check via both SSH (process exists) and tunnel (HTTP reachable)
                 still_healthy = False
-                try:
-                    if machine.tunnel_port:
-                        async with httpx.AsyncClient() as client:
-                            resp = await client.get(
-                                f"http://localhost:{machine.tunnel_port}/health",
-                                timeout=5,
-                            )
-                            still_healthy = resp.status_code == 200
-                except Exception as e:
-                    logger.warning(f"Machine {machine_id} health check failed: {e}")
+                ssh = self._ssh_clients.get(machine_id)
+
+                # 1. SSH check: is the process running on the remote machine?
+                if ssh and ssh.connected:
+                    try:
+                        proc_out, _, _ = await ssh.run(
+                            f"pgrep -f 'agent.server.*--port {machine.agent_server_port}' > /dev/null && echo ALIVE || echo DEAD",
+                            timeout=5,
+                        )
+                        if "ALIVE" not in proc_out:
+                            logger.warning(f"[{machine.host}] Agent-server process not found on remote")
+                        else:
+                            # 2. Tunnel check: can we reach it through the tunnel?
+                            try:
+                                if machine.tunnel_port:
+                                    async with httpx.AsyncClient() as client:
+                                        resp = await client.get(
+                                            f"http://localhost:{machine.tunnel_port}/health",
+                                            timeout=5,
+                                        )
+                                        still_healthy = resp.status_code == 200
+                                if not still_healthy:
+                                    logger.warning(f"[{machine.host}] Agent-server process alive but tunnel broken, will re-provision")
+                            except Exception as e:
+                                logger.warning(f"[{machine.host}] Tunnel health check failed: {e}")
+                    except Exception as e:
+                        logger.warning(f"[{machine.host}] SSH check failed: {e}")
+                else:
+                    logger.warning(f"[{machine.host}] SSH connection lost")
 
                 if not still_healthy:
-                    logger.warning(f"Machine {machine_id} was READY but agent-server is dead, re-provisioning...")
+                    logger.warning(f"[{machine.host}] Machine was READY but unhealthy, re-provisioning...")
                     machine.status = MachineStatus.ERROR
                     machine.error = "Agent server not responding, reconnecting..."
                     await self._cleanup_machine(machine_id)
