@@ -1124,12 +1124,13 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         return secrets
 
-    def _configure_llm(self, user: UserInfo, llm_model: str | None) -> LLM:
+    def _configure_llm(self, user: UserInfo, llm_model: str | None, working_dir: str | None = None) -> LLM:
         """Configure LLM settings.
 
         Args:
             user: User information containing LLM preferences
             llm_model: Optional specific model to use, falls back to user default
+            working_dir: Workspace directory for per-conversation log storage
 
         Returns:
             Configured LLM instance
@@ -1141,12 +1142,20 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         ):
             base_url = user.llm_base_url or self.openhands_provider_base_url
 
+        # >>> CUSTOM: HiClaw — per-conversation LLM logs in workspace <<<
+        _log_folder = None
+        if working_dir:
+            import os
+            _log_folder = os.path.join(working_dir, '.hiclaw', 'logs', 'llm')
+        # >>> END CUSTOM <<<
+
         return LLM(
             model=model,
             base_url=base_url,
             api_key=user.llm_api_key,
             usage_id='agent',
-            log_completions=True,  # >>> CUSTOM: HiClaw — enable LLM completion logging <<<
+            log_completions=True,  # >>> CUSTOM: HiClaw <<<
+            **({"log_completions_folder": _log_folder} if _log_folder else {}),
         )
 
     async def _get_tavily_api_key(self, user: UserInfo) -> str | None:
@@ -1328,7 +1337,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             )
 
     async def _configure_llm_and_mcp(
-        self, user: UserInfo, llm_model: str | None, conversation_id: UUID
+        self, user: UserInfo, llm_model: str | None, conversation_id: UUID,
+        working_dir: str | None = None,
     ) -> tuple[LLM, dict]:
         """Configure LLM and MCP (Model Context Protocol) settings.
 
@@ -1336,12 +1346,13 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             user: User information containing LLM preferences
             llm_model: Optional specific model to use, falls back to user default
             conversation_id: Conversation ID forwarded to the OpenHands MCP server
+            working_dir: Workspace directory for per-conversation log storage
 
         Returns:
             Tuple of (configured LLM instance, MCP config dictionary)
         """
         # Configure LLM
-        llm = self._configure_llm(user, llm_model)
+        llm = self._configure_llm(user, llm_model, working_dir=working_dir)
 
         # Configure MCP - SDK expects format: {'mcpServers': {'server_name': {...}}}
         mcp_servers: dict[str, Any] = {}
@@ -1741,7 +1752,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         # Configure LLM and MCP
         llm, mcp_config = await self._configure_llm_and_mcp(
-            user, llm_model, conversation_id
+            user, llm_model, conversation_id, working_dir=working_dir
         )
 
         # >>> CUSTOM: HiClaw — inject CoMagic token into LLM config for remote agent-servers <<<
