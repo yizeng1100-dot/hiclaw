@@ -224,7 +224,7 @@ class MachineManager:
                             try:
                                 await self._reconnect_health_checks(ssh, machine, req)
                             except Exception as exc:
-                                logger.error(f"Reconnect health checks crashed: {exc}", exc_info=True)
+                                logger.error(f"[{machine.host}] Reconnect health checks crashed: {exc}", exc_info=True)
                         asyncio.create_task(_run_checks())
                     else:
                         logger.warning(f"Machine {machine_id} reuse: SSH not connected, skipping health checks")
@@ -375,9 +375,9 @@ class MachineManager:
                         )
                         if machine.workspace in ps_out:
                             already_healthy = True
-                            logger.info(f"Agent-server already healthy on port {port}, reusing")
+                            logger.info(f"[{machine.host}] Agent-server already healthy on port {port}, reusing")
                         else:
-                            logger.info(f"Agent-server on port {port} has wrong workspace, will restart")
+                            logger.info(f"[{machine.host}] Agent-server on port {port} has wrong workspace, will restart")
                 except Exception:
                     pass
 
@@ -411,7 +411,7 @@ class MachineManager:
                     evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed",
                                          detail=f"Healthy ({_hc_elapsed}s)")
                     self._broadcast_event(machine_id, evt)
-                    logger.info(f"Health check took {_hc_elapsed}s")
+                    logger.info(f"[{machine.host}] Health check took {_hc_elapsed}s")
 
                 # Step 5: Start code-server (if installed)
                 import time as _time
@@ -428,7 +428,7 @@ class MachineManager:
                     evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="skipped",
                                          detail=f"Not installed ({_cs_elapsed}s)")
                 self._broadcast_event(machine_id, evt)
-                logger.info(f"code-server step took {_cs_elapsed}s")
+                logger.info(f"[{machine.host}] code-server step took {_cs_elapsed}s")
 
                 # Step 6: SSH tunnels
                 evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="started",
@@ -438,7 +438,7 @@ class MachineManager:
                 try:
                     # Tunnel for agent-server
                     local_port = _pick_port()
-                    logger.info(f"Creating agent-server tunnel: localhost:{local_port} → remote:{machine.agent_server_port}")
+                    logger.info(f"[{machine.host}] Creating agent-server tunnel: localhost:{local_port} → remote:{machine.agent_server_port}")
                     listener = await ssh.forward_local_port(machine.agent_server_port, local_port)
                     self._listeners[machine_id] = listener
                     self._local_ports[machine_id] = local_port
@@ -448,20 +448,20 @@ class MachineManager:
                     # Tunnel for code-server (if running) — fixed port for easy SSH forwarding
                     if machine.code_server_port:
                         cs_local_port = 18443
-                        logger.info(f"Creating code-server tunnel: localhost:{cs_local_port} → remote:{machine.code_server_port}")
+                        logger.info(f"[{machine.host}] Creating code-server tunnel: localhost:{cs_local_port} → remote:{machine.code_server_port}")
                         try:
                             cs_listener = await ssh.forward_local_port(machine.code_server_port, cs_local_port)
                             self._listeners[f"{machine_id}_cs"] = cs_listener
                             machine.code_server_tunnel_port = cs_local_port
                             machine.vscode_url = f"http://localhost:{cs_local_port}"
                         except Exception as cs_e:
-                            logger.warning(f"Code-server tunnel failed (non-fatal): {cs_e}")
+                            logger.warning(f"[{machine.host}] Code-server tunnel failed (non-fatal): {cs_e}")
 
                     evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="completed",
                                          detail=f"agent:localhost:{local_port}" + (f" vscode:localhost:{machine.code_server_tunnel_port}" if machine.vscode_url else ""))
                     self._broadcast_event(machine_id, evt)
                 except Exception as tunnel_e:
-                    logger.error(f"Tunnel creation failed: {tunnel_e}")
+                    logger.error(f"[{machine.host}] Tunnel creation failed: {tunnel_e}")
                     evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="failed",
                                          detail=str(tunnel_e)[:500])
                     self._broadcast_event(machine_id, evt)
@@ -546,7 +546,7 @@ class MachineManager:
             stdout2, _, _ = await ssh.run("test -f /opt/agent-venv/bin/agent-server && echo FOUND || echo MISSING", timeout=5)
             if stdout2.strip() == "FOUND":
                 binary = "/opt/agent-venv/bin/agent-server"
-                logger.info(f"Using legacy binary path: {binary}")
+                logger.info(f"[{machine.host}] Using legacy binary path: {binary}")
 
         # Step 1: Check if something is already listening on the port
         health_out, _, health_ec = await ssh.run(
@@ -567,12 +567,12 @@ class MachineManager:
             remote_home = home_out.strip() or "/root"
             correct_store = f"FILE_STORE_PATH={remote_home}/.hiclaw"
             if check_stdout and correct_store not in check_stdout:
-                logger.info(f"Agent-server missing '{correct_store}' in cmd, restarting")
+                logger.info(f"[{machine.host}] Agent-server missing '{correct_store}' in cmd, restarting")
                 await ssh.run(f"pkill -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5)
                 await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
                 await asyncio.sleep(2)
             else:
-                logger.info(f"Agent-server healthy with correct config on port {port}, reusing")
+                logger.info(f"[{machine.host}] Agent-server healthy with correct config on port {port}, reusing")
                 await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
                 return
             # >>> END CUSTOM <<<
@@ -657,7 +657,7 @@ class MachineManager:
             machine.code_server_port = 0
             return
 
-        logger.info(f"Found code-server at: {cs_bin}")
+        logger.info(f"[{machine.host}] Found code-server at: {cs_bin}")
 
         # Set dark theme to match container VS Code
         await ssh.run(
@@ -744,14 +744,14 @@ class MachineManager:
                         step=ProvisionStep.HEALTH_CHECK, status="started",
                         detail=f"Waiting... ({elapsed}s, HTTP {code})",
                     ))
-                    logger.info(f"Health check attempt {attempt}: HTTP {code} ({elapsed}s)")
+                    logger.info(f"[{machine.host}] Health check attempt {attempt}: HTTP {code} ({elapsed}s)")
             except Exception as e:
                 if attempt % 3 == 0:
                     self._broadcast_event(machine.id, ProvisionEvent(
                         step=ProvisionStep.HEALTH_CHECK, status="started",
                         detail=f"Waiting... ({elapsed}s, {type(e).__name__})",
                     ))
-                    logger.info(f"Health check attempt {attempt}: {e} ({elapsed}s)")
+                    logger.info(f"[{machine.host}] Health check attempt {attempt}: {e} ({elapsed}s)")
             await asyncio.sleep(3)
         # Timed out — grab log for debugging
         log_out, _, _ = await ssh.run(f"tail -30 {log_file} 2>/dev/null", timeout=5)
@@ -771,18 +771,15 @@ class MachineManager:
         3. Public skills cache exists, clone from Gitea if not
         4. Custom skills repo is synced
         """
+        _host = machine.host
         try:
-            logger.info(f"[RECONNECT] Starting health checks for {machine.host}")
+            logger.info(f"[{_host}] Reconnect health checks starting")
 
-            # 1. Workspace change
+            # 1. Workspace
             if req.workspace != machine.workspace:
-                old_workspace = machine.workspace
+                logger.info(f"[{_host}] Workspace changed: {machine.workspace} → {req.workspace}")
                 machine.workspace = req.workspace
-                logger.info(f"Machine {machine.id} workspace changed: {old_workspace} → {req.workspace}")
-                await ssh.run(f"mkdir -p {req.workspace}", timeout=5)
-            else:
-                # Ensure workspace dir exists even if unchanged
-                await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
+            await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
 
             # 2. Code-server health
             if machine.code_server_port:
@@ -793,53 +790,61 @@ class MachineManager:
                         timeout=5,
                     )
                     if cs_out.strip() != "200":
-                        logger.warning(f"Code-server not healthy on reconnect, restarting")
+                        logger.warning(f"[{_host}] Code-server not healthy, restarting")
                         await self._start_code_server(ssh, machine)
+                    else:
+                        logger.info(f"[{_host}] Code-server healthy")
                 except Exception as e:
-                    logger.warning(f"Code-server health check failed on reconnect: {e}")
+                    logger.warning(f"[{_host}] Code-server check failed: {e}")
 
-            # 3. Public skills cache — upload bundle via SSH if missing
-            # Resolve $HOME first — SFTP doesn't expand shell variables
+            # 3. Public skills — check actual skill files, not just .git
             _home_out, _, _ = await ssh.run("echo $HOME", timeout=3)
             _remote_home = _home_out.strip() or "/root"
             _skills_cache = f"{_remote_home}/.openhands/cache/skills"
             _remote_tmp = f"{_remote_home}/.hiclaw/tmp"
 
-            _has_cache, _, _ = await ssh.run(
-                f"test -d {_skills_cache}/public-skills/.git && echo YES || echo NO",
+            # Check skills/ dir exists (not .git — incomplete clone leaves only .git)
+            _has_skills, _, _ = await ssh.run(
+                f"test -d {_skills_cache}/public-skills/skills && echo YES || echo NO",
                 timeout=5,
             )
-            logger.info(f"[RECONNECT] Public skills cache check: {_has_cache.strip()}, path={_skills_cache}")
-            if "YES" not in _has_cache:
+            logger.info(f"[{_host}] Public skills check: {_has_skills.strip()}")
+            if "YES" not in _has_skills:
                 extensions_bundle = os.path.join(
                     os.path.dirname(os.path.dirname(__file__)), "deps", "openhands-extensions.bundle"
                 )
-                logger.info(f"[RECONNECT] Bundle path: {extensions_bundle}, exists={os.path.exists(extensions_bundle)}")
+                logger.info(f"[{_host}] Bundle: {extensions_bundle}, exists={os.path.exists(extensions_bundle)}")
                 if os.path.exists(extensions_bundle):
+                    # Clean up incomplete clone
+                    await ssh.run(f"rm -rf {_skills_cache}/public-skills", timeout=5)
                     await ssh.run(f"mkdir -p {_remote_tmp} {_skills_cache}", timeout=5)
+                    logger.info(f"[{_host}] Uploading public skills bundle via SSH...")
                     await ssh.upload_file(
                         extensions_bundle,
                         f"{_remote_tmp}/openhands-extensions.bundle",
                     )
-                    await ssh.run(
-                        f"git clone {_remote_tmp}/openhands-extensions.bundle {_skills_cache}/public-skills && "
+                    clone_out, clone_err, clone_ec = await ssh.run(
+                        f"git clone {_remote_tmp}/openhands-extensions.bundle {_skills_cache}/public-skills 2>&1 && "
                         f"rm -f {_remote_tmp}/openhands-extensions.bundle",
                         timeout=30,
                     )
-                    # Verify it worked
+                    # Verify
                     _verify, _, _ = await ssh.run(
                         f"test -d {_skills_cache}/public-skills/skills && echo OK || echo FAIL",
                         timeout=5,
                     )
-                    logger.info(f"[RECONNECT] Public skills upload result: {_verify.strip()}")
+                    logger.info(f"[{_host}] Public skills upload: {_verify.strip()} (clone ec={clone_ec})")
+                    if "FAIL" in _verify:
+                        logger.warning(f"[{_host}] Clone output: {clone_out.strip()[:500]}")
                 else:
-                    logger.info(f"No extensions bundle found at {extensions_bundle}, skipping")
+                    logger.warning(f"[{_host}] No bundle at {extensions_bundle}")
 
             # 4. Custom skills sync
             await self._clone_skills_repo(ssh, machine)
+            logger.info(f"[{_host}] Reconnect health checks done")
 
         except Exception as e:
-            logger.warning(f"Reconnect health checks failed (non-fatal): {e}")
+            logger.warning(f"[{_host}] Reconnect health checks failed: {e}", exc_info=True)
 
     def get_machine(self, machine_id: str) -> MachineInfo | None:
         return self._machines.get(machine_id)

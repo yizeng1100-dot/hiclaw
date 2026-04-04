@@ -51,6 +51,7 @@ class Provisioner:
     def __init__(self, ssh: SSHClient, template: str = "openhands",
                  broadcast_fn: Callable[[ProvisionEvent], None] | None = None):
         self.ssh = ssh
+        self._host = ssh.host  # for log messages
         self.template = template
         self.tmpl = TEMPLATES.get(template, TEMPLATES["openhands"])
         self._broadcast = broadcast_fn or (lambda evt: None)
@@ -94,7 +95,7 @@ class Provisioner:
             f"exec {remote_python} {venv}/bin/_launcher.py \"$@\"\n"
             f"WRAPPER_EOF\n"
             f"chmod +x {venv}/bin/agent-server", timeout=10)
-        logger.info(f"Wrapper scripts written: {venv}/bin/agent-server + _launcher.py")
+        logger.info(f"[{self._host}] Wrapper scripts written: {venv}/bin/agent-server + _launcher.py")
 
     async def provision(self) -> AsyncGenerator[ProvisionEvent, None]:
         """Run all provisioning steps. Each step checks remote state first, skips if already done."""
@@ -121,10 +122,10 @@ class Provisioner:
                 remote_python = standalone_python
                 python_ok = True
                 yield _evt(ProvisionStep.CHECK_PYTHON, "completed", detail=f"Python 3.12 verified: {py_ver.strip()}")
-                logger.info(f"Python: standalone exists and works at {standalone_python}")
+                logger.info(f"[{self._host}] Python 3.12 verified at {standalone_python}")
             else:
                 # Exists but broken — clean up all Python locations
-                logger.warning(f"Standalone Python broken (ec={py_ec}): {py_ver.strip()}")
+                logger.warning(f"[{self._host}] Standalone Python broken (ec={py_ec}): {py_ver.strip()}")
                 yield _evt(ProvisionStep.CHECK_PYTHON, "started", detail="Existing Python broken, will reinstall...")
                 await self.ssh.run(
                     f"rm -rf {REMOTE_PYTHON_INSTALL_PATH}/python "
@@ -218,10 +219,10 @@ class Provisioner:
                 # Always regenerate wrapper scripts (ensure monkey-patch is up to date)
                 await self._write_wrapper_scripts(venv, remote_python)
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed & verified")
-                logger.info("SDK: already installed and verified, wrapper regenerated")
+                logger.info(f"[{self._host}] SDK: already installed and verified, wrapper regenerated")
             else:
                 # Binary exists but broken — clean up everything and reinstall
-                logger.warning(f"SDK binary exists but broken: {verify_out.strip()[-200:]}")
+                logger.warning(f"[{self._host}] SDK binary broken: {verify_out.strip()[-200:]}")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
                            detail="Existing install is broken, cleaning up and reinstalling...")
                 await self.ssh.run(
@@ -229,7 +230,7 @@ class Provisioner:
                     f"/opt/agent-venv "  # legacy path
                     f"~/.hiclaw/agent-deps/python3-standalone",  # old python path
                     timeout=30)
-                logger.info("Cleaned up broken SDK install (including legacy paths)")
+                logger.info(f"[{self._host}] Cleaned up broken SDK install")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
                            detail="Cleanup done. Re-uploading and reinstalling...")
             # >>> END CUSTOM <<<
@@ -239,7 +240,7 @@ class Provisioner:
             has_wheels = await self._check_remote(f"test -d {REMOTE_DEPS_PATH}/wheels")
             if has_wheels:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Wheels already on remote")
-                logger.info("SDK wheels: already on remote, skipping upload")
+                logger.info(f"[{self._host}] SDK wheels already on remote, skipping upload")
             else:
                 wheels_dir = os.path.join(DEPS_DIR, "wheels")
                 if not os.path.isdir(wheels_dir):
@@ -290,7 +291,7 @@ class Provisioner:
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1; echo EXIT_CODE=$?", timeout=600)
-            logger.info(f"Pip pass 1 output tail: {stdout_all[-300:]}")
+            logger.info(f"[{self._host}] Pip pass 1 tail: {stdout_all[-300:]}")
 
             # Step 2c: Install main packages with deps (they'll find deps from pass 1)
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
@@ -303,7 +304,7 @@ class Provisioner:
             ec2 = 1
             if "EXIT_CODE=0" in stdout2:
                 ec2 = 0
-            logger.info(f"Pip pass 2 output tail: {stdout2[-300:]}")
+            logger.info(f"[{self._host}] Pip pass 2 tail: {stdout2[-300:]}")
 
             # Step 2d: Verify core import works
             check_out, _, _ = await self.ssh.run(
@@ -314,7 +315,7 @@ class Provisioner:
                            detail=f"Core import failed: {check_out.strip()[-1000:]}\n\npip output: {(stdout2 + stderr2).strip()[-1000:]}")
                 return
             if ec2 != 0:
-                logger.warning("Some optional packages failed to install, but core SDK is OK")
+                logger.warning(f"[{self._host}] Some optional packages failed, but core SDK OK")
             # >>> CUSTOM: HiClaw — wrapper script that patches PUBLIC_SKILLS_REPO <<<
             # Uses a Python launcher script instead of `python -m openhands.agent_server`
             # so we can monkey-patch the SDK constant before the server starts.
@@ -341,7 +342,7 @@ class Provisioner:
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
                            detail=f"agent-server binary check failed (ec={binary_ec}): {binary_check.strip()[-500:]}")
                 return
-            logger.info(f"SDK install verified: imports OK, binary OK")
+            logger.info(f"[{self._host}] SDK install verified: imports OK, binary OK")
             # >>> END CUSTOM <<<
 
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
@@ -351,14 +352,20 @@ class Provisioner:
         # The SDK expects public skills at ~/.openhands/cache/skills/public-skills/.
         # Upload the git bundle file and clone from it locally on the remote machine.
         # This avoids any network auth issues (Gitea 403, GitHub unreachable, etc).
+        _host = self.ssh.host
         extensions_bundle = os.path.join(DEPS_DIR, "openhands-extensions.bundle")
         if os.path.exists(extensions_bundle):
             # Use resolved home path (remote_home set earlier) — $HOME won't work in SFTP
             skills_cache = f"{remote_home}/.openhands/cache/skills"
-            has_skills = await self._check_remote(f"test -d {skills_cache}/public-skills/.git")
+            # Check actual skill files exist, not just .git (incomplete clone leaves only .git)
+            has_skills = await self._check_remote(
+                f"test -d {skills_cache}/public-skills/skills"
+            )
             if not has_skills:
+                # Clean up incomplete clone if .git exists but skills/ doesn't
+                await self.ssh.run(f"rm -rf {skills_cache}/public-skills", timeout=5)
                 bundle_size_kb = os.path.getsize(extensions_bundle) // 1024
-                logger.info(f"Uploading public skills bundle ({bundle_size_kb}KB)")
+                logger.info(f"[{_host}] Uploading public skills bundle ({bundle_size_kb}KB)")
                 await self.ssh.upload_file(
                     extensions_bundle,
                     f"{remote_tmp}/openhands-extensions.bundle",
@@ -369,11 +376,13 @@ class Provisioner:
                     f"rm -f {remote_tmp}/openhands-extensions.bundle",
                     timeout=30,
                 )
-                logger.info("Public skills uploaded and cloned from bundle")
+                # Verify
+                _ok = await self._check_remote(f"test -d {skills_cache}/public-skills/skills")
+                logger.info(f"[{_host}] Public skills upload: {'OK' if _ok else 'FAILED'}")
             else:
-                logger.info("Public skills cache already exists, skipping upload")
+                logger.info(f"[{_host}] Public skills already exist, skipping upload")
         else:
-            logger.info("No extensions bundle found, skipping public skills upload")
+            logger.info(f"[{_host}] No extensions bundle at {extensions_bundle}, skipping")
         # >>> END CUSTOM <<<
 
         # ── Step 3: code-server ──
@@ -382,7 +391,7 @@ class Provisioner:
         has_cs = await self._check_remote(f"test -f {cs_path}/bin/code-server")
         if has_cs:
             yield _evt(ProvisionStep.INSTALL_CODE_SERVER, "completed", detail="Already installed")
-            logger.info("code-server: already installed, skipping")
+            logger.info(f"[{self._host}] code-server already installed, skipping")
         else:
             CS_FILE = "code-server.tar.gz"
             cs_tar = os.path.join(DEPS_DIR, CS_FILE)

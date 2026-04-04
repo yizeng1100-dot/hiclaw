@@ -1709,10 +1709,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             user, llm_model, conversation_id
         )
 
-        # >>> CUSTOM: HiClaw — inject CoMagic token into LLM config for remote agent-servers <<<
-        # Remote agent-servers use pip-installed package without custom hooks.
-        # Get the token that Worker Manager read from remote ~/.comagic/userToken.json
-        # and inject it into the LLM config so the remote agent-server uses it directly.
+        # >>> CUSTOM: HiClaw — inject CoMagic api_key for remote agent-servers <<<
+        # Only set api_key here. Headers (User-Agent, X-Request-ID etc.) are injected
+        # per-request by llm.py's env fallback on the remote agent-server.
         if sandbox is None:  # remote worker
             base_url = llm.base_url or ''
             _logger.info(f'[COMAGIC] Remote worker LLM base_url: {base_url}')
@@ -1722,17 +1721,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     _resp = await self.httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
                     for _m in _resp.json():
                         if _m.get('status') == 'ready' and _m.get('comagic_token'):
-                            import uuid as _uuid
                             from pydantic import SecretStr
                             llm.api_key = SecretStr(_m['comagic_token'])
-                            llm.extra_headers = {
-                                **(llm.extra_headers or {}),
-                                'X-User-Id': _m.get('comagic_user_id', ''),
-                                'X-Enterprise-Id': 'copilot',
-                                'X-Request-ID': str(_uuid.uuid4()),
-                                'User-Agent': 'CLI/0.0.0 CoMagic/0.1.77',
-                            }
-                            _logger.info(f'[COMAGIC] Injected remote token into LLM config')
+                            _logger.info(f'[COMAGIC] Injected remote token (host={_m.get("host", "?")})')
                             break
                 except Exception as e:
                     _logger.warning(f'[COMAGIC] Failed to inject token: {e}')
