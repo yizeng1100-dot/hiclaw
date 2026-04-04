@@ -610,6 +610,8 @@ class MachineManager:
         # Skills are uploaded to ~/.openhands/skills/ (user skills dir) by provisioner/reconnect.
         # Tell agent-server to skip public skills loading (which tries git fetch from GitHub).
         env_vars += "OH_LOAD_PUBLIC_SKILLS=false "
+        # Use local model cost map — prevents litellm from fetching from GitHub
+        env_vars += "LITELLM_LOCAL_MODEL_COST_MAP=true "
         # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
