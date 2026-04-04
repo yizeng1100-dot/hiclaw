@@ -346,26 +346,33 @@ class Provisioner:
 
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
 
-        # ── Step 2.5: Pre-clone public skills for air-gapped networks ──
-        # >>> CUSTOM: HiClaw — clone extensions from internal Gitea into SDK cache dir <<<
+        # ── Step 2.5: Upload public skills bundle for air-gapped networks ──
+        # >>> CUSTOM: HiClaw — transfer extensions via SSH, no Gitea/GitHub needed <<<
         # The SDK expects public skills at ~/.openhands/cache/skills/public-skills/.
-        # If the repo already exists there, SDK just does git fetch (which can fail
-        # silently in air-gapped networks) and uses the cached version.
-        # By pre-cloning from Gitea here, SDK finds skills immediately without
-        # needing any URL rewrite or credential tricks.
-        gitea_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
-        if gitea_repo:
+        # Upload the git bundle file and clone from it locally on the remote machine.
+        # This avoids any network auth issues (Gitea 403, GitHub unreachable, etc).
+        extensions_bundle = os.path.join(DEPS_DIR, "openhands-extensions.bundle")
+        if os.path.exists(extensions_bundle):
             skills_cache = "$HOME/.openhands/cache/skills"
             has_skills = await self._check_remote(f"test -d {skills_cache}/public-skills/.git")
             if not has_skills:
-                logger.info(f"Pre-cloning public skills from {gitea_repo}")
+                bundle_size_kb = os.path.getsize(extensions_bundle) // 1024
+                logger.info(f"Uploading public skills bundle ({bundle_size_kb}KB)")
+                await self.ssh.upload_file(
+                    extensions_bundle,
+                    f"{remote_tmp}/openhands-extensions.bundle",
+                )
                 await self.ssh.run(
                     f"mkdir -p {skills_cache} && "
-                    f"git clone --depth 1 '{gitea_repo}' {skills_cache}/public-skills",
-                    timeout=60,
+                    f"git clone {remote_tmp}/openhands-extensions.bundle {skills_cache}/public-skills && "
+                    f"rm -f {remote_tmp}/openhands-extensions.bundle",
+                    timeout=30,
                 )
+                logger.info("Public skills uploaded and cloned from bundle")
             else:
-                logger.info("Public skills cache already exists, skipping pre-clone")
+                logger.info("Public skills cache already exists, skipping upload")
+        else:
+            logger.info("No extensions bundle found, skipping public skills upload")
         # >>> END CUSTOM <<<
 
         # ── Step 3: code-server ──

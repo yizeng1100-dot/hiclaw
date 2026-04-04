@@ -599,9 +599,7 @@ class MachineManager:
         _secret_key = os.environ.get('OH_SECRET_KEY', '')
         if _secret_key:
             env_vars += f"OH_SECRET_KEY='{_secret_key}' "
-        # >>> CUSTOM: HiClaw — redirect public skills to internal Gitea <<<
-        # Use app-server's IP so remote agent-server can access Gitea over internal network.
-        # No reverse tunnel needed — internal network ports are open.
+        # >>> CUSTOM: HiClaw — public skills env var (still useful for SDK monkey-patch) <<<
         public_skills_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
         if not public_skills_repo:
             _gitea_port = os.environ.get('HICLAW_GITEA_PORT', '3300')
@@ -611,20 +609,6 @@ class MachineManager:
             public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@{_gitea_host}:{_gitea_port}/{_gitea_user}/extensions.git'
         if public_skills_repo:
             env_vars += f"OH_PUBLIC_SKILLS_REPO='{public_skills_repo}' "
-            # Pre-clone extensions into SDK cache dir so SDK finds skills
-            # without needing to access GitHub. If already cloned, skip.
-            _skills_cache = "$HOME/.openhands/cache/skills"
-            _has_cache, _, _ = await ssh.run(
-                f"test -d {_skills_cache}/public-skills/.git && echo YES || echo NO",
-                timeout=5,
-            )
-            if "YES" not in _has_cache:
-                logger.info(f"Pre-cloning public skills from Gitea to remote cache")
-                await ssh.run(
-                    f"mkdir -p {_skills_cache} && "
-                    f"git clone --depth 1 '{public_skills_repo}' {_skills_cache}/public-skills",
-                    timeout=60,
-                )
         # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "
@@ -805,39 +789,32 @@ class MachineManager:
                 except Exception as e:
                     logger.warning(f"Code-server health check failed on reconnect: {e}")
 
-            # 3. Public skills cache
-            public_skills_repo = os.environ.get('OH_PUBLIC_SKILLS_REPO', '')
-            if not public_skills_repo:
-                _gitea_port = os.environ.get('HICLAW_GITEA_PORT', '3300')
-                _gitea_user = os.environ.get('HICLAW_GITEA_USER', 'hiclaw-admin')
-                _gitea_pass = os.environ.get('HICLAW_GITEA_PASSWORD', 'HiClaw2026!')
-                # Get app-server IP from SSH connection
-                try:
-                    ip_out, _, _ = await ssh.run("echo $SSH_CLIENT | awk '{print $1}'", timeout=3)
-                    _app_ip = ip_out.strip()
-                except Exception:
-                    _app_ip = 'localhost'
-                public_skills_repo = f'http://{_gitea_user}:{_gitea_pass}@{_app_ip}:{_gitea_port}/{_gitea_user}/extensions.git'
-            if public_skills_repo:
-                _skills_cache = "$HOME/.openhands/cache/skills"
-                _has_cache, _, _ = await ssh.run(
-                    f"test -d {_skills_cache}/public-skills/.git && echo YES || echo NO",
-                    timeout=5,
+            # 3. Public skills cache — upload bundle via SSH if missing
+            _skills_cache = "$HOME/.openhands/cache/skills"
+            _has_cache, _, _ = await ssh.run(
+                f"test -d {_skills_cache}/public-skills/.git && echo YES || echo NO",
+                timeout=5,
+            )
+            if "YES" not in _has_cache:
+                extensions_bundle = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), "deps", "openhands-extensions.bundle"
                 )
-                if "YES" not in _has_cache:
-                    logger.info("Public skills cache missing on reconnect, cloning from Gitea")
-                    await ssh.run(
-                        f"mkdir -p {_skills_cache} && "
-                        f"git clone --depth 1 '{public_skills_repo}' {_skills_cache}/public-skills",
-                        timeout=60,
+                if os.path.exists(extensions_bundle):
+                    logger.info("Public skills cache missing on reconnect, uploading bundle via SSH")
+                    _remote_tmp = "$HOME/.hiclaw/tmp"
+                    await ssh.run(f"mkdir -p {_remote_tmp} {_skills_cache}", timeout=5)
+                    await ssh.upload_file(
+                        extensions_bundle,
+                        f"{_remote_tmp}/openhands-extensions.bundle",
                     )
+                    await ssh.run(
+                        f"git clone {_remote_tmp}/openhands-extensions.bundle {_skills_cache}/public-skills && "
+                        f"rm -f {_remote_tmp}/openhands-extensions.bundle",
+                        timeout=30,
+                    )
+                    logger.info("Public skills uploaded from bundle on reconnect")
                 else:
-                    # Try to update (pull latest), but don't fail if it can't
-                    await ssh.run(
-                        f"cd {_skills_cache}/public-skills && "
-                        f"git pull --rebase origin main 2>/dev/null || true",
-                        timeout=15,
-                    )
+                    logger.info("No extensions bundle found on app-server, skipping")
 
             # 4. Custom skills sync
             await self._clone_skills_repo(ssh, machine)
