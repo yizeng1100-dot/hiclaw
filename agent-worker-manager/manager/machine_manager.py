@@ -632,6 +632,24 @@ class MachineManager:
                 pass
         no_proxy_list = f"localhost,127.0.0.1{f',{app_ip}' if app_ip else ''}"
         env_vars = f"no_proxy={no_proxy_list} NO_PROXY={no_proxy_list} "
+        # >>> CUSTOM: HiClaw — inherit proxy settings from remote machine <<<
+        # LLM requests may need to go through a corporate proxy.
+        # Read the remote machine's system proxy config and pass it to agent-server.
+        try:
+            proxy_out, _, _ = await ssh.run(
+                "echo http_proxy=$http_proxy; echo https_proxy=$https_proxy; "
+                "echo HTTP_PROXY=$HTTP_PROXY; echo HTTPS_PROXY=$HTTPS_PROXY",
+                timeout=3,
+            )
+            for line in proxy_out.strip().split('\n'):
+                if '=' in line:
+                    key, val = line.split('=', 1)
+                    if val and val != key:  # has a value
+                        env_vars += f"{key}={val} "
+                        logger.info(f"[{machine.host}] Inherited proxy: {key}={val}")
+        except Exception as e:
+            logger.warning(f"[{machine.host}] Failed to read proxy config: {e}")
+        # >>> END CUSTOM <<<
         # >>> CUSTOM: HiClaw — use user home for FILE_STORE_PATH (not workspace-specific) <<<
         # This allows one agent-server to serve multiple workspaces
         env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "

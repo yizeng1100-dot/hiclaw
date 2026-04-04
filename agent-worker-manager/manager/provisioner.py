@@ -122,8 +122,9 @@ class Provisioner:
             f"cat > {venv}/bin/agent-server << 'WRAPPER_EOF'\n"
             f"#!/bin/bash\n"
             f"export PYTHONPATH={venv}/lib:$PYTHONPATH\n"
-            f"export no_proxy=localhost,127.0.0.1\n"
-            f"export NO_PROXY=localhost,127.0.0.1\n"
+            f"# Append to no_proxy (don't overwrite — keep system proxy for LLM)\n"
+            f"export no_proxy=\"${{no_proxy:+$no_proxy,}}localhost,127.0.0.1\"\n"
+            f"export NO_PROXY=\"${{NO_PROXY:+$NO_PROXY,}}localhost,127.0.0.1\"\n"
             f"exec {remote_python} {venv}/bin/_launcher.py \"$@\"\n"
             f"WRAPPER_EOF\n"
             f"chmod +x {venv}/bin/agent-server", timeout=10)
