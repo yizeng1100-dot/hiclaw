@@ -280,16 +280,30 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 _remote_host = ''
                 _remote_user = ''
                 # Always query Worker Manager for host/user info (needed for title)
+                # Match by proxy_url to find the CORRECT machine (not just the first ready one)
                 try:
                     from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL, DEFAULT_WORKSPACE
                     _resp = await self.httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
+                    _matched = False
                     for _m in _resp.json():
-                        if _m.get('status') == 'ready':
+                        # Match the machine whose proxy_url corresponds to agent_server_url
+                        _m_proxy = (_m.get('proxy_url') or '').rstrip('/')
+                        if _m_proxy and _m_proxy == agent_server_url:
                             _remote_host = _m.get('host', '')
                             _remote_user = _m.get('username', '')
                             if not working_dir:
                                 working_dir = _m.get('workspace', '')
+                            _matched = True
                             break
+                    # Fallback: if no proxy_url match, try first ready machine
+                    if not _matched:
+                        for _m in _resp.json():
+                            if _m.get('status') == 'ready':
+                                _remote_host = _m.get('host', '')
+                                _remote_user = _m.get('username', '')
+                                if not working_dir:
+                                    working_dir = _m.get('workspace', '')
+                                break
                     if not working_dir:
                         working_dir = DEFAULT_WORKSPACE
                 except Exception:
