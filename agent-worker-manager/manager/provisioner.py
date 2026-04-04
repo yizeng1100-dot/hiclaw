@@ -353,7 +353,8 @@ class Provisioner:
         # This avoids any network auth issues (Gitea 403, GitHub unreachable, etc).
         extensions_bundle = os.path.join(DEPS_DIR, "openhands-extensions.bundle")
         if os.path.exists(extensions_bundle):
-            skills_cache = "$HOME/.openhands/cache/skills"
+            # Use resolved home path (remote_home set earlier) — $HOME won't work in SFTP
+            skills_cache = f"{remote_home}/.openhands/cache/skills"
             has_skills = await self._check_remote(f"test -d {skills_cache}/public-skills/.git")
             if not has_skills:
                 bundle_size_kb = os.path.getsize(extensions_bundle) // 1024

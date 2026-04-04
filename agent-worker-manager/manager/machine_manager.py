@@ -790,7 +790,12 @@ class MachineManager:
                     logger.warning(f"Code-server health check failed on reconnect: {e}")
 
             # 3. Public skills cache — upload bundle via SSH if missing
-            _skills_cache = "$HOME/.openhands/cache/skills"
+            # Resolve $HOME first — SFTP doesn't expand shell variables
+            _home_out, _, _ = await ssh.run("echo $HOME", timeout=3)
+            _remote_home = _home_out.strip() or "/root"
+            _skills_cache = f"{_remote_home}/.openhands/cache/skills"
+            _remote_tmp = f"{_remote_home}/.hiclaw/tmp"
+
             _has_cache, _, _ = await ssh.run(
                 f"test -d {_skills_cache}/public-skills/.git && echo YES || echo NO",
                 timeout=5,
@@ -801,7 +806,6 @@ class MachineManager:
                 )
                 if os.path.exists(extensions_bundle):
                     logger.info("Public skills cache missing on reconnect, uploading bundle via SSH")
-                    _remote_tmp = "$HOME/.hiclaw/tmp"
                     await ssh.run(f"mkdir -p {_remote_tmp} {_skills_cache}", timeout=5)
                     await ssh.upload_file(
                         extensions_bundle,
@@ -814,7 +818,7 @@ class MachineManager:
                     )
                     logger.info("Public skills uploaded from bundle on reconnect")
                 else:
-                    logger.info("No extensions bundle found on app-server, skipping")
+                    logger.info(f"No extensions bundle found at {extensions_bundle}, skipping")
 
             # 4. Custom skills sync
             await self._clone_skills_repo(ssh, machine)
