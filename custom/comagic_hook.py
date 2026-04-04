@@ -20,7 +20,6 @@ except Exception:
 
 COMAGIC_CONFIG = os.getenv("COMAGIC_CONFIG", str(Path.home() / ".comagic" / "userToken.json"))
 ENTERPRISE_ID = os.getenv("COMAGIC_ENTERPRISE_ID", "copilot")
-MODEL_OPTION_ID = int(os.getenv("COMAGIC_MODEL_OPTION_ID", "204"))
 
 
 def _read_comagic_config() -> dict:
@@ -58,14 +57,8 @@ def inject_comagic_headers(config, kwargs: dict) -> dict:
         "X-User-Id": user_id or "default",
         "X-Enterprise-Id": ENTERPRISE_ID,
         "X-Request-ID": str(uuid.uuid4()),
-        "User-Agent": "CLI/0.0.0 CoMagic/0.1.66",
+        "User-Agent": "CLI/0.0.0 CoMagic/0.1.77",
     })
     kwargs["extra_headers"] = extra_headers
-
-    # Extra body fields (must go through extra_body to survive drop_params)
-    extra_body = kwargs.get("extra_body", {})
-    extra_body.setdefault("model_option_id", MODEL_OPTION_ID)
-    extra_body.setdefault("thinking", "disabled")
-    kwargs["extra_body"] = extra_body
 
     return kwargs

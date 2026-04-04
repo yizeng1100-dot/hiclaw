@@ -275,13 +275,10 @@ class LLM(RetryMixin, DebugMixin):
                                 'X-User-Id': _comagic_uid,
                                 'X-Enterprise-Id': 'copilot',
                                 'X-Request-ID': str(_uuid.uuid4()),
-                                'User-Agent': 'CLI/0.0.0 CoMagic/0.1.66',
+                                'User-Agent': 'CLI/0.0.0 CoMagic/0.1.77',
                             }
                         )
                         kwargs['extra_headers'] = extra_headers
-                        extra_body = kwargs.get('extra_body', {})
-                        extra_body['model_option_id'] = 204
-                        kwargs['extra_body'] = extra_body
                 else:
                     logger.warning(
                         f'[COMAGIC] ENV fallback: COMAGIC_TOKEN={"SET" if _comagic_token else "EMPTY"}, '
