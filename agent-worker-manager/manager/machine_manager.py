@@ -617,6 +617,8 @@ class MachineManager:
         env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "
         # LLM completion logs go to ~/.hiclaw/logs/ (SDK reads LOG_DIR env var)
         env_vars += "LOG_DIR=$HOME/.hiclaw/logs "
+        # Conversations data (events, chat history) stored in .hiclaw/conversations/
+        env_vars += "OH_CONVERSATIONS_PATH=$HOME/.hiclaw/conversations "
         # >>> CUSTOM: HiClaw — pass secret key for encrypting API keys in persisted conversations <<<
         _secret_key = os.environ.get('OH_SECRET_KEY', '')
         if _secret_key:

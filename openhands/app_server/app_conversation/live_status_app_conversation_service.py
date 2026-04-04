@@ -1154,6 +1154,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             base_url=base_url,
             api_key=user.llm_api_key,
             usage_id='agent',
+            timeout=60,  # >>> CUSTOM: HiClaw — shorter timeout for faster error feedback <<<
             log_completions=True,  # >>> CUSTOM: HiClaw <<<
             **({"log_completions_folder": _log_folder} if _log_folder else {}),
         )
