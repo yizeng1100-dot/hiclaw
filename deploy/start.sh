@@ -382,7 +382,17 @@ fi
 # ─── 等待并验证 ───
 echo ""
 echo "Waiting for services to start..."
-sleep 20
+APP_READY=false
+for i in $(seq 1 60); do
+    if ss -tlnp | grep -q ":$APP_PORT "; then
+        APP_READY=true
+        break
+    fi
+    sleep 2
+done
+if ! $APP_READY; then
+    echo "  ⚠ OpenHands still starting (waited 120s). Check: tail -f $LOG_DIR/openhands.log"
+fi
 
 echo ""
 echo "=== Service Status ==="
