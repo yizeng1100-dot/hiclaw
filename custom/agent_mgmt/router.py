@@ -3,12 +3,74 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from custom.agent_mgmt.db import get_agent_db
 from custom.agent_mgmt.models import AgentCreate, AgentUpdate
 from custom.agent_mgmt.service import AgentService
 
 router = APIRouter(prefix='/agents', tags=['Agents'])
+
+
+# ─── Git Import Models ──────────────────────────────────────────
+
+
+class GitImportRequest(BaseModel):
+    git_url: str
+    branch: str = 'main'
+    subdir: str | None = None
+    token: str | None = None
+    agent_name: str | None = None
+    agent_description: str | None = None
+    agent_category: str | None = None
+
+
+# ─── Git Import Endpoints ───────────────────────────────────────
+
+
+@router.post('/import-from-git')
+async def import_from_git(data: GitImportRequest):
+    """Clone a git repo containing workflow + skill files, register them, and create an Agent."""
+    from custom.agent_mgmt.git_import_service import import_from_git as do_import
+
+    result = await do_import(
+        git_url=data.git_url,
+        branch=data.branch,
+        subdir=data.subdir,
+        token=data.token,
+        agent_name=data.agent_name,
+        agent_description=data.agent_description,
+        agent_category=data.agent_category,
+    )
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    return {
+        'status': 'imported',
+        'agent_id': result.agent_id,
+        'agent_name': result.agent_name,
+        'skill_count': result.skill_count,
+        'workflow_name': result.workflow_name,
+        'local_dir': result.local_dir,
+    }
+
+
+@router.post('/{agent_id}/sync')
+async def sync_agent(agent_id: str):
+    """Re-pull the git repo and update skills for an existing agent."""
+    from custom.agent_mgmt.git_import_service import sync_agent_from_git
+
+    result = await sync_agent_from_git(agent_id)
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    return {
+        'status': 'synced',
+        'skill_count': result.skill_count,
+        'workflow_name': result.workflow_name,
+    }
 
 
 @router.get('')
@@ -87,9 +149,36 @@ async def get_agent(agent_id: str, user_id: str = Query('default')):
         agent = await svc.get_agent(agent_id, user_id=user_id)
         if not agent:
             raise HTTPException(status_code=404, detail='Agent not found')
-        return agent.model_dump()
+        result = agent.model_dump()
+
+        # Auto-populate workflow_phases from linked workflow skill's frontmatter
+        if agent.skills and not _has_config_phases(result.get('config_json')):
+            from custom.skill_mgmt.bridge import get_workflow_phases
+            for skill in agent.skills:
+                phases = get_workflow_phases(skill.name)
+                if phases:
+                    # Merge phases into config_json so frontend gets them automatically
+                    import json
+                    config = json.loads(result.get('config_json') or '{}')
+                    config['workflow_phases'] = phases
+                    result['config_json'] = json.dumps(config)
+                    break  # Use first workflow skill's phases
+
+        return result
     finally:
         await db.close()
+
+
+def _has_config_phases(config_json: str | None) -> bool:
+    """Check if config_json already has workflow_phases defined."""
+    if not config_json:
+        return False
+    try:
+        import json
+        config = json.loads(config_json)
+        return bool(config.get('workflow_phases'))
+    except Exception:
+        return False
 
 
 @router.patch('/{agent_id}')

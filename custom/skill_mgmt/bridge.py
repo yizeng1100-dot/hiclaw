@@ -8,11 +8,22 @@ from __future__ import annotations
 
 import json
 import logging
+import pathlib
 
 from openhands.sdk.context.skills import Skill
 from openhands.sdk.context.skills.trigger import KeywordTrigger, TaskTrigger
 
 _logger = logging.getLogger(__name__)
+
+# Root directory for all file-based skill domains
+_SKILL_ROOT = pathlib.Path(__file__).parent.parent / 'skill_examples'
+
+
+def _iter_skill_dirs() -> list[pathlib.Path]:
+    """Return all subdirectories under skill_examples/."""
+    if not _SKILL_ROOT.exists():
+        return []
+    return sorted(d for d in _SKILL_ROOT.iterdir() if d.is_dir())
 
 
 async def load_custom_skills() -> list[Skill]:
@@ -78,25 +89,19 @@ async def load_custom_skills() -> list[Skill]:
 
 
 def load_file_skills() -> list[Skill]:
-    """Load skill .md files from custom/skill_examples/perf_skills/ directory.
+    """Load skill .md files from all subdirectories under custom/skill_examples/.
 
     Only repo-type skills (no triggers) are injected into agent_context.skills
     and always present in system prompt. Knowledge-type skills (with triggers)
     are loaded separately so the SDK's keyword trigger mechanism can activate
     them on demand, keeping the initial prompt small.
     """
-    import pathlib
     import frontmatter
 
     repo_skills: list[Skill] = []
     knowledge_skills: list[Skill] = []
-    skill_dirs = [
-        pathlib.Path(__file__).parent.parent / 'skill_examples' / 'perf_skills',
-    ]
 
-    for skill_dir in skill_dirs:
-        if not skill_dir.exists():
-            continue
+    for skill_dir in _iter_skill_dirs():
         for md_file in sorted(skill_dir.glob('*.md')):
             try:
                 post = frontmatter.load(str(md_file))
@@ -135,3 +140,43 @@ def load_file_skills() -> list[Skill]:
     # Only return repo skills for injection into agent_context.skills
     # Knowledge skills need to be loaded via SDK's trigger mechanism
     return repo_skills
+
+
+# Cache for parsed workflow phases from skill files
+_workflow_phases_cache: dict[str, list[dict]] = {}
+
+
+def get_workflow_phases(skill_name: str) -> list[dict] | None:
+    """Get workflow phases defined in a skill's frontmatter.
+
+    Returns a list of phase dicts like:
+        [{"key": "init", "label": "初始化", "desc": "...", "output": "/path/to/file.json"}, ...]
+    Or None if the skill has no phases defined.
+    """
+    if skill_name in _workflow_phases_cache:
+        return _workflow_phases_cache[skill_name]
+
+    import frontmatter
+
+    for skill_dir in _iter_skill_dirs():
+        for md_file in sorted(skill_dir.glob('*.md')):
+            try:
+                post = frontmatter.load(str(md_file))
+                meta = post.metadata or {}
+                name = meta.get('name', md_file.stem)
+                phases = meta.get('phases')
+                if phases:
+                    # Normalize: rename 'output' to 'file' for frontend compatibility
+                    normalized = []
+                    for p in phases:
+                        normalized.append({
+                            'key': p.get('key', ''),
+                            'label': p.get('label', ''),
+                            'desc': p.get('desc', ''),
+                            'file': p.get('output'),
+                        })
+                    _workflow_phases_cache[name] = normalized
+            except Exception:
+                pass
+
+    return _workflow_phases_cache.get(skill_name)

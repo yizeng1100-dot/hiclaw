@@ -74,17 +74,31 @@ export function TaskDetailPage() {
     return () => clearInterval(interval);
   }, [taskId, task?.status]);
 
-  // Check real progress by probing output files from workflow phases
+  // Resolve real app_conversation_id from task- prefixed IDs
+  const [resolvedConvId, setResolvedConvId] = React.useState<string | null>(null);
   React.useEffect(() => {
     const convId = task?.conversation_id;
-    if (!convId || task?.status === "pending" || task?.status === "cancelled" || phases.length === 0) return;
+    if (!convId) { setResolvedConvId(null); return; }
+    if (convId.startsWith("task-")) {
+      const startTaskId = convId.slice(5);
+      V1ConversationService.getStartTask(startTaskId)
+        .then((st) => setResolvedConvId(st?.app_conversation_id ?? null))
+        .catch(() => setResolvedConvId(null));
+    } else {
+      setResolvedConvId(convId);
+    }
+  }, [task?.conversation_id]);
+
+  // Check real progress by probing output files from workflow phases
+  React.useEffect(() => {
+    if (!resolvedConvId || task?.status === "pending" || task?.status === "cancelled" || phases.length === 0) return;
 
     const checkFiles = async () => {
       const results = await Promise.all(
         phases.map(async (phase) => {
           if (!phase.file) return false;
           try {
-            const content = await V1ConversationService.readConversationFile(convId, phase.file);
+            const content = await V1ConversationService.readConversationFile(resolvedConvId, phase.file);
             return !!(content && content.length > 0);
           } catch {
             return false;
@@ -96,6 +110,17 @@ export function TaskDetailPage() {
         if (!phases[i].file && results[i + 1]) results[i] = true;
       }
       setPhasesDone(results);
+
+      // Auto-complete task when all phases with files are done
+      if (task?.status === "running" && taskId) {
+        const allDone = phases.every((p, idx) => !p.file || results[idx]);
+        const hasAnyDone = results.some(Boolean);
+        if (allDone && hasAnyDone) {
+          TaskService.updateTask(taskId, { status: "completed" })
+            .then(() => TaskService.getTask(taskId).then(setTask))
+            .catch(() => {});
+        }
+      }
     };
 
     checkFiles();
@@ -103,7 +128,7 @@ export function TaskDetailPage() {
       const interval = setInterval(checkFiles, 10000);
       return () => clearInterval(interval);
     }
-  }, [task?.conversation_id, task?.status, phases]);
+  }, [resolvedConvId, task?.status, phases, taskId]);
 
   const handleCancel = async () => {
     if (!taskId) return;

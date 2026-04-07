@@ -149,31 +149,51 @@ export function AgentDetailPage() {
           </div>
         </div>
 
-        {/* Action button */}
-        {hasPanel ? (
-          <button
-            type="button"
-            onClick={() => setShowPerfPanel((v) => !v)}
-            disabled={starting || !agent.is_enabled}
-            className={cn(
-              "px-6 py-2.5 disabled:opacity-50 rounded-lg text-sm font-medium text-black transition shrink-0",
-              agentType === "kernel-diff"
-                ? "bg-[#F97316] hover:bg-[#EA690E]"
-                : "bg-[#4ECDC4] hover:bg-[#3dbdb5]",
-            )}
-          >
-            {starting ? "分析中..." : showPerfPanel ? "收起面板" : "开始分析"}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleStartAgent}
-            disabled={starting || !agent.is_enabled}
-            className="px-6 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg text-sm font-medium transition shrink-0"
-          >
-            {starting ? "启动中..." : "启动 Agent"}
-          </button>
-        )}
+        {/* Action buttons */}
+        <div className="flex gap-2 shrink-0">
+          {(() => {
+            try {
+              const cfg = JSON.parse(agent.config_json || "{}");
+              return cfg.git_source ? (
+                <button type="button"
+                  onClick={async () => {
+                    try {
+                      await AgentService.syncAgent(agent.id);
+                      // Reload agent
+                      AgentService.getAgent(agent.id).then(setAgent);
+                    } catch (e) { console.error("Sync failed:", e); }
+                  }}
+                  className="px-4 py-2.5 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded-lg text-sm font-medium transition">
+                  同步 Git
+                </button>
+              ) : null;
+            } catch { return null; }
+          })()}
+          {hasPanel ? (
+            <button
+              type="button"
+              onClick={() => setShowPerfPanel((v) => !v)}
+              disabled={starting || !agent.is_enabled}
+              className={cn(
+                "px-6 py-2.5 disabled:opacity-50 rounded-lg text-sm font-medium text-black transition",
+                agentType === "kernel-diff"
+                  ? "bg-[#F97316] hover:bg-[#EA690E]"
+                  : "bg-[#4ECDC4] hover:bg-[#3dbdb5]",
+              )}
+            >
+              {starting ? "分析中..." : showPerfPanel ? "收起面板" : "开始分析"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleStartAgent}
+              disabled={starting || !agent.is_enabled}
+              className="px-6 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg text-sm font-medium transition"
+            >
+              {starting ? "启动中..." : "启动 Agent"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Error message */}

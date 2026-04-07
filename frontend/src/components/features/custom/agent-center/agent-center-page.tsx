@@ -66,6 +66,18 @@ export function AgentCenterPage() {
   const [newTags, setNewTags] = React.useState("");
   const [creating, setCreating] = React.useState(false);
 
+  // Git import modal
+  const [showImportModal, setShowImportModal] = React.useState(false);
+  const [gitUrl, setGitUrl] = React.useState("");
+  const [gitBranch, setGitBranch] = React.useState("main");
+  const [gitSubdir, setGitSubdir] = React.useState("");
+  const [gitToken, setGitToken] = React.useState("");
+  const [gitAgentName, setGitAgentName] = React.useState("");
+  const [gitAgentDesc, setGitAgentDesc] = React.useState("");
+  const [gitAgentCategory, setGitAgentCategory] = React.useState("");
+  const [importing, setImporting] = React.useState(false);
+  const [importResult, setImportResult] = React.useState<{ agent_name: string; skill_count: number; workflow_name: string | null } | null>(null);
+
   // Close search history dropdown on outside click
   React.useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -190,6 +202,38 @@ export function AgentCenterPage() {
     }
   };
 
+  // Git import
+  const handleImport = async () => {
+    if (!gitUrl.trim()) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const result = await AgentService.importFromGit({
+        git_url: gitUrl,
+        branch: gitBranch || "main",
+        subdir: gitSubdir || undefined,
+        token: gitToken || undefined,
+        agent_name: gitAgentName || undefined,
+        agent_description: gitAgentDesc || undefined,
+        agent_category: gitAgentCategory || undefined,
+      });
+      setImportResult({ agent_name: result.agent_name, skill_count: result.skill_count, workflow_name: result.workflow_name });
+      fetchAgents();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "导入失败";
+      setImportResult({ agent_name: "", skill_count: 0, workflow_name: msg });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const closeImportModal = () => {
+    setShowImportModal(false);
+    setGitUrl(""); setGitBranch("main"); setGitSubdir(""); setGitToken("");
+    setGitAgentName(""); setGitAgentDesc(""); setGitAgentCategory("");
+    setImportResult(null);
+  };
+
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
   return (
@@ -200,10 +244,16 @@ export function AgentCenterPage() {
           <h1 className="text-2xl font-bold">Agent 中心</h1>
           <p className="text-sm text-gray-400 mt-1">共 {total} 个 Agent</p>
         </div>
-        <button type="button" onClick={() => setShowCreateModal(true)}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition">
-          + 创建 Agent
-        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setShowImportModal(true)}
+            className="px-4 py-2 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded-lg text-sm font-medium transition">
+            从 Git 导入
+          </button>
+          <button type="button" onClick={() => setShowCreateModal(true)}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition">
+            + 创建 Agent
+          </button>
+        </div>
       </div>
 
       {/* Search with history */}
@@ -353,6 +403,100 @@ export function AgentCenterPage() {
                 {creating ? "创建中..." : "创建"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Git Import Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-[#161b22] border border-[#30363d] rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-auto">
+            <h2 className="text-lg font-bold mb-4">从 Git 导入 Agent</h2>
+            <p className="text-sm text-gray-400 mb-4">
+              从 Git 仓库导入 Workflow + Skill 文件，自动创建 Agent。
+              仓库需包含符合规范的 .md 文件。
+            </p>
+
+            {importResult ? (
+              <div className="space-y-3">
+                {importResult.agent_name ? (
+                  <div className="bg-green-900/20 border border-green-800 rounded-lg p-4">
+                    <p className="text-green-400 font-medium">导入成功</p>
+                    <p className="text-sm text-gray-300 mt-2">Agent: {importResult.agent_name}</p>
+                    <p className="text-sm text-gray-300">Skills: {importResult.skill_count} 个</p>
+                    {importResult.workflow_name && (
+                      <p className="text-sm text-gray-300">Workflow: {importResult.workflow_name}</p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="bg-red-900/20 border border-red-800 rounded-lg p-4">
+                    <p className="text-red-400 font-medium">导入失败</p>
+                    <p className="text-sm text-gray-300 mt-2">{importResult.workflow_name}</p>
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <button type="button" onClick={closeImportModal}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition">
+                    关闭
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="text-sm text-gray-400 block mb-1">Git 仓库地址 *</label>
+                  <input type="text" value={gitUrl} onChange={(e) => setGitUrl(e.target.value)}
+                    placeholder="https://gitlab.example.com/team/skills.git"
+                    className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-sm text-gray-400 block mb-1">分支</label>
+                    <input type="text" value={gitBranch} onChange={(e) => setGitBranch(e.target.value)}
+                      placeholder="main"
+                      className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-400 block mb-1">子目录（可选）</label>
+                    <input type="text" value={gitSubdir} onChange={(e) => setGitSubdir(e.target.value)}
+                      placeholder="例如 skills/"
+                      className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm text-gray-400 block mb-1">Access Token（私有仓库）</label>
+                  <input type="password" value={gitToken} onChange={(e) => setGitToken(e.target.value)}
+                    placeholder="留空表示公开仓库"
+                    className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500" />
+                </div>
+                <hr className="border-[#30363d]" />
+                <div>
+                  <label className="text-sm text-gray-400 block mb-1">Agent 名称（可选，自动推导）</label>
+                  <input type="text" value={gitAgentName} onChange={(e) => setGitAgentName(e.target.value)}
+                    placeholder="留空则从 workflow 文件名推导"
+                    className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500" />
+                </div>
+                <div>
+                  <label className="text-sm text-gray-400 block mb-1">描述（可选）</label>
+                  <input type="text" value={gitAgentDesc} onChange={(e) => setGitAgentDesc(e.target.value)}
+                    placeholder="Agent 功能描述"
+                    className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500" />
+                </div>
+                <div>
+                  <label className="text-sm text-gray-400 block mb-1">分类（可选）</label>
+                  <input type="text" value={gitAgentCategory} onChange={(e) => setGitAgentCategory(e.target.value)}
+                    placeholder="例如：运维、开发、测试"
+                    className="w-full px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500" />
+                </div>
+                <div className="flex justify-end gap-3 mt-4">
+                  <button type="button" onClick={closeImportModal}
+                    className="px-4 py-2 text-sm text-gray-400 hover:text-white transition">取消</button>
+                  <button type="button" onClick={handleImport} disabled={!gitUrl.trim() || importing}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg text-sm font-medium transition">
+                    {importing ? "导入中..." : "开始导入"}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
