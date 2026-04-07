@@ -16,6 +16,7 @@ import type {
   GetSkillsResponse,
   GetHooksResponse,
   V1RuntimeConversationInfo,
+  PluginSpec,
 } from "./v1-conversation-service.types";
 
 class V1ConversationService {
@@ -68,6 +69,14 @@ class V1ConversationService {
     trigger?: ConversationTrigger,
     parent_conversation_id?: string,
     agent_type?: "default" | "plan",
+    // >>> CUSTOM: HiClaw <<<
+    remote_agent_url?: string,
+    remote_session_api_key?: string,
+    remote_working_dir?: string,
+    // >>> END CUSTOM <<<
+    plugins?: PluginSpec[],
+    sandbox_id?: string,
+    llm_model?: string,
   ): Promise<V1AppConversationStartTask> {
     const body: V1AppConversationStartRequest = {
       selected_repository: selectedRepository,
@@ -78,6 +87,14 @@ class V1ConversationService {
       trigger,
       parent_conversation_id: parent_conversation_id || null,
       agent_type,
+      // >>> CUSTOM: HiClaw <<<
+      remote_agent_url: remote_agent_url || null,
+      remote_session_api_key: remote_session_api_key || null,
+      remote_working_dir: remote_working_dir || null,
+      // >>> END CUSTOM <<<
+      plugins: plugins || null,
+      sandbox_id: sandbox_id || null,
+      llm_model: llm_model || null,
     };
 
     // suggested_task implies the backend will construct the initial_message

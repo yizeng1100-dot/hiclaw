@@ -9,6 +9,19 @@ export function extractBaseHost(
   if (conversationUrl && !conversationUrl.startsWith("/")) {
     try {
       const url = new URL(conversationUrl);
+      // If the conversation URL points to localhost but we're accessing from external,
+      // use the browser's hostname with the conversation URL's port
+      const urlHostname = url.hostname;
+      const browserHostname =
+        window.location.hostname ?? window.location.host?.split(":")[0];
+      if (
+        browserHostname &&
+        (urlHostname === "localhost" || urlHostname === "127.0.0.1") &&
+        browserHostname !== "localhost" &&
+        browserHostname !== "127.0.0.1"
+      ) {
+        return `${browserHostname}:${url.port}`;
+      }
       return url.host; // e.g., "localhost:3000"
     } catch {
       return window.location.host;
@@ -26,16 +39,22 @@ export function extractBaseHost(
 export function extractPathPrefix(
   conversationUrl: string | null | undefined,
 ): string {
-  if (conversationUrl && !conversationUrl.startsWith("/")) {
-    try {
-      const url = new URL(conversationUrl);
-      const pathBeforeApi = url.pathname.split("/api/conversations")[0] || "";
-      return pathBeforeApi.replace(/\/$/, ""); // Remove trailing slash
-    } catch {
-      return "";
-    }
+  if (!conversationUrl) return "";
+
+  // >>> CUSTOM: HiClaw — handle relative URLs like /runtime/20282/api/conversations/xxx <<<
+  if (conversationUrl.startsWith("/")) {
+    const pathBeforeApi = conversationUrl.split("/api/conversations")[0] || "";
+    return pathBeforeApi.replace(/\/$/, "");
   }
-  return "";
+  // >>> END CUSTOM <<<
+
+  try {
+    const url = new URL(conversationUrl);
+    const pathBeforeApi = url.pathname.split("/api/conversations")[0] || "";
+    return pathBeforeApi.replace(/\/$/, ""); // Remove trailing slash
+  } catch {
+    return "";
+  }
 }
 
 /**

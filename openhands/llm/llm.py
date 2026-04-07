@@ -94,6 +94,15 @@ class LLM(RetryMixin, DebugMixin):
         self.model_info: ModelInfo | None = None
         self._function_calling_active: bool = False
         self.retry_listener = retry_listener
+
+        # >>> CUSTOM: HiClaw — enable raw request/response logging via env var <<<
+        if os.environ.get('HICLAW_LLM_DEBUG', '').lower() in ('1', 'true', 'yes'):
+            import litellm as _litellm
+
+            _litellm.log_raw_request_response = True
+            _litellm.set_verbose = True
+        # >>> END CUSTOM <<<
+
         if self.config.log_completions:
             if self.config.log_completions_folder is None:
                 raise RuntimeError(
@@ -245,6 +254,46 @@ class LLM(RetryMixin, DebugMixin):
         )
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper for the litellm completion function. Logs the input and output of the completion function."""
+            # >>> CUSTOM: HiClaw — dynamic CoMagic headers <<<
+            try:
+                from custom.comagic_hook import inject_comagic_headers
+
+                kwargs = inject_comagic_headers(self.config, kwargs)
+            except ImportError:
+                # Fallback: use env vars (for remote agent-servers without custom/ dir)
+                _comagic_token = os.environ.get('COMAGIC_TOKEN', '')
+                _comagic_uid = os.environ.get('COMAGIC_USER_ID', '')
+                if _comagic_token:
+                    base_url = self.config.base_url or ''
+                    if 'hihonor' in base_url.lower():
+                        import uuid as _uuid
+
+                        kwargs['api_key'] = _comagic_token
+                        extra_headers = kwargs.get('extra_headers', {})
+                        extra_headers.update(
+                            {
+                                'X-User-Id': _comagic_uid,
+                                'X-Enterprise-Id': 'copilot',
+                                'X-Request-ID': str(_uuid.uuid4()),
+                                'User-Agent': 'CLI/0.0.0 CoMagic/0.1.77',
+                            }
+                        )
+                        kwargs['extra_headers'] = extra_headers
+                else:
+                    logger.warning(
+                        f'[COMAGIC] ENV fallback: COMAGIC_TOKEN={"SET" if _comagic_token else "EMPTY"}, '
+                        f'COMAGIC_USER_ID={"SET" if _comagic_uid else "EMPTY"}, '
+                        f'base_url={self.config.base_url}, '
+                        f'hihonor_match={"hihonor" in (self.config.base_url or "").lower()}'
+                    )
+            # Log the actual request being sent
+            logger.info(
+                f'[LLM_REQUEST] base_url={self.config.base_url}, '
+                f'api_key={str(kwargs.get("api_key", ""))[:20]}..., '
+                f'extra_headers={kwargs.get("extra_headers", {})}, '
+                f'extra_body={kwargs.get("extra_body", {})}'
+            )
+            # >>> END CUSTOM <<<
             from openhands.io import json
 
             messages_kwarg: (

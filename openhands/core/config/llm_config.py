@@ -66,11 +66,11 @@ class LLMConfig(BaseModel):
     aws_region_name: str | None = Field(default=None)
     openrouter_site_url: str = Field(default='https://docs.all-hands.dev/')
     openrouter_app_name: str = Field(default='OpenHands')
-    # total wait time: 8 + 16 + 32 + 64 = 120 seconds
-    num_retries: int = Field(default=5)
+    # total wait time: 8 + 16 + 32 + 64 + 64 + 64 + 64 + 64 = ~376 seconds
+    num_retries: int = Field(default=10)
     retry_multiplier: float = Field(default=8)
     retry_min_wait: int = Field(default=8)
-    retry_max_wait: int = Field(default=64)
+    retry_max_wait: int = Field(default=120)
     timeout: int | None = Field(default=None)
     max_message_chars: int = Field(
         default=30_000

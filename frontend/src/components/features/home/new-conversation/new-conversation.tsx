@@ -5,9 +5,15 @@ import { CardTitle } from "#/ui/card-title";
 import { Typography } from "#/ui/typography";
 import { CreateConversationButton } from "./create-conversation-button";
 import { Card } from "#/ui/card";
+// >>> CUSTOM: HiClaw <<<
+import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
+// >>> END CUSTOM <<<
 
 export function NewConversation() {
   const { t } = useTranslation();
+  // >>> CUSTOM: HiClaw <<<
+  const { enabled, setEnabled } = useRemoteWorkerStore();
+  // >>> END CUSTOM <<<
 
   return (
     <Card className="flex-col p-5 gap-2.5 min-h-[286px] md:min-h-auto w-full">
@@ -17,6 +23,17 @@ export function NewConversation() {
       <Typography.Text>
         {t(I18nKey.HOME$NEW_PROJECT_DESCRIPTION)}
       </Typography.Text>
+      {/* >>> CUSTOM: HiClaw — Remote machine is mandatory <<< */}
+      <label className="flex items-center gap-2 mt-1">
+        <input
+          type="checkbox"
+          checked
+          disabled
+          className="accent-blue-500 w-3.5 h-3.5"
+        />
+        <span className="text-xs text-neutral-400">Remote Machine</span>
+      </label>
+      {/* >>> END CUSTOM <<< */}
       <CreateConversationButton />
     </Card>
   );

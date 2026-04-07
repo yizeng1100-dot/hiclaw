@@ -41,7 +41,9 @@ export function Sidebar() {
   React.useEffect(() => {
     if (pathname === "/settings") {
       setSettingsModalIsOpen(false);
-    } else if (
+    // >>> CUSTOM: HiClaw — disable auto-open LLM settings modal <<<
+    // LLM config is done via config files, not UI. Will re-enable later.
+    } else if (false &&
       !isFetchingSettings &&
       settingsIsError &&
       settingsError?.status !== 404

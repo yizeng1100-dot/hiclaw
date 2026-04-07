@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from typing import AsyncGenerator
 
 import docker
@@ -58,10 +59,12 @@ class DockerSandboxSpecServiceInjector(SandboxSpecServiceInjector):
         description='Preset list of sandbox specs',
     )
     pull_if_missing: bool = Field(
-        default=True,
+        # >>> CUSTOM: HiClaw — default off if SANDBOX_NO_PULL=1 (for offline/intranet) <<<
+        default_factory=lambda: os.environ.get('SANDBOX_NO_PULL', '') not in ('1', 'true', 'yes'),
+        # >>> END CUSTOM <<<
         description=(
             'Flag indicating that any missing specs should be pulled from '
-            'remote repositories.'
+            'remote repositories. Set SANDBOX_NO_PULL=1 to disable.'
         ),
     )
 

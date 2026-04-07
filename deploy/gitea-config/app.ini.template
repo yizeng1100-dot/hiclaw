@@ -1,0 +1,39 @@
+APP_NAME = HiClaw Skills
+RUN_MODE = prod
+RUN_USER = __USER__
+
+[server]
+HTTP_PORT = __GITEA_PORT__
+ROOT_URL = http://localhost:__APP_PORT__/runtime/gitea/
+LFS_START_SERVER = false
+OFFLINE_MODE = true
+START_SSH_SERVER = false
+
+[database]
+DB_TYPE = sqlite3
+PATH = __HICLAW_DIR__/gitea/data/gitea.db
+
+[repository]
+ROOT = __HICLAW_DIR__/gitea/repos
+DEFAULT_BRANCH = master
+
+[security]
+INSTALL_LOCK = true
+SECRET_KEY = hiclaw-secret-key-change-me
+X_FRAME_OPTIONS =
+
+[service]
+DISABLE_REGISTRATION = false
+REQUIRE_SIGNIN_VIEW = false
+
+[ssh]
+DISABLE_SSH = true
+START_BUILT_IN_SSH_SERVER = false
+
+[ui]
+DEFAULT_THEME = gitea-dark
+
+[log]
+MODE = file
+LEVEL = Info
+ROOT_PATH = __HICLAW_DIR__/gitea/log

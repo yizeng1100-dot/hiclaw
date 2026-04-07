@@ -102,6 +102,24 @@ class RetryMixin:
                     exception.max_retries = stop_func.max_attempts
                     break
 
+        # >>> CUSTOM: HiClaw — log full error details for LLM debugging <<<
+        _detail = str(exception)
+        # litellm exceptions often have response body in .message or .response
+        if hasattr(exception, 'response') and exception.response is not None:
+            try:
+                _resp = exception.response
+                _body = getattr(_resp, 'text', '') or getattr(_resp, 'content', '')
+                if _body:
+                    _detail += f' | Response: {str(_body)[:1000]}'
+            except Exception:
+                pass
+        if hasattr(exception, 'message') and exception.message:
+            _detail = f'{exception.message}'
+        if hasattr(exception, 'llm_provider'):
+            _detail += f' | Provider: {exception.llm_provider}'
+        if hasattr(exception, 'model'):
+            _detail += f' | Model: {exception.model}'
+        # >>> END CUSTOM <<<
         logger.error(
-            f'{exception}. Attempt #{retry_state.attempt_number} | You can customize retry values in the configuration.',
+            f'{_detail}. Attempt #{retry_state.attempt_number} | You can customize retry values in the configuration.',
         )

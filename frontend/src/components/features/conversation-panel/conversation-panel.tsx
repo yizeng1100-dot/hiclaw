@@ -1,6 +1,7 @@
 import React from "react";
 import { NavLink, useParams, useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
+import axios from "axios";
 import { I18nKey } from "#/i18n/declaration";
 import { usePaginatedConversations } from "#/hooks/query/use-paginated-conversations";
 import { useStartTasks } from "#/hooks/query/use-start-tasks";
@@ -18,6 +19,9 @@ import { displaySuccessToast } from "#/utils/custom-toast-handlers";
 import { ConversationCard } from "./conversation-card/conversation-card";
 import { StartTaskCard } from "./start-task-card/start-task-card";
 import { ConversationCardSkeleton } from "./conversation-card/conversation-card-skeleton";
+// >>> CUSTOM: HiClaw <<<
+import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
+// >>> END CUSTOM <<<
 
 interface ConversationPanelProps {
   onClose: () => void;
@@ -50,6 +54,117 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
   const [openContextMenuId, setOpenContextMenuId] = React.useState<
     string | null
   >(null);
+
+  // >>> CUSTOM: HiClaw — reconnect modal for remote conversations <<<
+  const [reconnectModalVisible, setReconnectModalVisible] = React.useState(false);
+  const [reconnectPassword, setReconnectPassword] = React.useState("");
+  const [reconnectConversationId, setReconnectConversationId] = React.useState<string | null>(null);
+  const [reconnectLoading, setReconnectLoading] = React.useState(false);
+  const [reconnectError, setReconnectError] = React.useState<string | null>(null);
+  const { config, workerManagerUrl } = useRemoteWorkerStore();
+
+  const handleRemoteConversationClick = (conversationId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    setReconnectConversationId(conversationId);
+    setReconnectPassword(config.password || "");
+    setReconnectError(null);
+    setReconnectModalVisible(true);
+  };
+
+  const handleReconnect = async () => {
+    if (!reconnectPassword || !reconnectConversationId) return;
+    setReconnectLoading(true);
+    setReconnectError(null);
+    try {
+      const resp = await axios.post(`${workerManagerUrl}/api/machines/connect`, {
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: reconnectPassword,
+        mode: "host",
+        template: "openhands",
+        workspace: config.workspace,
+      }, { timeout: 30000 });
+      // Save password for next time
+      useRemoteWorkerStore.getState().setConfig({ password: reconnectPassword });
+
+      // >>> CUSTOM: HiClaw — wait for machine to be ready before navigating <<<
+      const machineId = resp.data?.id;
+      if (machineId && resp.data?.status !== "ready") {
+        // Poll machine status until ready (max 120s)
+        const pollStart = Date.now();
+        while (Date.now() - pollStart < 120000) {
+          await new Promise((r) => setTimeout(r, 2000));
+          try {
+            const statusResp = await axios.get(`${workerManagerUrl}/api/machines/${machineId}`, { timeout: 5000 });
+            if (statusResp.data?.status === "ready") break;
+            if (statusResp.data?.status === "error") {
+              throw new Error(statusResp.data?.error || "Connection failed");
+            }
+          } catch (pollErr) {
+            if (axios.isAxiosError(pollErr) && pollErr.response?.status === 404) continue;
+            throw pollErr;
+          }
+        }
+      }
+      // >>> END CUSTOM <<<
+
+      setReconnectModalVisible(false);
+      onClose();
+      navigate(`/conversations/${reconnectConversationId}`);
+    } catch (err) {
+      setReconnectError(err instanceof Error ? err.message : "Connection failed");
+    } finally {
+      setReconnectLoading(false);
+    }
+  };
+  // >>> END CUSTOM <<<
+
+  // >>> CUSTOM: HiClaw — batch delete <<<
+  const [batchMode, setBatchMode] = React.useState(false);
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (selectedIds.size === conversations.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(conversations.map((c) => c.conversation_id)));
+    }
+  };
+
+  const handleBatchDelete = () => {
+    const count = selectedIds.size;
+    let completed = 0;
+    selectedIds.forEach((id) => {
+      deleteConversation(
+        { conversationId: id },
+        {
+          onSuccess: () => {
+            completed++;
+            if (id === currentConversationId) navigate("/");
+            if (completed === count) {
+              // Show feedback when all deletions complete
+              import("#/utils/custom-toast-handlers").then(({ displaySuccessToast }) => {
+                displaySuccessToast(`Deleted ${count} conversation${count > 1 ? "s" : ""}`);
+              });
+            }
+          },
+        },
+      );
+    });
+    setSelectedIds(new Set());
+    setBatchMode(false);
+  };
+  // >>> END CUSTOM <<<
 
   const {
     data,
@@ -145,6 +260,50 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
       data-testid="conversation-panel"
       className="w-full md:w-[400px] h-full border border-[#525252] bg-[#25272D] rounded-lg overflow-y-auto absolute custom-scrollbar-always"
     >
+      {/* >>> CUSTOM: HiClaw — batch delete toolbar <<< */}
+      {conversations.length > 0 && (
+        <div className="sticky top-0 z-10 bg-tertiary border-b border-neutral-600 px-3 py-2">
+          {!batchMode ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); setBatchMode(true); }}
+              className="text-xs text-neutral-500 hover:text-neutral-300 transition"
+            >
+              Manage
+            </button>
+          ) : (
+            <div className="flex items-center gap-3 w-full">
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); selectAll(); }}
+                className="text-xs text-blue-400 hover:text-blue-300 transition"
+              >
+                {selectedIds.size === conversations.length ? "Deselect" : "All"}
+              </button>
+              <span className="text-xs text-neutral-500 flex-1">
+                {selectedIds.size} selected
+              </span>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); handleBatchDelete(); }}
+                disabled={selectedIds.size === 0}
+                className="text-xs px-2 py-0.5 rounded-md bg-danger/10 text-danger hover:bg-danger/20 disabled:opacity-30 disabled:cursor-not-allowed transition"
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setBatchMode(false); setSelectedIds(new Set()); }}
+                className="text-xs text-neutral-500 hover:text-neutral-300 transition"
+              >
+                Done
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {/* >>> END CUSTOM <<< */}
+
       {isFetching && conversations.length === 0 && (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, index) => (
@@ -177,10 +336,68 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
       ))}
       {/* Then render completed conversations */}
       {conversations?.map((project) => (
+        batchMode ? (
+          <div
+            key={project.conversation_id}
+            onClick={() => toggleSelect(project.conversation_id)}
+            className={`cursor-pointer flex items-center gap-2 ${selectedIds.has(project.conversation_id) ? "bg-blue-900/30" : ""}`}
+          >
+            <div className="shrink-0 pl-2">
+              <input
+                type="checkbox"
+                checked={selectedIds.has(project.conversation_id)}
+                onChange={() => toggleSelect(project.conversation_id)}
+                className="accent-blue-500 w-3.5 h-3.5"
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <ConversationCard
+                onDelete={() => {}}
+                onStop={() => {}}
+                onChangeTitle={() => {}}
+                title={project.title}
+                selectedRepository={{
+                  selected_repository: project.selected_repository,
+                  selected_branch: project.selected_branch,
+                  git_provider: project.git_provider as Provider,
+                }}
+                lastUpdatedAt={project.last_updated_at}
+                createdAt={project.created_at}
+                conversationStatus={project.status}
+                conversationId={project.conversation_id}
+                conversationVersion={project.conversation_version}
+                contextMenuOpen={false}
+                onContextMenuToggle={() => {}}
+              />
+            </div>
+          </div>
+        ) : (
         <NavLink
           key={project.conversation_id}
           to={`/conversations/${project.conversation_id}`}
-          onClick={onClose}
+          onClick={async (e) => {
+            // >>> CUSTOM: HiClaw — remote conversations: check if already connected <<<
+            if (project.sandbox_id?.startsWith("remote-")) {
+              try {
+                const resp = await fetch(`${workerManagerUrl}/api/machines`);
+                const machines = await resp.json();
+                const readyMachine = machines.find(
+                  (m: { status: string; tunnel_port: number }) =>
+                    m.status === "ready" && m.tunnel_port > 0,
+                );
+                if (readyMachine) {
+                  // Machine already connected — go directly to conversation
+                  onClose();
+                  return; // let NavLink navigate normally
+                }
+              } catch { /* fall through to password prompt */ }
+              // Not connected — show password prompt
+              handleRemoteConversationClick(project.conversation_id, e);
+              return;
+            }
+            // >>> END CUSTOM <<<
+            onClose();
+          }}
         >
           <ConversationCard
             onDelete={() =>
@@ -213,6 +430,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
             }
           />
         </NavLink>
+        )
       ))}
 
       {/* Loading indicator for fetching more conversations */}
@@ -257,6 +475,51 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
           onCancel={() => setConfirmExitConversationModalVisible(false)}
         />
       )}
+
+      {/* >>> CUSTOM: HiClaw — reconnect password modal <<< */}
+      {reconnectModalVisible && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={(e) => { if (e.target === e.currentTarget) setReconnectModalVisible(false); }}
+        >
+          <div className="bg-neutral-800 border border-neutral-600 rounded-xl p-6 w-[360px] shadow-2xl">
+            <h3 className="text-base font-semibold text-neutral-100 mb-3">SSH Password</h3>
+            <p className="text-xs text-neutral-400 mb-3">
+              {config.username}@{config.host}
+            </p>
+            <input
+              type="password"
+              value={reconnectPassword}
+              onChange={(e) => setReconnectPassword(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleReconnect(); }}
+              placeholder="Password"
+              autoFocus
+              className="w-full px-3 py-2 bg-neutral-900 border border-neutral-600 rounded text-neutral-200 text-sm focus:border-blue-500 focus:outline-none mb-3"
+            />
+            {reconnectError && (
+              <p className="text-xs text-red-400 mb-3">{reconnectError}</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setReconnectModalVisible(false)}
+                className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleReconnect}
+                disabled={!reconnectPassword || reconnectLoading}
+                className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-600 disabled:text-neutral-400 text-white rounded-lg"
+              >
+                {reconnectLoading ? "Connecting..." : "Connect"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* >>> END CUSTOM <<< */}
     </div>
   );
 }

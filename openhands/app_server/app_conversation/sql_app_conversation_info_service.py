@@ -100,6 +100,11 @@ class StoredConversationMetadata(Base):  # type: ignore
     sandbox_id = Column(String, nullable=True, index=True)
     parent_conversation_id = Column(String, nullable=True, index=True)
     public = Column(Boolean, nullable=True, index=True)
+    # >>> CUSTOM: HiClaw <<<
+    remote_agent_url = Column(String, nullable=True)
+    remote_working_dir = Column(String, nullable=True)
+    remote_host = Column(String, nullable=True)
+    # >>> END CUSTOM <<<
 
 
 @dataclass
@@ -278,6 +283,14 @@ class SQLAppConversationInfoService(AppConversationInfoService):
         rows = result_set.scalars().all()
         return [UUID(row.conversation_id) for row in rows]
 
+    async def count_conversations_by_sandbox_id(self, sandbox_id: str) -> int:
+        query = await self._secure_select()
+        query = query.where(StoredConversationMetadata.sandbox_id == sandbox_id)
+        count_query = select(func.count()).select_from(query.subquery())
+        result = await self.db_session.execute(count_query)
+        count = result.scalar()
+        return count or 0
+
     async def get_app_conversation_info(
         self, conversation_id: UUID
     ) -> AppConversationInfo | None:
@@ -356,6 +369,11 @@ class SQLAppConversationInfoService(AppConversationInfoService):
                 else None
             ),
             public=info.public,
+            # >>> CUSTOM: HiClaw <<<
+            remote_agent_url=info.remote_agent_url,
+            remote_working_dir=info.remote_working_dir,
+            remote_host=info.remote_host,
+            # >>> END CUSTOM <<<
         )
 
         await self.db_session.merge(stored)
@@ -543,6 +561,11 @@ class SQLAppConversationInfoService(AppConversationInfoService):
             ),
             sub_conversation_ids=sub_conversation_ids or [],
             public=stored.public,
+            # >>> CUSTOM: HiClaw <<<
+            remote_agent_url=getattr(stored, 'remote_agent_url', None),
+            remote_working_dir=getattr(stored, 'remote_working_dir', None),
+            remote_host=getattr(stored, 'remote_host', None),
+            # >>> END CUSTOM <<<
             created_at=created_at,
             updated_at=updated_at,
         )

@@ -507,22 +507,40 @@ async def get_conversation(
                             app_conversation.sandbox_status = SandboxStatus.STARTING
 
                     except Exception:
-                        # The sandbox is marked as RUNNING, but the server is not responding.
-                        # There is a bug in runtime API which means that the server is marked
-                        # as RUNNING before it is actually started. (Primarily affecting resumed
-                        # runtimes) As a temporary work around for this, we mark the server as
-                        # STARTING. If the sandbox is actually in an error state, the API will
-                        # discover this quite quickly and mark the sandbox as ERROR
-                        logger.warning(
-                            'get_sandbox_info_failed',
-                            extra={
-                                'conversation_id': app_conversation.id,
-                                'sandbox_id': app_conversation.sandbox_id,
-                            },
-                            exc_info=True,
-                            stack_info=True,
-                        )
-                        app_conversation.sandbox_status = SandboxStatus.STARTING
+                        # >>> CUSTOM: HiClaw — remote conversations: check Worker Manager <<<
+                        is_remote = app_conversation.sandbox_id and app_conversation.sandbox_id.startswith('remote-')
+                        if is_remote:
+                            # Check if Worker Manager has an active tunnel
+                            _has_tunnel = False
+                            try:
+                                from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+                                _conv_host = getattr(app_conversation, 'remote_host', None)
+                                _mr = await httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=2)
+                                for _m in _mr.json():
+                                    if _m.get('status') == 'ready' and _m.get('tunnel_port'):
+                                        # Match by host if available, otherwise any ready machine
+                                        if not _conv_host or _m.get('host') == _conv_host:
+                                            _has_tunnel = True
+                                            break
+                            except Exception:
+                                pass
+                            if _has_tunnel:
+                                # Tunnel exists but conversation_url was stale — mark as running
+                                app_conversation.sandbox_status = SandboxStatus.RUNNING
+                            else:
+                                app_conversation.sandbox_status = SandboxStatus.PAUSED
+                        else:
+                            # >>> END CUSTOM — original logic for Docker sandboxes <<<
+                            logger.warning(
+                                'get_sandbox_info_failed',
+                                extra={
+                                    'conversation_id': app_conversation.id,
+                                    'sandbox_id': app_conversation.sandbox_id,
+                                },
+                                exc_info=True,
+                                stack_info=True,
+                            )
+                            app_conversation.sandbox_status = SandboxStatus.STARTING
 
                 return _to_conversation_info(app_conversation)
         except (ValueError, TypeError, Exception):
@@ -603,24 +621,43 @@ async def _try_delete_v1_conversation(
             )
         )
         if app_conversation_info:
+            # Check if the sandbox is shared with other conversations
+            # (e.g. multiple conversations can share a sandbox via /new).
+            # If shared, skip the agent server DELETE call to avoid
+            # destabilizing the runtime for the remaining conversations.
+            sandbox_id = app_conversation_info.sandbox_id
+            sandbox_is_shared = False
+            if sandbox_id:
+                conversation_count = await app_conversation_info_service.count_conversations_by_sandbox_id(
+                    sandbox_id
+                )
+                sandbox_is_shared = conversation_count > 1
+
             # This is a V1 conversation, delete it using the app conversation service
-            # Pass the conversation ID for secure deletion
             result = await app_conversation_service.delete_app_conversation(
-                app_conversation_info.id
+                app_conversation_info.id,
+                skip_agent_server_delete=sandbox_is_shared,
             )
 
             # Manually commit so that the conversation will vanish from the list
             await db_session.commit()
 
-            # Delete the sandbox in the background
-            asyncio.create_task(
-                _finalize_delete_and_close_connections(
-                    sandbox_service,
-                    app_conversation_info.sandbox_id,
-                    db_session,
-                    httpx_client,
+            # Delete the sandbox in the background (checks remaining conversations first)
+            # >>> CUSTOM: HiClaw — skip sandbox deletion for remote conversations <<<
+            if app_conversation_info.sandbox_id and app_conversation_info.sandbox_id.startswith('remote-'):
+                # Remote conversations don't have a real sandbox to delete
+                await db_session.aclose()
+                await httpx_client.aclose()
+            else:
+                # >>> END CUSTOM <<<
+                asyncio.create_task(
+                    _finalize_delete_and_close_connections(
+                        sandbox_service,
+                        app_conversation_info.sandbox_id,
+                        db_session,
+                        httpx_client,
+                    )
                 )
-            )
     except Exception:
         # Continue with V0 logic
         pass

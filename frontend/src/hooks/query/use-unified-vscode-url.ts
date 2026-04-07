@@ -23,7 +23,7 @@ export const useUnifiedVSCodeUrl = () => {
   const { t } = useTranslation();
   const { conversationId } = useConversationId();
   const { data: conversation } = useActiveConversation();
-  const runtimeIsReady = useRuntimeIsReady();
+  const runtimeIsReady = useRuntimeIsReady({ allowAgentError: true });
 
   const isV1Conversation = conversation?.conversation_version === "V1";
 
@@ -47,9 +47,47 @@ export const useUnifiedVSCodeUrl = () => {
     ],
     queryFn: async () => {
       if (!conversationId) throw new Error("No conversation ID");
+      // >>> CUSTOM: HiClaw — skip vscode-url during task polling <<<
+      if (conversationId.startsWith("task-")) {
+        return { url: null, error: null };
+      }
+      // >>> END CUSTOM <<<
 
       // V1: Get VSCode URL from sandbox exposed_urls
       if (isV1Conversation) {
+        // >>> CUSTOM: HiClaw — remote machines use code-server directly <<<
+        const isRemoteSandbox = sandboxId?.startsWith("remote-");
+        if (isRemoteSandbox) {
+          try {
+            const machinesResp = await fetch("/runtime/manager/api/machines");
+            const machines = await machinesResp.json();
+            // Match by remote_host from conversation, not just "first ready"
+            const targetHost = appConversation?.remote_host;
+            const machine = machines.find(
+              (m: { code_server_port: number; host: string; status: string }) =>
+                m.code_server_port > 0 && m.status === "ready" &&
+                (!targetHost || m.host === targetHost),
+            );
+            if (machine?.host && machine?.code_server_port) {
+              // >>> CUSTOM: HiClaw — use conversation's own workspace path <<<
+              // >>> CUSTOM: HiClaw — use remote_working_dir, fallback to home dir <<<
+              const folder = appConversation?.remote_working_dir || machine.workspace || `/home/${machine.username || "root"}`;
+              // >>> END CUSTOM <<<
+              return {
+                url: `http://${machine.host}:${machine.code_server_port}/?folder=${encodeURIComponent(folder)}&trust=true`,
+                error: null,
+              };
+            }
+          } catch {
+            /* fall through */
+          }
+          return {
+            url: null,
+            error: t(I18nKey.VSCODE$URL_NOT_AVAILABLE),
+          };
+        }
+        // >>> END CUSTOM <<<
+
         if (
           !sandboxesQuery.data ||
           sandboxesQuery.data.length === 0 ||
@@ -94,10 +132,12 @@ export const useUnifiedVSCodeUrl = () => {
         error: t(I18nKey.VSCODE$URL_NOT_AVAILABLE),
       };
     },
+    // >>> CUSTOM: HiClaw — remote sandboxes don't need runtime to be ready <<<
     enabled:
-      runtimeIsReady &&
+      (runtimeIsReady || sandboxId?.startsWith("remote-")) &&
       !!conversationId &&
-      (!isV1Conversation || !!sandboxesQuery.data),
+      (!isV1Conversation || !!sandboxesQuery.data || sandboxId?.startsWith("remote-")),
+    // >>> END CUSTOM <<<
     refetchOnMount: true,
     retry: 3,
   });

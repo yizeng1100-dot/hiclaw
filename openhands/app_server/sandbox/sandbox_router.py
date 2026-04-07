@@ -44,13 +44,11 @@ async def search_sandboxes(
     ] = None,
     limit: Annotated[
         int,
-        Query(title='The max number of results in the page', gt=0, lte=100),
+        Query(title='The max number of results in the page', gt=0, le=100),
     ] = 100,
     sandbox_service: SandboxService = sandbox_service_dependency,
 ) -> SandboxPage:
     """Search / list sandboxes owned by the current user."""
-    assert limit > 0
-    assert limit <= 100
     return await sandbox_service.search_sandboxes(page_id=page_id, limit=limit)
 
 
@@ -60,7 +58,11 @@ async def batch_get_sandboxes(
     sandbox_service: SandboxService = sandbox_service_dependency,
 ) -> list[SandboxInfo | None]:
     """Get a batch of sandboxes given their ids, returning null for any missing."""
-    assert len(id) < 100
+    if len(id) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail=f'Cannot request more than 100 sandboxes at once, got {len(id)}',
+        )
     sandboxes = await sandbox_service.batch_get_sandboxes(id)
     return sandboxes
 
@@ -82,6 +84,10 @@ async def pause_sandbox(
     sandbox_id: str,
     sandbox_service: SandboxService = sandbox_service_dependency,
 ) -> Success:
+    # >>> CUSTOM: HiClaw — remote sandboxes don't need pause <<<
+    if sandbox_id.startswith('remote-'):
+        return Success()
+    # >>> END CUSTOM <<<
     exists = await sandbox_service.pause_sandbox(sandbox_id)
     if not exists:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
@@ -93,6 +99,10 @@ async def resume_sandbox(
     sandbox_id: str,
     sandbox_service: SandboxService = sandbox_service_dependency,
 ) -> Success:
+    # >>> CUSTOM: HiClaw — remote sandboxes don't need resume <<<
+    if sandbox_id.startswith('remote-'):
+        return Success()
+    # >>> END CUSTOM <<<
     exists = await sandbox_service.resume_sandbox(sandbox_id)
     if not exists:
         raise HTTPException(status.HTTP_404_NOT_FOUND)

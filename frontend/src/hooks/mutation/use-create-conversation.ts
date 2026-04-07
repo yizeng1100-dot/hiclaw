@@ -1,11 +1,17 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import ConversationService from "#/api/conversation-service/conversation-service.api";
 import V1ConversationService from "#/api/conversation-service/v1-conversation-service.api";
+import { PluginSpec } from "#/api/conversation-service/v1-conversation-service.types";
 import { SuggestedTask } from "#/utils/types";
-import { Provider } from "#/types/settings";
+import { Provider, Settings } from "#/types/settings";
 import { CreateMicroagent, Conversation } from "#/api/open-hands.types";
 import { useTracking } from "#/hooks/use-tracking";
-import { useSettings } from "#/hooks/query/use-settings";
+import { getSettingsQueryFn } from "#/hooks/query/use-settings";
+import { DEFAULT_SETTINGS } from "#/services/settings";
+import { useSelectedOrganizationId } from "#/context/use-selected-organization";
+// >>> CUSTOM: HiClaw <<<
+import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
+// >>> END CUSTOM <<<
 
 interface CreateConversationVariables {
   query?: string;
@@ -19,6 +25,7 @@ interface CreateConversationVariables {
   createMicroagent?: CreateMicroagent;
   parentConversationId?: string;
   agentType?: "default" | "plan";
+  plugins?: PluginSpec[];
 }
 
 // Response type that combines both V1 and legacy responses
@@ -34,7 +41,12 @@ interface CreateConversationResponse extends Partial<Conversation> {
 export const useCreateConversation = () => {
   const queryClient = useQueryClient();
   const { trackConversationCreated } = useTracking();
-  const { data: settings } = useSettings();
+  const { organizationId } = useSelectedOrganizationId();
+  // >>> CUSTOM: HiClaw <<<
+  const remoteEnabled = useRemoteWorkerStore((s) => s.enabled);
+  const proxyUrl = useRemoteWorkerStore((s) => s.proxyUrl);
+  const remoteWorkspace = useRemoteWorkerStore((s) => s.config.workspace);
+  // >>> END CUSTOM <<<
 
   return useMutation({
     mutationKey: ["create-conversation"],
@@ -49,12 +61,30 @@ export const useCreateConversation = () => {
         createMicroagent,
         parentConversationId,
         agentType,
+        plugins,
       } = variables;
 
-      const useV1 = !!settings?.v1_enabled && !createMicroagent;
+      // >>> CUSTOM: HiClaw — use proxyUrl and workspace from store <<<
+      const remoteAgentUrl = remoteEnabled && proxyUrl ? proxyUrl : undefined;
+      const remoteWorkingDir = remoteEnabled && remoteWorkspace ? remoteWorkspace : undefined;
+      // >>> END CUSTOM <<<
+
+      // Wait for settings to be loaded before deciding V0 vs V1
+      let settings: Settings;
+      try {
+        settings = await queryClient.ensureQueryData<Settings>({
+          queryKey: ["settings", organizationId],
+          queryFn: getSettingsQueryFn,
+          staleTime: 1000 * 60 * 5,
+        });
+      } catch {
+        // Settings fetch failed (e.g., 404 for new user) — use defaults
+        settings = DEFAULT_SETTINGS;
+      }
+
+      const useV1 = settings.v1_enabled && !createMicroagent;
 
       if (useV1) {
-        // Use V1 API - creates a conversation start task
         const startTask = await V1ConversationService.createConversation(
           repository?.name,
           repository?.gitProvider,
@@ -62,14 +92,17 @@ export const useCreateConversation = () => {
           repository?.branch,
           conversationInstructions,
           suggestedTask,
-          undefined, // trigger - set by backend when applicable
+          undefined,
           parentConversationId,
           agentType,
+          // >>> CUSTOM: HiClaw <<<
+          remoteAgentUrl,
+          undefined, // remote_session_api_key
+          remoteWorkingDir,
+          // >>> END CUSTOM <<<
+          plugins,
         );
 
-        // Return a special task ID that the frontend will recognize
-        // Format: "task-{uuid}" so the conversation screen can poll the task
-        // Once the task is ready, it will navigate to the actual conversation ID
         return {
           conversation_id: `task-${startTask.id}`,
           session_api_key: null,

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -103,6 +104,7 @@ from openhands.tools.preset.planning import (
     format_plan_structure,
     get_planning_tools,
 )
+from openhands.utils.git import ensure_valid_git_branch_name
 
 _conversation_info_type_adapter = TypeAdapter(list[ConversationInfo | None])
 _logger = logging.getLogger(__name__)
@@ -254,53 +256,120 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         yield task
 
         try:
-            _logger.info('[STARTUP] Step 1: Waiting for sandbox to start...')
-            async for updated_task in self._wait_for_sandbox_start(task):
-                yield updated_task
+            # >>> CUSTOM: HiClaw — remote worker support <<<
+            if request.remote_agent_url:
+                # Use existing remote agent-server (shared across conversations).
+                # Each conversation gets its own working_dir passed via StartConversationRequest.
+                # The agent-server does NOT need to be restarted per conversation.
+                _logger.info(f'[STARTUP] Using remote agent-server: {request.remote_agent_url}')
+                agent_server_url = request.remote_agent_url.rstrip('/')
+                session_api_key = request.remote_session_api_key or ''
 
-            # Get the sandbox
-            sandbox_id = task.sandbox_id
-            assert sandbox_id is not None
-            _logger.info(f'[STARTUP] Step 2: Sandbox started, id={sandbox_id}')
-            sandbox = await self.sandbox_service.get_sandbox(sandbox_id)
-            assert sandbox is not None
-            _logger.info(f'[STARTUP] Step 2: Sandbox status={sandbox.status}, urls={[u.url for u in (sandbox.exposed_urls or [])]}')
-            agent_server_url = self._get_agent_server_url(sandbox)
-            _logger.info(f'[STARTUP] Step 2: agent_server_url={agent_server_url}')
+                # Reuse existing sandbox_id for the same agent-server URL,
+                # so multiple conversations share one remote agent-server
+                sandbox_id = f'remote-{hashlib.md5(agent_server_url.encode()).hexdigest()[:8]}'
+                task.sandbox_id = sandbox_id
+                task.status = AppConversationStartTaskStatus.STARTING_CONVERSATION
+                task.agent_server_url = agent_server_url
+                yield task
 
-            # Get the working dir
-            sandbox_spec = await self.sandbox_spec_service.get_sandbox_spec(
-                sandbox.sandbox_spec_id
-            )
-            assert sandbox_spec is not None
+                conversation_id = request.conversation_id or uuid4()
 
-            # Set up conversation id
-            conversation_id = request.conversation_id or uuid4()
+                # Working dir: use explicit value from request, or query Worker Manager
+                working_dir = getattr(request, 'remote_working_dir', None) or ''
+                _remote_host = ''
+                _remote_user = ''
+                # Always query Worker Manager for host/user info (needed for title)
+                # Match by proxy_url to find the CORRECT machine (not just the first ready one)
+                try:
+                    from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL, DEFAULT_WORKSPACE
+                    _resp = await self.httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
+                    _matched = False
+                    for _m in _resp.json():
+                        # Match the machine whose proxy_url corresponds to agent_server_url
+                        _m_proxy = (_m.get('proxy_url') or '').rstrip('/')
+                        if _m_proxy and _m_proxy == agent_server_url:
+                            _remote_host = _m.get('host', '')
+                            _remote_user = _m.get('username', '')
+                            if not working_dir:
+                                working_dir = _m.get('workspace', '')
+                            _matched = True
+                            break
+                    # Fallback: if no proxy_url match, try first ready machine
+                    if not _matched:
+                        for _m in _resp.json():
+                            if _m.get('status') == 'ready':
+                                _remote_host = _m.get('host', '')
+                                _remote_user = _m.get('username', '')
+                                if not working_dir:
+                                    working_dir = _m.get('workspace', '')
+                                break
+                    if not working_dir:
+                        working_dir = DEFAULT_WORKSPACE
+                except Exception:
+                    if not working_dir:
+                        working_dir = '/workspace/project'
+                _logger.info(f'[STARTUP] Remote working_dir={working_dir}, sandbox_id={sandbox_id}')
+                # >>> END CUSTOM <<<
 
-            # Setup working dir based on grouping
-            working_dir = sandbox_spec.working_dir
-            sandbox_grouping_strategy = await self._get_sandbox_grouping_strategy()
-            if sandbox_grouping_strategy != SandboxGroupingStrategy.NO_GROUPING:
-                working_dir = f'{working_dir}/{conversation_id.hex}'
-            _logger.info(f'[STARTUP] Step 3: working_dir={working_dir}')
+                remote_workspace = AsyncRemoteWorkspace(
+                    host=agent_server_url,
+                    api_key=session_api_key,
+                    working_dir=working_dir,
+                )
+            else:
+                # >>> END CUSTOM — original sandbox flow below <<<
+                _logger.info('[STARTUP] Step 1: Waiting for sandbox to start...')
+                async for updated_task in self._wait_for_sandbox_start(task):
+                    yield updated_task
 
-            # Run setup scripts
-            _logger.info('[STARTUP] Step 4: Running setup scripts...')
-            remote_workspace = AsyncRemoteWorkspace(
-                host=agent_server_url,
-                api_key=sandbox.session_api_key,
-                working_dir=working_dir,
-            )
-            async for updated_task in self.run_setup_scripts(
-                task, sandbox, remote_workspace, agent_server_url
-            ):
-                yield updated_task
+                # Get the sandbox
+                sandbox_id = task.sandbox_id
+                assert sandbox_id is not None
+                _logger.info(f'[STARTUP] Step 2: Sandbox started, id={sandbox_id}')
+                sandbox = await self.sandbox_service.get_sandbox(sandbox_id)
+                assert sandbox is not None
+                _logger.info(f'[STARTUP] Step 2: Sandbox status={sandbox.status}, urls={[u.url for u in (sandbox.exposed_urls or [])]}')
+                agent_server_url = self._get_agent_server_url(sandbox)
+                session_api_key = sandbox.session_api_key
+                _logger.info(f'[STARTUP] Step 2: agent_server_url={agent_server_url}')
+
+                # Get the working dir
+                sandbox_spec = await self.sandbox_spec_service.get_sandbox_spec(
+                    sandbox.sandbox_spec_id
+                )
+                assert sandbox_spec is not None
+
+                # Set up conversation id
+                conversation_id = request.conversation_id or uuid4()
+
+                # Setup working dir based on grouping
+                working_dir = sandbox_spec.working_dir
+                sandbox_grouping_strategy = await self._get_sandbox_grouping_strategy()
+                if sandbox_grouping_strategy != SandboxGroupingStrategy.NO_GROUPING:
+                    working_dir = f'{working_dir}/{conversation_id.hex}'
+                _logger.info(f'[STARTUP] Step 3: working_dir={working_dir}')
+
+                # Run setup scripts
+                _logger.info('[STARTUP] Step 4: Running setup scripts...')
+                remote_workspace = AsyncRemoteWorkspace(
+                    host=agent_server_url,
+                    api_key=session_api_key,
+                    working_dir=working_dir,
+                )
+                async for updated_task in self.run_setup_scripts(
+                    task, sandbox, remote_workspace, agent_server_url
+                ):
+                    yield updated_task
 
             _logger.info('[STARTUP] Step 5: Building start conversation request...')
             # Build the start request
+            # >>> CUSTOM: HiClaw — use sandbox or None for remote mode <<<
+            sandbox_for_build = None if request.remote_agent_url else sandbox
+            # >>> END CUSTOM <<<
             start_conversation_request = (
                 await self._build_start_conversation_request_for_user(
-                    sandbox,
+                    sandbox_for_build,
                     conversation_id,
                     request.initial_message,
                     request.system_message_suffix,
@@ -324,16 +393,21 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             body_json = start_conversation_request.model_dump(
                 mode='json', context={'expose_secrets': True}
             )
-            # Log hook_config to verify it's being passed
-            hook_config_in_request = body_json.get('hook_config')
-            _logger.debug(
-                f'Sending StartConversationRequest with hook_config: '
-                f'{hook_config_in_request}'
+            # >>> CUSTOM: HiClaw — debug LLM config sent to remote <<<
+            _agent_llm = body_json.get('agent', {}).get('llm', {})
+            _api_key_val = _agent_llm.get('api_key', '')
+            _logger.info(
+                f'[COMAGIC_DEBUG] LLM sent to remote: '
+                f'base_url={_agent_llm.get("base_url")}, '
+                f'api_key={str(_api_key_val)[:20] if _api_key_val else "EMPTY"}..., '
+                f'extra_headers={_agent_llm.get("extra_headers")}, '
+                f'litellm_extra_body={_agent_llm.get("litellm_extra_body")}'
             )
+            # >>> END CUSTOM <<<
             response = await self.httpx_client.post(
                 f'{agent_server_url}/api/conversations',
                 json=body_json,
-                headers={'X-Session-API-Key': sandbox.session_api_key},
+                headers={'X-Session-API-Key': session_api_key} if session_api_key else {},
                 timeout=self.sandbox_startup_timeout,
             )
 
@@ -344,10 +418,17 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
             # Store info...
             user_id = await self.user_context.get_user_id()
+            # >>> CUSTOM: HiClaw — use user@host:workspace as title for remote sessions <<<
+            if request.remote_agent_url and (_remote_host or _remote_user):
+                _ws_name = working_dir.rstrip('/').split('/')[-1] if working_dir else ''
+                _conv_title = f'{_remote_user}@{_remote_host}:{_ws_name}' if _ws_name else f'{_remote_user}@{_remote_host}'
+            else:
+                _conv_title = f'Conversation {info.id.hex[:5]}'
+            # >>> END CUSTOM <<<
             app_conversation_info = AppConversationInfo(
                 id=info.id,
-                title=f'Conversation {info.id.hex[:5]}',
-                sandbox_id=sandbox.id,
+                title=_conv_title,
+                sandbox_id=sandbox_id,
                 created_by_user_id=user_id,
                 llm_model=start_conversation_request.agent.llm.model,
                 # Git parameters
@@ -357,6 +438,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 trigger=request.trigger,
                 pr_number=request.pr_number,
                 parent_conversation_id=request.parent_conversation_id,
+                # >>> CUSTOM: HiClaw <<<
+                remote_agent_url=request.remote_agent_url if hasattr(request, 'remote_agent_url') else None,
+                remote_working_dir=working_dir,
+                remote_host=_remote_host or None,
+                # >>> END CUSTOM <<<
             )
             await self.app_conversation_info_service.save_app_conversation_info(
                 app_conversation_info
@@ -386,7 +472,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             user = await self.user_context.get_user_info()
             await self._set_security_analyzer_from_settings(
                 agent_server_url,
-                sandbox.session_api_key,
+                session_api_key,
                 info.id,
                 user.security_analyzer,
                 self.httpx_client,
@@ -398,12 +484,12 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             yield task
 
             # Process any pending messages queued while waiting for conversation
-            if sandbox.session_api_key:
+            if session_api_key:
                 await self._process_pending_messages(
                     task_id=task.id,
                     conversation_id=info.id,
                     agent_server_url=agent_server_url,
-                    session_api_key=sandbox.session_api_key,
+                    session_api_key=session_api_key,
                 )
 
         except Exception as exc:
@@ -434,7 +520,14 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             if sandbox and sandbox.status == SandboxStatus.RUNNING
         ]
         if tasks:
-            sandbox_conversation_infos = await asyncio.gather(*tasks)
+            # >>> CUSTOM: HiClaw — add timeout to prevent one slow sandbox from blocking all <<<
+            sandbox_conversation_infos = await asyncio.gather(
+                *[asyncio.wait_for(t, timeout=5) for t in tasks],
+                return_exceptions=True,
+            )
+            # Filter out exceptions (timeouts, connection errors)
+            sandbox_conversation_infos = [r for r in sandbox_conversation_infos if not isinstance(r, BaseException)]
+            # >>> END CUSTOM <<<
         else:
             sandbox_conversation_infos = []
 
@@ -443,6 +536,24 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         for conversation_infos in sandbox_conversation_infos:
             for conversation_info in conversation_infos:
                 conversation_info_by_id[conversation_info.id] = conversation_info
+
+        # >>> CUSTOM: HiClaw — fetch live status for remote workers <<<
+        remote_tasks = []
+        for info in app_conversation_infos:
+            if (info and info.sandbox_id and info.sandbox_id.startswith('remote-')
+                    and info.remote_agent_url and info.id not in conversation_info_by_id):
+                remote_tasks.append(
+                    self._get_remote_conversation_info(info)
+                )
+        if remote_tasks:
+            remote_results = await asyncio.gather(
+                *[asyncio.wait_for(t, timeout=5) for t in remote_tasks],
+                return_exceptions=True,
+            )
+            for result in remote_results:
+                if isinstance(result, ConversationInfo):
+                    conversation_info_by_id[result.id] = result
+        # >>> END CUSTOM <<<
 
         # Build app_conversation from info
         result = [
@@ -500,6 +611,66 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             )
             return []
 
+    # >>> CUSTOM: HiClaw <<<
+    def _get_tunnel_port_for_host(self, remote_host: str | None = None) -> int | None:
+        """Get tunnel port from worker-manager, matching by remote_host if provided.
+
+        Args:
+            remote_host: The remote machine IP to match. If None, returns first ready machine.
+
+        Returns:
+            Tunnel port or None.
+        """
+        import time
+        if not hasattr(LiveStatusAppConversationService, '_tunnel_cache_data'):
+            LiveStatusAppConversationService._tunnel_cache_data = {}
+        cache = LiveStatusAppConversationService._tunnel_cache_data
+        # Cache key includes host so different machines don't collide
+        cache_key = remote_host or '_any'
+        now = time.time()
+        cached = cache.get(cache_key)
+        if cached and cached.get('ts', 0) > now - 5:
+            return cached.get('port')
+        try:
+            from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+            import httpx as _httpx
+            _resp = _httpx.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=2)
+            machines = _resp.json()
+            # First try exact host match
+            if remote_host:
+                for _m in machines:
+                    if _m.get('host') == remote_host and _m.get('status') == 'ready' and _m.get('tunnel_port'):
+                        cache[cache_key] = {'port': _m['tunnel_port'], 'ts': now}
+                        return _m['tunnel_port']
+            # Fallback: first ready machine
+            for _m in machines:
+                if _m.get('status') == 'ready' and _m.get('tunnel_port'):
+                    cache[cache_key] = {'port': _m['tunnel_port'], 'ts': now}
+                    return _m['tunnel_port']
+        except Exception:
+            pass
+        cache[cache_key] = {'port': None, 'ts': now}
+        return None
+
+    async def _get_remote_conversation_info(
+        self,
+        info: AppConversationInfo,
+    ) -> ConversationInfo | None:
+        """Get conversation status from a remote agent-server via Worker Manager proxy."""
+        try:
+            url = f'{info.remote_agent_url}/api/conversations'
+            params = {'ids': [str(info.id)]}
+            response = await self.httpx_client.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            conversations = _conversation_info_type_adapter.validate_python(data)
+            if conversations:
+                return conversations[0]
+        except Exception:
+            _logger.debug(f'Could not get remote conversation status for {info.id}', exc_info=True)
+        return None
+    # >>> END CUSTOM <<<
+
     def _build_conversation(
         self,
         app_conversation_info: AppConversationInfo | None,
@@ -508,6 +679,60 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
     ) -> AppConversation | None:
         if app_conversation_info is None:
             return None
+
+        # >>> CUSTOM: HiClaw — handle remote worker conversations <<<
+        is_remote = (
+            app_conversation_info.sandbox_id
+            and app_conversation_info.sandbox_id.startswith('remote-')
+        )
+
+        if is_remote:
+            # For remote workers: sandbox doesn't exist locally.
+            # Build conversation_url through the /runtime/{port}/ proxy.
+            conversation_url = None
+            sandbox_status = SandboxStatus.PAUSED  # default: assume tunnel is dead
+
+            # Try multiple sources for tunnel port:
+            # 1. Saved remote_agent_url from conversation creation
+            # 2. Worker Manager cache (for reconnected tunnels with new ports)
+            tunnel_port = None
+            _saved_url = getattr(app_conversation_info, 'remote_agent_url', None) or ''
+            if _saved_url:
+                try:
+                    from urllib.parse import urlparse
+                    _p = urlparse(_saved_url)
+                    if _p.port:
+                        tunnel_port = _p.port
+                except Exception:
+                    pass
+
+            # Also check Worker Manager for latest tunnel port (may have changed after reconnect)
+            _conv_host = getattr(app_conversation_info, 'remote_host', None)
+            _wm_port = self._get_tunnel_port_for_host(_conv_host)
+            if _wm_port:
+                tunnel_port = _wm_port  # prefer fresh port from Worker Manager
+
+            if tunnel_port:
+                conversation_url = f'/runtime/{tunnel_port}/api/conversations/{app_conversation_info.id.hex}'
+                sandbox_status = SandboxStatus.RUNNING
+                app_conversation_info.remote_agent_url = f'http://localhost:{tunnel_port}'
+            else:
+                _logger.debug(
+                    f'[REMOTE] No tunnel port for conversation {app_conversation_info.id.hex}: '
+                    f'saved_url={_saved_url}, wm_port={_wm_port}'
+                )
+
+            return AppConversation(
+                **app_conversation_info.model_dump(),
+                sandbox_status=sandbox_status,
+                execution_status=(
+                    conversation_info.execution_status if conversation_info else None
+                ),
+                conversation_url=conversation_url,
+                session_api_key=None,
+            )
+        # >>> END CUSTOM <<<
+
         sandbox_status = sandbox.status if sandbox else SandboxStatus.MISSING
         execution_status = (
             conversation_info.execution_status if conversation_info else None
@@ -899,26 +1124,45 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         return secrets
 
-    def _configure_llm(self, user: UserInfo, llm_model: str | None) -> LLM:
+    def _configure_llm(self, user: UserInfo, llm_model: str | None, working_dir: str | None = None) -> LLM:
         """Configure LLM settings.
 
         Args:
             user: User information containing LLM preferences
             llm_model: Optional specific model to use, falls back to user default
+            working_dir: Workspace directory for per-conversation log storage
 
         Returns:
             Configured LLM instance
         """
         model = llm_model or user.llm_model
         base_url = user.llm_base_url
-        if model and model.startswith('openhands/'):
+        if model and (
+            model.startswith('openhands/') or model.startswith('litellm_proxy/')
+        ):
             base_url = user.llm_base_url or self.openhands_provider_base_url
+
+        # >>> CUSTOM: HiClaw — per-conversation LLM logs in workspace <<<
+        _log_folder = None
+        if working_dir:
+            import os
+            _log_folder = os.path.join(working_dir, '.hiclaw', 'logs', 'llm')
+        # >>> END CUSTOM <<<
 
         return LLM(
             model=model,
             base_url=base_url,
             api_key=user.llm_api_key,
             usage_id='agent',
+            # >>> CUSTOM: HiClaw — faster error feedback for internal networks <<<
+            timeout=30,            # HTTP timeout: 30s (default 300s)
+            num_retries=2,         # only retry twice (default 5)
+            retry_min_wait=2,      # min wait 2s between retries (default 8s)
+            retry_max_wait=10,     # max wait 10s between retries (default 64s)
+            retry_multiplier=2.0,  # gentler backoff (default 8.0)
+            # >>> END CUSTOM <<<
+            log_completions=True,
+            **({"log_completions_folder": _log_folder} if _log_folder else {}),
         )
 
     async def _get_tavily_api_key(self, user: UserInfo) -> str | None:
@@ -946,27 +1190,29 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         return user_search_key or service_tavily_key
 
     async def _add_system_mcp_servers(
-        self, mcp_servers: dict[str, Any], user: UserInfo
+        self, mcp_servers: dict[str, Any], user: UserInfo, conversation_id: UUID
     ) -> None:
         """Add system-generated MCP servers (default OpenHands server and Tavily).
 
         Args:
             mcp_servers: Dictionary to add servers to
             user: User information for API keys
+            conversation_id: Conversation ID forwarded to the OpenHands MCP server
         """
         if not self.web_url:
             return
 
         # Add default OpenHands MCP server
         mcp_url = f'{self.web_url}/mcp/mcp'
-        mcp_servers['default'] = {'url': mcp_url}
+        mcp_servers['default'] = {
+            'url': mcp_url,
+            'headers': {'X-OpenHands-ServerConversation-ID': str(conversation_id)},
+        }
 
         # Add API key if available
         mcp_api_key = await self.user_context.get_mcp_api_key()
         if mcp_api_key:
-            mcp_servers['default']['headers'] = {
-                'X-Session-API-Key': mcp_api_key,
-            }
+            mcp_servers['default']['headers']['X-Session-API-Key'] = mcp_api_key
 
         # Add Tavily search if API key is available
         tavily_api_key = await self._get_tavily_api_key(user)
@@ -1098,25 +1344,28 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             )
 
     async def _configure_llm_and_mcp(
-        self, user: UserInfo, llm_model: str | None
+        self, user: UserInfo, llm_model: str | None, conversation_id: UUID,
+        working_dir: str | None = None,
     ) -> tuple[LLM, dict]:
         """Configure LLM and MCP (Model Context Protocol) settings.
 
         Args:
             user: User information containing LLM preferences
             llm_model: Optional specific model to use, falls back to user default
+            conversation_id: Conversation ID forwarded to the OpenHands MCP server
+            working_dir: Workspace directory for per-conversation log storage
 
         Returns:
             Tuple of (configured LLM instance, MCP config dictionary)
         """
         # Configure LLM
-        llm = self._configure_llm(user, llm_model)
+        llm = self._configure_llm(user, llm_model, working_dir=working_dir)
 
         # Configure MCP - SDK expects format: {'mcpServers': {'server_name': {...}}}
         mcp_servers: dict[str, Any] = {}
 
         # Add system-generated servers (default + tavily)
-        await self._add_system_mcp_servers(mcp_servers, user)
+        await self._add_system_mcp_servers(mcp_servers, user, conversation_id)
 
         # Merge custom servers from user settings
         self._merge_custom_mcp_config(mcp_servers, user)
@@ -1137,6 +1386,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         secrets: dict[str, SecretValue] | None = None,
         git_provider: ProviderType | None = None,
         working_dir: str | None = None,
+        enable_browser: bool = True,  # >>> CUSTOM: HiClaw <<<
     ) -> Agent:
         """Create an agent with appropriate tools and context based on agent type.
 
@@ -1175,7 +1425,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         else:
             agent = Agent(
                 llm=llm,
-                tools=get_default_tools(enable_browser=False),
+                tools=get_default_tools(enable_browser=enable_browser),
                 system_prompt_kwargs={'cli_mode': False},
                 condenser=condenser,
             )
@@ -1376,7 +1626,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         workspace: LocalWorkspace,
         initial_message: SendMessageRequest | None,
         secrets: dict[str, SecretValue],
-        sandbox: SandboxInfo,
+        sandbox: SandboxInfo | None,
         remote_workspace: AsyncRemoteWorkspace | None,
         selected_repository: str | None,
         working_dir: str,
@@ -1386,7 +1636,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         Args:
             agent: The configured agent
-            conversation_id: Optional conversation ID, generates new one if None
+            conversation_id: Conversation ID
             user: User information
             workspace: Local workspace instance
             initial_message: Optional initial message for the conversation
@@ -1400,9 +1650,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         Returns:
             Complete StartConversationRequest ready for use
         """
-        # Generate conversation ID if not provided
-        conversation_id = conversation_id or uuid4()
-
         # Update agent's LLM with litellm_extra_body metadata for tracing
         agent = self._update_agent_with_llm_metadata(agent, conversation_id, user.id)
 
@@ -1411,7 +1658,12 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         if remote_workspace:
             try:
                 agent = await self._load_skills_and_update_agent(
-                    sandbox, agent, remote_workspace, selected_repository, working_dir
+                    sandbox,
+                    agent,
+                    remote_workspace,
+                    selected_repository,
+                    working_dir,
+                    disabled_skills=user.disabled_skills,
                 )
             except Exception as e:
                 _logger.warning(f'Failed to load skills: {e}', exc_info=True)
@@ -1472,7 +1724,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
     async def _build_start_conversation_request_for_user(
         self,
-        sandbox: SandboxInfo,
+        sandbox: SandboxInfo | None,
         conversation_id: UUID,
         initial_message: SendMessageRequest | None,
         system_message_suffix: str | None,
@@ -1496,7 +1748,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         user = await self.user_context.get_user_info()
 
         # Compute the project root — this is the repo directory when a repo is
-        # selected, or the sandbox working_dir otherwise.  All tools, hooks,
+        # selected, or the sandbox working_dir otherwise. All tools, hooks,
         # setup scripts, and plan paths must use this consistently.
         project_dir = get_project_dir(working_dir, selected_repository)
         workspace = LocalWorkspace(working_dir=project_dir)
@@ -1505,9 +1757,77 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         secrets = await self._setup_secrets_for_git_providers(user)
 
         # Configure LLM and MCP
-        llm, mcp_config = await self._configure_llm_and_mcp(user, llm_model)
+        llm, mcp_config = await self._configure_llm_and_mcp(
+            user, llm_model, conversation_id, working_dir=working_dir
+        )
 
-        # Create agent with context
+        # >>> CUSTOM: HiClaw — inject CoMagic token into LLM config for remote agent-servers <<<
+        # Remote agent-servers use pip-installed package without custom hooks.
+        # Get the token that Worker Manager read from remote ~/.comagic/userToken.json
+        # and inject it into the LLM config so the remote agent-server uses it directly.
+        if sandbox is None:  # remote worker
+            base_url = llm.base_url or ''
+            _logger.info(f'[COMAGIC] Remote worker LLM base_url: {base_url}')
+            if 'hihonor' in base_url.lower():
+                try:
+                    from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+                    _resp = await self.httpx_client.get(f'{WORKER_MANAGER_URL}/api/machines', timeout=3)
+                    for _m in _resp.json():
+                        if _m.get('status') == 'ready' and _m.get('comagic_token'):
+                            import uuid as _uuid
+                            from pydantic import SecretStr
+                            llm.api_key = SecretStr(_m['comagic_token'])
+                            llm.extra_headers = {
+                                **(llm.extra_headers or {}),
+                                'X-User-Id': _m.get('comagic_user_id', ''),
+                                'X-Enterprise-Id': 'copilot',
+                                'X-Request-ID': str(_uuid.uuid4()),
+                                'User-Agent': 'CLI/0.0.0 CoMagic/0.1.77',
+                            }
+                            _logger.info(f'[COMAGIC] Injected remote token (host={_m.get("host", "?")})')
+                            break
+                except Exception as e:
+                    _logger.warning(f'[COMAGIC] Failed to inject token: {e}')
+        # >>> END CUSTOM <<<
+
+        # >>> CUSTOM: HiClaw — inject skills from Git repo into system prompt <<<
+        is_remote_worker = sandbox is None
+        try:
+            from openhands.server.routes.hiclaw_skill_loader import load_hiclaw_skills, format_skills_for_prompt
+            hiclaw_skills = load_hiclaw_skills()
+            if hiclaw_skills:
+                skills_prompt = format_skills_for_prompt(hiclaw_skills, workspace=working_dir)
+                if system_message_suffix:
+                    system_message_suffix = f'{system_message_suffix}\n\n{skills_prompt}'
+                else:
+                    system_message_suffix = skills_prompt
+                _logger.info(f'Injected {len(hiclaw_skills)} HiClaw skills into system prompt')
+        except Exception as e:
+            _logger.warning(f'Failed to load HiClaw skills: {e}')
+        # >>> END CUSTOM — remote workers can't reach host.docker.internal <<<
+        if is_remote_worker:
+            # Replace host.docker.internal with app-server IP reachable from remote
+            import socket
+            # Priority: env var > icanhazip > hostname
+            app_ip = os.environ.get('HICLAW_APP_IP', '')
+            if not app_ip:
+                try:
+                    import urllib.request
+                    app_ip = urllib.request.urlopen('https://icanhazip.com', timeout=3).read().decode().strip()
+                except Exception:
+                    app_ip = socket.gethostbyname(socket.gethostname())
+            # For remote workers: disable MCP servers that point to app-server
+            # (remote machine may not be able to reach app-server IP)
+            mcp_servers = mcp_config.get('mcpServers', {})
+            unreachable = [name for name, cfg in mcp_servers.items()
+                           if 'host.docker.internal' in (cfg.get('url', '') or '')
+                           or app_ip in (cfg.get('url', '') or '')]
+            for name in unreachable:
+                del mcp_servers[name]
+                _logger.info(f'Removed unreachable MCP server {name!r} for remote worker')
+            if not mcp_servers:
+                mcp_config = {}
+        # >>> END CUSTOM <<<
         agent = self._create_agent_with_context(
             llm,
             agent_type,
@@ -1517,6 +1837,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             secrets=secrets,
             git_provider=git_provider,
             working_dir=project_dir,
+            enable_browser=not is_remote_worker,
         )
 
         # Finalize and return the conversation request
@@ -1721,9 +2042,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         if 'selected_branch' in request.model_fields_set:
             branch = request.selected_branch
             if branch is not None:
-                # Sanitize: check for dangerous characters
-                if any(c in branch for c in [';', '&', '|', '$', '`', '\n', '\r', ' ']):
-                    raise ValueError(f"Invalid characters in branch name: '{branch}'")
+                ensure_valid_git_branch_name(branch)
 
     async def update_app_conversation(
         self, conversation_id: UUID, request: AppConversationUpdateRequest
@@ -1760,13 +2079,19 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         conversations = await self._build_app_conversations([info])
         return conversations[0]
 
-    async def delete_app_conversation(self, conversation_id: UUID) -> bool:
+    async def delete_app_conversation(
+        self, conversation_id: UUID, skip_agent_server_delete: bool = False
+    ) -> bool:
         """Delete a V1 conversation and all its associated data.
 
         This method will also cascade delete all sub-conversations of the parent.
 
         Args:
             conversation_id: The UUID of the conversation to delete.
+            skip_agent_server_delete: If True, skip the agent server DELETE call.
+                This should be set when the sandbox is shared with other
+                conversations (e.g. created via /new) to avoid destabilizing
+                the shared runtime.
         """
         # Check if we have the required SQL implementation for transactional deletion
         if not isinstance(
@@ -1792,8 +2117,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             await self._delete_sub_conversations(conversation_id)
 
             # Now delete the parent conversation
-            # Delete from agent server if sandbox is running
-            await self._delete_from_agent_server(app_conversation)
+            # Delete from agent server if sandbox is running (skip if sandbox is shared)
+            if not skip_agent_server_delete:
+                await self._delete_from_agent_server(app_conversation)
 
             # Delete from database using the conversation info from app_conversation
             # AppConversation extends AppConversationInfo, so we can use it directly
@@ -2023,6 +2349,20 @@ class LiveStatusAppConversationServiceInjector(AppConversationServiceInjector):
             if web_url is None:
                 if isinstance(sandbox_service, DockerSandboxService):
                     web_url = f'http://host.docker.internal:{sandbox_service.host_port}'
+
+            # >>> CUSTOM: HiClaw — replace host.docker.internal with reachable IP <<<
+            if web_url and 'host.docker.internal' in web_url:
+                import socket
+                app_ip = os.environ.get('HICLAW_APP_IP', '')
+                if not app_ip:
+                    try:
+                        import urllib.request
+                        app_ip = urllib.request.urlopen('https://icanhazip.com', timeout=3).read().decode().strip()
+                    except Exception:
+                        app_ip = socket.gethostbyname(socket.gethostname())
+                web_url = web_url.replace('host.docker.internal', app_ip)
+                _logger.info(f'Replaced web_url host.docker.internal with {app_ip}: {web_url}')
+            # >>> END CUSTOM <<<
 
             # Get app_mode for SaaS mode
             app_mode = None
