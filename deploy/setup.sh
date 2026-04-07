@@ -4,14 +4,48 @@
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Usage:
-#   1. git clone -b test https://github.com/yizeng1100-dot/hiclaw.git && cd hiclaw
+#   1. git clone -b dev https://github.com/yizeng1100-dot/hiclaw.git && cd hiclaw
 #   2. Put these files in deploy/ directory:
-#      - hiclaw-runtime.tar.gz  — App Server: Python 3.12 + all deps
-#      - hiclaw-deps.tar.gz     — Remote terminal deps + Gitea
+#      - hiclaw-runtime.tar.gz      (必需) App Server: Python 3.12 + all deps
+#      - hiclaw-deps.tar.gz         (必需) Remote terminal deps + Gitea
+#      - playwright-bundle.tar.gz   (可选) 浏览器自动化功能
 #   3. bash deploy/setup.sh
 #   4. bash deploy/start.sh pro
 #
 # All files installed to $HICLAW_DIR (default: ~/.hiclaw), NO sudo needed.
+#
+# ─── 离线包说明 (均在有网机器上打包，传到内网) ───
+#
+# hiclaw-runtime.tar.gz (~1.5GB)
+#   内容: 独立 Python 3.12 环境 + OpenHands 所有 Python 依赖
+#   解压到: ~/.hiclaw/runtime/
+#   关键文件: hiclaw-python, hiclaw-uvicorn (可执行)
+#   验证: ~/.hiclaw/runtime/hiclaw-python -c 'import uvicorn,fastapi;print("OK")'
+#
+# hiclaw-deps.tar.gz (~219MB)
+#   内容:
+#     wheels/              — 187 个 Python wheel 包 (openhands-sdk, fastapi, pydantic 等)
+#                            用于 agent-worker 远程安装
+#     python3-standalone.tar.gz (21MB) — 轻量 Python 3.12 (用于远程 agent-worker)
+#     code-server.tar.gz (109MB) — VS Code Server (用于远程代码编辑)
+#   解压到: 临时目录 → 分发到 ~/.hiclaw/bin/gitea + agent-worker-manager/deps/
+#   注意: Gitea 二进制不在此包中，需单独下载:
+#         curl -fSL https://dl.gitea.com/gitea/1.22.6/gitea-1.22.6-linux-amd64 -o deploy/gitea
+#         然后手动放到 ~/.hiclaw/bin/gitea && chmod +x ~/.hiclaw/bin/gitea
+#
+# playwright-bundle.tar.gz (~296MB) [可选]
+#   内容:
+#     playwright-bundle/
+#       *.whl            — Playwright Python 包 (playwright, greenlet, pyee, typing_extensions)
+#       browsers.tar.gz  — Chromium 浏览器 (解压到 ~/.cache/ms-playwright/)
+#   解压到: Playwright wheels 装入 hiclaw-runtime, 浏览器装入 ~/.cache/
+#   不装影响: Agent 无法使用浏览器工具 (不影响终端/文件操作)
+#   增量安装 (不用 playwright-bundle.tar.gz 的情况):
+#     1. 传 playwright-wheels.tar.gz (45MB) + playwright-browsers.tar.gz (253MB)
+#     2. tar xzf playwright-wheels.tar.gz
+#        ~/.hiclaw/runtime/hiclaw-python -m pip install --no-index --find-links=playwright-wheels/ playwright
+#     3. tar xzf playwright-browsers.tar.gz -C ~/.cache/
+#
 # ═══════════════════════════════════════════════════════════════════════════
 
 # NO set -e — we handle errors explicitly with logging
