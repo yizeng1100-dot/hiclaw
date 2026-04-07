@@ -314,18 +314,40 @@ else
             --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1)
         CLI_EXIT=$?
 
-        # Always clear must_change_password flag via SQLite (most reliable)
+        # Always clear must_change_password flag via SQLite, then restart Gitea
+        # Gitea caches user state in memory, so DB change alone is not enough
         GITEA_DB="$HICLAW_DIR/gitea/data/gitea.db"
-        if [ -f "$GITEA_DB" ] && command -v sqlite3 &>/dev/null; then
-            sqlite3 "$GITEA_DB" "UPDATE user SET must_change_password=0 WHERE lower_name='$(echo "$GITEA_USER" | tr '[:upper:]' '[:lower:]')';" 2>/dev/null
-        elif [ -f "$GITEA_DB" ] && $PYTHON -c "import sqlite3" 2>/dev/null; then
-            $PYTHON -c "
+        if [ -f "$GITEA_DB" ]; then
+            log "Clearing must_change_password flag..."
+            if command -v sqlite3 &>/dev/null; then
+                sqlite3 "$GITEA_DB" "UPDATE user SET must_change_password=0 WHERE lower_name='$(echo "$GITEA_USER" | tr '[:upper:]' '[:lower:]')';" 2>/dev/null
+            else
+                $PYTHON -c "
 import sqlite3
 conn = sqlite3.connect('$GITEA_DB')
 conn.execute(\"UPDATE user SET must_change_password=0 WHERE lower_name=?\", ('$(echo "$GITEA_USER" | tr '[:upper:]' '[:lower:]')',))
 conn.commit()
 conn.close()
 " 2>/dev/null
+            fi
+
+            # Restart Gitea so it picks up the DB change
+            log "Restarting Gitea to apply changes..."
+            kill "$GITEA_PID" 2>/dev/null
+            wait "$GITEA_PID" 2>/dev/null || true
+            sleep 2
+            GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
+                --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
+                > "$HICLAW_DIR/gitea/log/setup-startup.log" 2>&1 &
+            GITEA_PID=$!
+            # Wait for restart
+            for j in $(seq 1 15); do
+                if curl -s --noproxy "*" --max-time 2 "http://127.0.0.1:$GITEA_PORT" >/dev/null 2>&1; then
+                    break
+                fi
+                sleep 1
+            done
+            ok "Gitea restarted"
         fi
 
         if [ $CLI_EXIT -eq 0 ]; then
