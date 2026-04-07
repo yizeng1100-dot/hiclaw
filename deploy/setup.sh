@@ -90,9 +90,16 @@ elif [ -f "$RUNTIME_BUNDLE" ]; then
 
         # Install Playwright browsers from runtime bundle (if included)
         if [ -d "$RUNTIME_DIR/ms-playwright" ]; then
-            mkdir -p "$HOME/.cache"
-            mv "$RUNTIME_DIR/ms-playwright" "$HOME/.cache/ms-playwright"
-            ok "Playwright browsers installed to ~/.cache/ms-playwright/"
+            # Detect where playwright expects browsers
+            PW_BROWSER_PATH=$($RUNTIME_DIR/hiclaw-python -c "
+from pathlib import Path; import os
+print(os.environ.get('PLAYWRIGHT_BROWSERS_PATH', str(Path.home() / '.cache' / 'ms-playwright')))
+" 2>/dev/null || echo "$HOME/.cache/ms-playwright")
+            mkdir -p "$(dirname "$PW_BROWSER_PATH")"
+            # Remove old browsers if exist, then install new
+            rm -rf "$PW_BROWSER_PATH"
+            mv "$RUNTIME_DIR/ms-playwright" "$PW_BROWSER_PATH"
+            ok "Playwright browsers installed to $PW_BROWSER_PATH"
         fi
 
         VERIFY="$($RUNTIME_DIR/hiclaw-python -c 'import uvicorn,fastapi;print("OK")' 2>&1)"
