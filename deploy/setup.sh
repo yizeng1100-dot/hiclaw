@@ -69,6 +69,35 @@ fi
 PYTHON="$RUNTIME_DIR/hiclaw-python"
 
 # ═══════════════════════════════════════════════════════════════════════════
+# [0.5/5] Playwright (optional — for browser automation)
+# ═══════════════════════════════════════════════════════════════════════════
+PLAYWRIGHT_BUNDLE="$SCRIPT_DIR/playwright-bundle.tar.gz"
+if [ -f "$PLAYWRIGHT_BUNDLE" ]; then
+    # Check if already installed
+    if $PYTHON -c "import playwright" 2>/dev/null; then
+        ok "Playwright already installed"
+    else
+        echo "[0.5/5] Installing Playwright..."
+        PW_TMP="$(mktemp -d)"
+        if tar xzf "$PLAYWRIGHT_BUNDLE" -C "$PW_TMP"; then
+            # Install Python wheels
+            $PYTHON -m pip install --no-index --find-links="$PW_TMP/playwright-bundle/" playwright 2>&1 | tail -3
+            ok "Playwright Python package installed"
+            # Extract browsers
+            if [ -f "$PW_TMP/playwright-bundle/browsers.tar.gz" ]; then
+                tar xzf "$PW_TMP/playwright-bundle/browsers.tar.gz" -C "$HOME/.cache/"
+                ok "Playwright browsers installed to ~/.cache/ms-playwright/"
+            fi
+        else
+            warn "Failed to extract playwright-bundle.tar.gz"
+        fi
+        rm -rf "$PW_TMP"
+    fi
+else
+    log "playwright-bundle.tar.gz not found — skipping (browser tools disabled)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # [1/5] Skills Git Repo
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
