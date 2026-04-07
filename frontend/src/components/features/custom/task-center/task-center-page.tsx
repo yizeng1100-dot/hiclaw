@@ -1,7 +1,15 @@
+/* eslint-disable i18next/no-literal-string, no-console, consistent-return, no-nested-ternary, no-await-in-loop, no-continue */
 import React from "react";
 import { useNavigate } from "react-router";
-import { TaskService, type TaskInfo } from "#/api/custom-skill-service/task-service.api";
-import { AgentService, type AgentInfo } from "#/api/custom-skill-service/agent-service.api";
+import {
+  TaskService,
+  type TaskInfo,
+} from "#/api/custom-skill-service/task-service.api";
+import {
+  AgentService,
+  type AgentInfo,
+} from "#/api/custom-skill-service/agent-service.api";
+import V1ConversationService from "#/api/conversation-service/v1-conversation-service.api";
 import { cn } from "#/utils/utils";
 
 const STATUS_TABS = [
@@ -43,13 +51,18 @@ export function TaskCenterPage() {
 
   // Load agents for filter dropdown
   React.useEffect(() => {
-    AgentService.listAgents({ limit: 200 }).then((d) => setAgents(d.agents)).catch(() => {});
+    AgentService.listAgents({ limit: 200 })
+      .then((d) => setAgents(d.agents))
+      .catch(() => {});
   }, []);
 
   const fetchTasks = React.useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, string | number> = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
+      const params: Record<string, string | number> = {
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      };
       if (statusFilter) params.status = statusFilter;
       if (agentFilter) params.agent_id = agentFilter;
       if (search) params.search = search;
@@ -66,6 +79,48 @@ export function TaskCenterPage() {
   React.useEffect(() => {
     fetchTasks();
   }, [fetchTasks]);
+
+  // Auto-complete: for running tasks, poll conversation status and mark completed
+  React.useEffect(() => {
+    const runningTasks = tasks.filter(
+      (t) => t.status === "running" && t.conversation_id,
+    );
+    if (runningTasks.length === 0) return;
+
+    const checkAndComplete = async () => {
+      let changed = false;
+      for (const t of runningTasks) {
+        try {
+          let appConvId = t.conversation_id;
+          if (appConvId?.startsWith("task-")) {
+            const st = await V1ConversationService.getStartTask(
+              appConvId.slice(5),
+            );
+            appConvId = st?.app_conversation_id ?? null;
+          }
+          if (!appConvId) continue;
+          const convs = await V1ConversationService.getConversations([
+            appConvId,
+          ]);
+          const conv = convs?.[0];
+          if (
+            conv?.execution_status?.toLowerCase() === "finished" ||
+            conv?.execution_status?.toLowerCase() === "stopped"
+          ) {
+            await TaskService.updateTask(t.id, { status: "completed" });
+            changed = true;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (changed) fetchTasks();
+    };
+
+    const interval = setInterval(checkAndComplete, 10000);
+    checkAndComplete(); // run immediately on first render
+    return () => clearInterval(interval);
+  }, [tasks, fetchTasks]);
 
   const handleCancel = async (taskId: string) => {
     try {
@@ -89,10 +144,20 @@ export function TaskCenterPage() {
       {/* Status Tabs */}
       <div className="flex gap-1 mb-4">
         {STATUS_TABS.map((tab) => (
-          <button key={tab.key} type="button"
-            onClick={() => { setStatusFilter(tab.key); setPage(0); }}
-            className={cn("px-3 py-1.5 rounded text-sm transition",
-              statusFilter === tab.key ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white hover:bg-[#21262d]")}>
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => {
+              setStatusFilter(tab.key);
+              setPage(0);
+            }}
+            className={cn(
+              "px-3 py-1.5 rounded text-sm transition",
+              statusFilter === tab.key
+                ? "bg-blue-600 text-white"
+                : "text-gray-400 hover:text-white hover:bg-[#21262d]",
+            )}
+          >
             {tab.label}
           </button>
         ))}
@@ -100,30 +165,61 @@ export function TaskCenterPage() {
 
       {/* Search & Agent Filter */}
       <div className="flex gap-3 mb-5">
-        <input type="text" placeholder="搜索任务名称..."
-          value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-          className="flex-1 max-w-md px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500" />
-        <select value={agentFilter} onChange={(e) => { setAgentFilter(e.target.value); setPage(0); }}
-          className="px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-sm text-white focus:outline-none focus:border-blue-500">
+        <input
+          type="text"
+          placeholder="搜索任务名称..."
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(0);
+          }}
+          className="flex-1 max-w-md px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-blue-500"
+        />
+        <select
+          value={agentFilter}
+          onChange={(e) => {
+            setAgentFilter(e.target.value);
+            setPage(0);
+          }}
+          className="px-3 py-2 bg-[#0d1117] border border-[#30363d] rounded-lg text-sm text-white focus:outline-none focus:border-blue-500"
+        >
           <option value="">全部 Agent</option>
           {agents.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
           ))}
         </select>
         {(search || agentFilter) && (
-          <button type="button" onClick={() => { setSearch(""); setAgentFilter(""); setPage(0); }}
-            className="px-3 py-2 text-sm text-gray-400 hover:text-white transition">清除</button>
+          <button
+            type="button"
+            onClick={() => {
+              setSearch("");
+              setAgentFilter("");
+              setPage(0);
+            }}
+            className="px-3 py-2 text-sm text-gray-400 hover:text-white transition"
+          >
+            清除
+          </button>
         )}
       </div>
 
       {/* Task Table */}
       {loading ? (
-        <div className="flex-1 flex items-center justify-center"><p className="text-gray-500">加载中...</p></div>
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-gray-500">加载中...</p>
+        </div>
       ) : tasks.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center">
           <p className="text-gray-500 mb-2">暂无任务</p>
-          <button type="button" onClick={() => navigate("/agents")}
-            className="mt-2 text-blue-400 hover:underline text-sm">前往 Agent 中心</button>
+          <button
+            type="button"
+            onClick={() => navigate("/agents")}
+            className="mt-2 text-blue-400 hover:underline text-sm"
+          >
+            前往 Agent 中心
+          </button>
         </div>
       ) : (
         <>
@@ -140,25 +236,54 @@ export function TaskCenterPage() {
               </thead>
               <tbody>
                 {tasks.map((task) => (
-                  <tr key={task.id} className="border-b border-[#30363d] hover:bg-[#1c2128] transition cursor-pointer"
-                    onClick={() => navigate(`/tasks/${task.id}`)}>
-                    <td className="px-4 py-3 text-white">{task.name || "未命名任务"}</td>
-                    <td className="px-4 py-3 text-gray-400">{task.agent_name || "-"}</td>
+                  <tr
+                    key={task.id}
+                    className="border-b border-[#30363d] hover:bg-[#1c2128] transition cursor-pointer"
+                    onClick={() => navigate(`/tasks/${task.id}`)}
+                  >
+                    <td className="px-4 py-3 text-white">
+                      {task.name || "未命名任务"}
+                    </td>
+                    <td className="px-4 py-3 text-gray-400">
+                      {task.agent_name || "-"}
+                    </td>
                     <td className="px-4 py-3">
-                      <span className={cn("text-xs px-2 py-0.5 rounded", STATUS_STYLES[task.status] || STATUS_STYLES.pending)}>
+                      <span
+                        className={cn(
+                          "text-xs px-2 py-0.5 rounded",
+                          STATUS_STYLES[task.status] || STATUS_STYLES.pending,
+                        )}
+                      >
                         {STATUS_LABELS[task.status] || task.status}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-400">{new Date(task.created_at).toLocaleString("zh-CN")}</td>
+                    <td className="px-4 py-3 text-gray-400">
+                      {new Date(task.created_at).toLocaleString("zh-CN")}
+                    </td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                      <div
+                        className="flex gap-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         {task.conversation_id && (
-                          <button type="button" onClick={() => navigate(`/conversations/${task.conversation_id}`)}
-                            className="text-blue-400 hover:text-blue-300 text-xs">查看对话</button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigate(`/conversations/${task.conversation_id}`)
+                            }
+                            className="text-blue-400 hover:text-blue-300 text-xs"
+                          >
+                            查看对话
+                          </button>
                         )}
                         {task.status === "running" && (
-                          <button type="button" onClick={() => handleCancel(task.id)}
-                            className="text-red-400 hover:text-red-300 text-xs">取消</button>
+                          <button
+                            type="button"
+                            onClick={() => handleCancel(task.id)}
+                            className="text-red-400 hover:text-red-300 text-xs"
+                          >
+                            取消
+                          </button>
                         )}
                       </div>
                     </td>
@@ -171,13 +296,23 @@ export function TaskCenterPage() {
           {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-2 mt-5">
-              <button type="button" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}
-                className="px-3 py-1.5 text-sm rounded bg-[#21262d] text-gray-300 hover:bg-[#30363d] disabled:opacity-40 transition">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="px-3 py-1.5 text-sm rounded bg-[#21262d] text-gray-300 hover:bg-[#30363d] disabled:opacity-40 transition"
+              >
                 上一页
               </button>
-              <span className="text-sm text-gray-400">{page + 1} / {totalPages}</span>
-              <button type="button" onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
-                className="px-3 py-1.5 text-sm rounded bg-[#21262d] text-gray-300 hover:bg-[#30363d] disabled:opacity-40 transition">
+              <span className="text-sm text-gray-400">
+                {page + 1} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                className="px-3 py-1.5 text-sm rounded bg-[#21262d] text-gray-300 hover:bg-[#30363d] disabled:opacity-40 transition"
+              >
                 下一页
               </button>
             </div>
