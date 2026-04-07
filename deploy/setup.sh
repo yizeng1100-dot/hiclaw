@@ -281,7 +281,39 @@ echo "[4/5] Gitea user + skills sync..."
 if [ ! -f "$GITEA_BIN" ]; then
     warn "Gitea not installed, skipping"
 else
-    # Step 1: Start Gitea first to initialize database
+    # Kill any running Gitea first
+    pkill -f "gitea web" 2>/dev/null; sleep 1
+
+    # Clean Gitea data for fresh setup (ensures no stale must_change_password state)
+    # Only clean if user/repo verification fails
+    GITEA_DB="$HICLAW_DIR/gitea/data/gitea.db"
+    NEED_FRESH=false
+    if [ -f "$GITEA_DB" ]; then
+        # Quick test: can we authenticate?
+        # Start Gitea briefly to test
+        GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
+            --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
+            > "$HICLAW_DIR/gitea/log/setup-startup.log" 2>&1 &
+        _TEST_PID=$!
+        sleep 5
+        _AUTH_TEST=$(curl -s --noproxy "*" --max-time 3 -u "$GITEA_USER:$GITEA_PASS" \
+            "http://127.0.0.1:$GITEA_PORT/api/v1/user" 2>&1)
+        kill $_TEST_PID 2>/dev/null; wait $_TEST_PID 2>/dev/null || true; sleep 1
+        if echo "$_AUTH_TEST" | grep -qi "change.*password\|unauthorized"; then
+            log "Existing Gitea has auth issues, doing fresh setup..."
+            NEED_FRESH=true
+        fi
+    else
+        NEED_FRESH=true
+    fi
+
+    if $NEED_FRESH; then
+        log "Cleaning Gitea data for fresh initialization..."
+        rm -rf "$HICLAW_DIR/gitea/data" "$HICLAW_DIR/gitea/repos" "$HICLAW_DIR/gitea/log"
+        mkdir -p "$HICLAW_DIR/gitea/data" "$HICLAW_DIR/gitea/repos" "$HICLAW_DIR/gitea/log"
+    fi
+
+    # Step 1: Start Gitea to initialize database
     log "Starting Gitea temporarily (to initialize DB)..."
     mkdir -p "$HICLAW_DIR/gitea/log"
     GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
