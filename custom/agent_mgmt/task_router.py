@@ -99,6 +99,9 @@ async def update_task(task_id: str, data: TaskUpdate):
             kwargs['name'] = data.name
         if data.status is not None:
             kwargs['status'] = data.status
+            if data.status == 'completed':
+                from datetime import datetime, timezone
+                kwargs['completed_at'] = datetime.now(timezone.utc)
         if not kwargs:
             return {'status': 'no_change'}
         ok = await svc.update_task(task_id, **kwargs)
@@ -132,7 +135,51 @@ async def cancel_task(task_id: str):
     db = await get_agent_db()
     try:
         svc = TaskService(db)
-        ok = await svc.cancel_task(task_id)
+        # Get task to find conversation_id
+        task = await svc.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail='Task not found')
+
+        # Try to stop the running agent in sandbox
+        conv_id = task.conversation_id
+        if conv_id:
+            import httpx
+            import logging
+            logger = logging.getLogger(__name__)
+            try:
+                if conv_id.startswith('task-'):
+                    start_task_id = conv_id[5:]
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        # Get start task info to find agent_server_url and app_conversation_id
+                        resp = await client.get(
+                            f'http://localhost:12000/api/v1/app-conversations/start-tasks?ids={start_task_id}'
+                        )
+                        if resp.status_code == 200:
+                            tasks_data = resp.json()
+                            if tasks_data and len(tasks_data) > 0 and tasks_data[0]:
+                                st = tasks_data[0]
+                                server_url = st.get('agent_server_url')
+                                app_conv_id = st.get('app_conversation_id')
+                                if server_url and app_conv_id:
+                                    stop_resp = await client.post(
+                                        f'{server_url}/api/conversations/{app_conv_id}/stop'
+                                    )
+                                    logger.info(f'Stop conversation {app_conv_id} via {server_url}: {stop_resp.status_code}')
+                else:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        resp = await client.post(
+                            f'http://localhost:12000/api/conversations/{conv_id}/stop'
+                        )
+                        logger.info(f'Stop conversation {conv_id}: {resp.status_code}')
+            except Exception as e:
+                logger.warning(f'Failed to stop conversation for task {task_id}: {e}')
+
+        from datetime import datetime, timezone
+        ok = await svc.update_task(
+            task_id,
+            status='cancelled',
+            completed_at=datetime.now(timezone.utc),
+        )
         if not ok:
             raise HTTPException(status_code=404, detail='Task not found')
         return {'status': 'cancelled'}

@@ -109,4 +109,32 @@ export class AgentService {
     const resp = await openHands.get("/api/v1/agents/creators");
     return resp.data;
   }
+
+  static async importFromGit(data: {
+    git_url: string;
+    branch?: string;
+    subdir?: string;
+    token?: string;
+    agent_name?: string;
+    agent_description?: string;
+    agent_category?: string;
+  }): Promise<{
+    status: string;
+    agent_id: string;
+    agent_name: string;
+    skill_count: number;
+    workflow_name: string | null;
+  }> {
+    const resp = await openHands.post("/api/v1/agents/import-from-git", data);
+    return resp.data;
+  }
+
+  static async syncAgent(agentId: string): Promise<{
+    status: string;
+    skill_count: number;
+    workflow_name: string | null;
+  }> {
+    const resp = await openHands.post(`/api/v1/agents/${agentId}/sync`);
+    return resp.data;
+  }
 }
