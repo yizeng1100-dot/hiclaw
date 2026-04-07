@@ -112,8 +112,8 @@ export function TaskDetailPage() {
         ]);
         const conv = convs?.[0];
         if (
-          conv?.execution_status === "FINISHED" ||
-          conv?.execution_status === "STOPPED"
+          conv?.execution_status?.toLowerCase() === "finished" ||
+          conv?.execution_status?.toLowerCase() === "stopped"
         ) {
           await TaskService.updateTask(taskId, { status: "completed" });
           const updated = await TaskService.getTask(taskId);
