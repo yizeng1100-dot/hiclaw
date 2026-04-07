@@ -389,4 +389,3 @@ async def sync_agent_from_git(agent_id: str) -> ImportResult:
         await agent_db.close()
         _logger.error(f'Sync failed: {e}', exc_info=True)
         return ImportResult(success=False, error=str(e))
-    )

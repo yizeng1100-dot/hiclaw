@@ -155,19 +155,25 @@ export function AgentDetailPage() {
             try {
               const cfg = JSON.parse(agent.config_json || "{}");
               return cfg.git_source ? (
-                <button type="button"
+                <button
+                  type="button"
                   onClick={async () => {
                     try {
                       await AgentService.syncAgent(agent.id);
                       // Reload agent
                       AgentService.getAgent(agent.id).then(setAgent);
-                    } catch (e) { console.error("Sync failed:", e); }
+                    } catch (e) {
+                      console.error("Sync failed:", e);
+                    }
                   }}
-                  className="px-4 py-2.5 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded-lg text-sm font-medium transition">
+                  className="px-4 py-2.5 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded-lg text-sm font-medium transition"
+                >
                   同步 Git
                 </button>
               ) : null;
-            } catch { return null; }
+            } catch {
+              return null;
+            }
           })()}
           {hasPanel ? (
             <button
