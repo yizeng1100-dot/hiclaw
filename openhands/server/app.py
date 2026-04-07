@@ -237,5 +237,14 @@ import openhands.server.routes.runtime_proxy as _runtime_proxy  # noqa: E402
 
 app.include_router(_runtime_proxy.router)
 app.include_router(_hiclaw_skills.router)
+
+try:
+    from custom.agent_mgmt.router import router as _agent_router
+    from custom.agent_mgmt.task_router import router as _task_router
+
+    app.include_router(_agent_router, prefix='/api/v1')
+    app.include_router(_task_router, prefix='/api/v1')
+except ImportError:
+    pass
 # >>> END CUSTOM <<<
 add_health_endpoints(app)
