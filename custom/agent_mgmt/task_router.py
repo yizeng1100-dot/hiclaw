@@ -101,7 +101,7 @@ async def update_task(task_id: str, data: TaskUpdate):
             kwargs['status'] = data.status
             if data.status == 'completed':
                 from datetime import datetime, timezone
-                kwargs['completed_at'] = datetime.now(timezone.utc)
+                kwargs['completed_at'] = datetime.now(timezone.utc).isoformat()
         if not kwargs:
             return {'status': 'no_change'}
         ok = await svc.update_task(task_id, **kwargs)

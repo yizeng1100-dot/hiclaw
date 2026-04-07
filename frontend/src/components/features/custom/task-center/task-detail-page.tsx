@@ -1,7 +1,10 @@
-/* eslint-disable i18next/no-literal-string */
+/* eslint-disable i18next/no-literal-string, no-nested-ternary, no-console, no-plusplus, consistent-return */
 import React from "react";
 import { useParams, useNavigate } from "react-router";
-import { TaskService, type TaskInfo } from "#/api/custom-skill-service/task-service.api";
+import {
+  TaskService,
+  type TaskInfo,
+} from "#/api/custom-skill-service/task-service.api";
 import { AgentService } from "#/api/custom-skill-service/agent-service.api";
 import V1ConversationService from "#/api/conversation-service/v1-conversation-service.api";
 import { cn } from "#/utils/utils";
@@ -58,7 +61,9 @@ export function TaskDetailPage() {
               setPhases(config.workflow_phases);
               setPhasesDone(config.workflow_phases.map(() => false));
             }
-          } catch { /* use default phases */ }
+          } catch {
+            /* use default phases */
+          }
         }
       })
       .catch((e) => console.error("Failed to load task:", e))
@@ -69,16 +74,23 @@ export function TaskDetailPage() {
   React.useEffect(() => {
     if (!taskId || task?.status !== "running") return;
     const interval = setInterval(() => {
-      TaskService.getTask(taskId).then(setTask).catch(() => {});
+      TaskService.getTask(taskId)
+        .then(setTask)
+        .catch(() => {});
     }, 5000);
     return () => clearInterval(interval);
   }, [taskId, task?.status]);
 
   // Resolve real app_conversation_id from task- prefixed IDs
-  const [resolvedConvId, setResolvedConvId] = React.useState<string | null>(null);
+  const [resolvedConvId, setResolvedConvId] = React.useState<string | null>(
+    null,
+  );
   React.useEffect(() => {
     const convId = task?.conversation_id;
-    if (!convId) { setResolvedConvId(null); return; }
+    if (!convId) {
+      setResolvedConvId(null);
+      return;
+    }
     if (convId.startsWith("task-")) {
       const startTaskId = convId.slice(5);
       V1ConversationService.getStartTask(startTaskId)
@@ -91,14 +103,23 @@ export function TaskDetailPage() {
 
   // Check real progress by probing output files from workflow phases
   React.useEffect(() => {
-    if (!resolvedConvId || task?.status === "pending" || task?.status === "cancelled" || phases.length === 0) return;
+    if (
+      !resolvedConvId ||
+      task?.status === "pending" ||
+      task?.status === "cancelled" ||
+      phases.length === 0
+    )
+      return;
 
     const checkFiles = async () => {
       const results = await Promise.all(
         phases.map(async (phase) => {
           if (!phase.file) return false;
           try {
-            const content = await V1ConversationService.readConversationFile(resolvedConvId, phase.file);
+            const content = await V1ConversationService.readConversationFile(
+              resolvedConvId,
+              phase.file,
+            );
             return !!(content && content.length > 0);
           } catch {
             return false;
@@ -141,21 +162,38 @@ export function TaskDetailPage() {
   };
 
   if (loading) {
-    return <div className="h-full flex items-center justify-center text-gray-500">加载中...</div>;
+    return (
+      <div className="h-full flex items-center justify-center text-gray-500">
+        加载中...
+      </div>
+    );
   }
 
   if (!task) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-gray-500">
         <p>任务未找到</p>
-        <button type="button" onClick={() => navigate("/tasks")} className="mt-4 text-blue-400 hover:underline">返回任务列表</button>
+        <button
+          type="button"
+          onClick={() => navigate("/tasks")}
+          className="mt-4 text-blue-400 hover:underline"
+        >
+          返回任务列表
+        </button>
       </div>
     );
   }
 
-  const duration = task.started_at && (task.completed_at || task.status === "running")
-    ? Math.round(((task.completed_at ? new Date(task.completed_at).getTime() : Date.now()) - new Date(task.started_at).getTime()) / 1000)
-    : null;
+  const duration =
+    task.started_at && (task.completed_at || task.status === "running")
+      ? Math.round(
+          ((task.completed_at
+            ? new Date(task.completed_at).getTime()
+            : Date.now()) -
+            new Date(task.started_at).getTime()) /
+            1000,
+        )
+      : null;
 
   // Determine phase status from real file checks
   const getPhaseStatus = (index: number) => {
@@ -176,8 +214,11 @@ export function TaskDetailPage() {
   return (
     <div className="h-full flex flex-col p-6 text-white overflow-auto custom-scrollbar">
       {/* Back */}
-      <button type="button" onClick={() => navigate("/tasks")}
-        className="text-sm text-gray-400 hover:text-white mb-4 self-start">
+      <button
+        type="button"
+        onClick={() => navigate("/tasks")}
+        className="text-sm text-gray-400 hover:text-white mb-4 self-start"
+      >
         &larr; 返回任务列表
       </button>
 
@@ -186,24 +227,37 @@ export function TaskDetailPage() {
         <div>
           <h1 className="text-2xl font-bold">{task.name || "未命名任务"}</h1>
           <div className="flex items-center gap-3 mt-2">
-            <span className={cn("text-sm px-3 py-1 rounded border", STATUS_STYLES[task.status])}>
+            <span
+              className={cn(
+                "text-sm px-3 py-1 rounded border",
+                STATUS_STYLES[task.status],
+              )}
+            >
               {STATUS_LABELS[task.status] || task.status}
             </span>
             {task.agent_name && (
-              <span className="text-sm text-gray-400">Agent: {task.agent_name}</span>
+              <span className="text-sm text-gray-400">
+                Agent: {task.agent_name}
+              </span>
             )}
           </div>
         </div>
         <div className="flex gap-2">
           {task.conversation_id && (
-            <button type="button" onClick={() => navigate(`/conversations/${task.conversation_id}`)}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition">
+            <button
+              type="button"
+              onClick={() => navigate(`/conversations/${task.conversation_id}`)}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition"
+            >
               查看对话
             </button>
           )}
           {task.status === "running" && (
-            <button type="button" onClick={handleCancel}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition"
+            >
               取消任务
             </button>
           )}
@@ -214,37 +268,51 @@ export function TaskDetailPage() {
         {/* Left: Task Info */}
         <div className="lg:col-span-1 space-y-4">
           <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-300 mb-3">任务信息</h3>
+            <h3 className="text-sm font-semibold text-gray-300 mb-3">
+              任务信息
+            </h3>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-500">任务 ID</span>
-                <span className="text-gray-300 font-mono text-xs">{task.id.slice(0, 8)}...</span>
+                <span className="text-gray-300 font-mono text-xs">
+                  {task.id.slice(0, 8)}...
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">创建者</span>
-                <span className="text-gray-300">{task.created_by || "unknown"}</span>
+                <span className="text-gray-300">
+                  {task.created_by || "unknown"}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">创建时间</span>
-                <span className="text-gray-300">{new Date(task.created_at).toLocaleString("zh-CN")}</span>
+                <span className="text-gray-300">
+                  {new Date(task.created_at).toLocaleString("zh-CN")}
+                </span>
               </div>
               {task.started_at && (
                 <div className="flex justify-between">
                   <span className="text-gray-500">开始时间</span>
-                  <span className="text-gray-300">{new Date(task.started_at).toLocaleString("zh-CN")}</span>
+                  <span className="text-gray-300">
+                    {new Date(task.started_at).toLocaleString("zh-CN")}
+                  </span>
                 </div>
               )}
               {task.completed_at && (
                 <div className="flex justify-between">
                   <span className="text-gray-500">完成时间</span>
-                  <span className="text-gray-300">{new Date(task.completed_at).toLocaleString("zh-CN")}</span>
+                  <span className="text-gray-300">
+                    {new Date(task.completed_at).toLocaleString("zh-CN")}
+                  </span>
                 </div>
               )}
               {duration !== null && (
                 <div className="flex justify-between">
                   <span className="text-gray-500">耗时</span>
                   <span className="text-gray-300">
-                    {duration >= 60 ? `${Math.floor(duration / 60)}m ${duration % 60}s` : `${duration}s`}
+                    {duration >= 60
+                      ? `${Math.floor(duration / 60)}m ${duration % 60}s`
+                      : `${duration}s`}
                     {task.status === "running" && " (进行中)"}
                   </span>
                 </div>
@@ -255,7 +323,9 @@ export function TaskDetailPage() {
           {/* Error message */}
           {task.error_message && (
             <div className="bg-[#161b22] border border-red-900/50 rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-red-400 mb-2">错误信息</h3>
+              <h3 className="text-sm font-semibold text-red-400 mb-2">
+                错误信息
+              </h3>
               <pre className="text-xs text-red-300 whitespace-pre-wrap font-mono bg-[#0d1117] p-2 rounded">
                 {task.error_message}
               </pre>
@@ -266,7 +336,9 @@ export function TaskDetailPage() {
         {/* Right: Execution Flow */}
         <div className="lg:col-span-2">
           <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-300 mb-4">执行流程</h3>
+            <h3 className="text-sm font-semibold text-gray-300 mb-4">
+              执行流程
+            </h3>
 
             {/* Flow diagram */}
             <div className="flex flex-col gap-1">
@@ -277,41 +349,88 @@ export function TaskDetailPage() {
                     {/* Connector line + Node */}
                     <div className="flex flex-col items-center w-8">
                       {i > 0 && (
-                        <div className={cn("w-0.5 h-3",
-                          status === "done" ? "bg-green-500" : status === "active" ? "bg-blue-500" : status === "error" ? "bg-red-500" : "bg-gray-700")} />
+                        <div
+                          className={cn(
+                            "w-0.5 h-3",
+                            status === "done"
+                              ? "bg-green-500"
+                              : status === "active"
+                                ? "bg-blue-500"
+                                : status === "error"
+                                  ? "bg-red-500"
+                                  : "bg-gray-700",
+                          )}
+                        />
                       )}
-                      <div className={cn("w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 shrink-0",
-                        status === "done" ? "bg-green-900/50 border-green-500 text-green-400" :
-                        status === "active" ? "bg-blue-900/50 border-blue-500 text-blue-400 animate-pulse" :
-                        status === "error" ? "bg-red-900/50 border-red-500 text-red-400" :
-                        "bg-gray-800 border-gray-600 text-gray-500")}>
-                        {status === "done" ? "✓" : status === "error" ? "✕" : status === "active" ? "●" : i + 1}
+                      <div
+                        className={cn(
+                          "w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 shrink-0",
+                          status === "done"
+                            ? "bg-green-900/50 border-green-500 text-green-400"
+                            : status === "active"
+                              ? "bg-blue-900/50 border-blue-500 text-blue-400 animate-pulse"
+                              : status === "error"
+                                ? "bg-red-900/50 border-red-500 text-red-400"
+                                : "bg-gray-800 border-gray-600 text-gray-500",
+                        )}
+                      >
+                        {status === "done"
+                          ? "✓"
+                          : status === "error"
+                            ? "✕"
+                            : status === "active"
+                              ? "●"
+                              : i + 1}
                       </div>
                       {i < phases.length - 1 && (
-                        <div className={cn("w-0.5 h-3",
-                          status === "done" ? "bg-green-500" : "bg-gray-700")} />
+                        <div
+                          className={cn(
+                            "w-0.5 h-3",
+                            status === "done" ? "bg-green-500" : "bg-gray-700",
+                          )}
+                        />
                       )}
                     </div>
 
                     {/* Label */}
                     <div className="flex-1 py-1">
-                      <p className={cn("text-sm font-medium",
-                        status === "done" ? "text-green-400" :
-                        status === "active" ? "text-blue-400" :
-                        status === "error" ? "text-red-400" :
-                        "text-gray-500")}>
+                      <p
+                        className={cn(
+                          "text-sm font-medium",
+                          status === "done"
+                            ? "text-green-400"
+                            : status === "active"
+                              ? "text-blue-400"
+                              : status === "error"
+                                ? "text-red-400"
+                                : "text-gray-500",
+                        )}
+                      >
                         {phase.label}
                       </p>
                       <p className="text-xs text-gray-600">{phase.desc}</p>
                     </div>
 
                     {/* Status indicator */}
-                    <span className={cn("text-xs px-2 py-0.5 rounded",
-                      status === "done" ? "bg-green-900/30 text-green-500" :
-                      status === "active" ? "bg-blue-900/30 text-blue-400" :
-                      status === "error" ? "bg-red-900/30 text-red-400" :
-                      "bg-gray-800 text-gray-600")}>
-                      {status === "done" ? "完成" : status === "active" ? "执行中" : status === "error" ? "失败" : "等待"}
+                    <span
+                      className={cn(
+                        "text-xs px-2 py-0.5 rounded",
+                        status === "done"
+                          ? "bg-green-900/30 text-green-500"
+                          : status === "active"
+                            ? "bg-blue-900/30 text-blue-400"
+                            : status === "error"
+                              ? "bg-red-900/30 text-red-400"
+                              : "bg-gray-800 text-gray-600",
+                      )}
+                    >
+                      {status === "done"
+                        ? "完成"
+                        : status === "active"
+                          ? "执行中"
+                          : status === "error"
+                            ? "失败"
+                            : "等待"}
                     </span>
                   </div>
                 );
@@ -325,7 +444,10 @@ export function TaskDetailPage() {
               <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse shrink-0" />
               <div>
                 <p className="text-sm text-blue-400">任务正在执行中</p>
-                <p className="text-xs text-gray-500 mt-0.5">每 10 秒自动检测阶段进度。点击"查看对话"可查看实时输出。</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  每 10
+                  秒自动检测阶段进度。点击&ldquo;查看对话&rdquo;可查看实时输出。
+                </p>
               </div>
             </div>
           )}
