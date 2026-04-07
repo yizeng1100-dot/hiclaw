@@ -316,7 +316,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "[5/5] Frontend..."
-if [ -f "$PROJECT_DIR/frontend/build/client/index.html" ]; then
+if [ -f "$PROJECT_DIR/frontend/build/index.html" ]; then
     ok "Already built"
 elif [ -d "$PROJECT_DIR/frontend" ] && command -v npm &>/dev/null; then
     log "Running npm install + build..."
