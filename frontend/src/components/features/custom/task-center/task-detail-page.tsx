@@ -101,6 +101,31 @@ export function TaskDetailPage() {
     }
   }, [task?.conversation_id]);
 
+  // Auto-complete: poll conversation execution_status, mark task completed
+  // when the LLM finishes (FINISHED/STOPPED)
+  React.useEffect(() => {
+    if (!resolvedConvId || !taskId || task?.status !== "running") return;
+    const interval = setInterval(async () => {
+      try {
+        const convs = await V1ConversationService.getConversations([
+          resolvedConvId,
+        ]);
+        const conv = convs?.[0];
+        if (
+          conv?.execution_status === "FINISHED" ||
+          conv?.execution_status === "STOPPED"
+        ) {
+          await TaskService.updateTask(taskId, { status: "completed" });
+          const updated = await TaskService.getTask(taskId);
+          setTask(updated);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [resolvedConvId, taskId, task?.status]);
+
   // Check real progress by probing output files from workflow phases
   React.useEffect(() => {
     if (
