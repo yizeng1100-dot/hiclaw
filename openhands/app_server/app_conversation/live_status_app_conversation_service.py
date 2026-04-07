@@ -1154,12 +1154,12 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             base_url=base_url,
             api_key=user.llm_api_key,
             usage_id='agent',
-            # >>> CUSTOM: HiClaw — tuned for internal network LLM APIs <<<
-            timeout=120,           # HTTP timeout: 120s (default 300s, some models need time)
-            num_retries=3,         # retry 3 times (default 5)
-            retry_min_wait=4,      # min wait 4s between retries (default 8s)
-            retry_max_wait=30,     # max wait 30s between retries (default 64s)
-            retry_multiplier=4.0,  # moderate backoff (default 8.0)
+            # >>> CUSTOM: HiClaw — tuned for unstable internal network LLM APIs <<<
+            timeout=300,           # HTTP timeout: 300s (内网模型可能响应慢)
+            num_retries=5,         # retry 5 times (网络不稳定多重试)
+            retry_min_wait=5,      # min wait 5s between retries
+            retry_max_wait=60,     # max wait 60s between retries
+            retry_multiplier=3.0,  # backoff: 5s → 15s → 45s → 60s → 60s
             # >>> END CUSTOM <<<
             log_completions=bool(os.environ.get('HICLAW_LLM_DEBUG')),
             **({"log_completions_folder": _log_folder} if _log_folder else {}),
