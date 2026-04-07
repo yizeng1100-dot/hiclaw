@@ -23,7 +23,8 @@
 #   HICLAW_LLM_DEBUG      LLM debug 日志   默认: 关闭 (设为1开启)
 # ═══════════════════════════════════════════════════════════════════════════
 
-set -e
+set -eE
+trap 'echo ""; echo "=== ERROR at line $LINENO ==="; echo "  Command: $BASH_COMMAND"; echo "  Exit code: $?"; echo "  Check log above for details."' ERR
 
 # ─── Handle restart subcommand ───
 if [ "${1:-}" = "restart" ]; then
