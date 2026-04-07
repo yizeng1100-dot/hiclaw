@@ -293,7 +293,7 @@ else
     # Wait up to 30 seconds for Gitea
     GITEA_READY=false
     for i in $(seq 1 30); do
-        if curl -s --max-time 2 "http://127.0.0.1:$GITEA_PORT" >/dev/null 2>&1; then
+        if curl -s --noproxy "*" --max-time 2 "http://127.0.0.1:$GITEA_PORT" >/dev/null 2>&1; then
             GITEA_READY=true
             break
         fi
@@ -326,14 +326,14 @@ else
             warn "CLI user creation failed (exit=$CLI_EXIT): $CLI_OUTPUT"
             log "Trying API registration as fallback..."
             # Try sign-up form (works when registration is enabled)
-            curl -s -X POST "http://127.0.0.1:$GITEA_PORT/user/sign_up" \
+            curl -s --noproxy "*" -X POST "http://127.0.0.1:$GITEA_PORT/user/sign_up" \
                 -d "user_name=$GITEA_USER&password=$GITEA_PASS&retype=$GITEA_PASS&email=admin@hiclaw.local" 2>&1 || true
             sleep 1
         fi
 
         # Step 3: Verify user exists
         log "Verifying admin user..."
-        USER_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+        USER_CHECK=$(curl -s --noproxy "*" --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
             "http://127.0.0.1:$GITEA_PORT/api/v1/user" 2>&1)
         if echo "$USER_CHECK" | grep -q '"login"'; then
             ok "Admin user verified (login OK)"
@@ -345,12 +345,12 @@ else
         # Step 4: Create skills repo (only if user is working)
         if echo "$USER_CHECK" | grep -q '"login"'; then
             log "Creating skills repo..."
-            REPO_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+            REPO_CHECK=$(curl -s --noproxy "*" --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
                 "http://127.0.0.1:$GITEA_PORT/api/v1/repos/$GITEA_USER/skills" 2>&1)
             if echo "$REPO_CHECK" | grep -q '"full_name"'; then
                 ok "Skills repo already exists"
             else
-                REPO_CREATE=$(curl -s -X POST "http://127.0.0.1:$GITEA_PORT/api/v1/user/repos" \
+                REPO_CREATE=$(curl -s --noproxy "*" -X POST "http://127.0.0.1:$GITEA_PORT/api/v1/user/repos" \
                     -H "Content-Type: application/json" \
                     -u "$GITEA_USER:$GITEA_PASS" \
                     -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":true}' 2>&1)
@@ -363,12 +363,12 @@ else
 
             # Also create extensions repo
             log "Creating extensions repo..."
-            EXT_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+            EXT_CHECK=$(curl -s --noproxy "*" --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
                 "http://127.0.0.1:$GITEA_PORT/api/v1/repos/$GITEA_USER/extensions" 2>&1)
             if echo "$EXT_CHECK" | grep -q '"full_name"'; then
                 ok "Extensions repo already exists"
             else
-                curl -s -X POST "http://127.0.0.1:$GITEA_PORT/api/v1/user/repos" \
+                curl -s --noproxy "*" -X POST "http://127.0.0.1:$GITEA_PORT/api/v1/user/repos" \
                     -H "Content-Type: application/json" \
                     -u "$GITEA_USER:$GITEA_PASS" \
                     -d '{"name":"extensions","description":"OpenHands extensions (mirrored)","default_branch":"main","auto_init":false}' >/dev/null 2>&1
