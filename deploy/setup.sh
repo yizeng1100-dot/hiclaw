@@ -314,6 +314,20 @@ else
             --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1)
         CLI_EXIT=$?
 
+        # Always clear must_change_password flag via SQLite (most reliable)
+        GITEA_DB="$HICLAW_DIR/gitea/data/gitea.db"
+        if [ -f "$GITEA_DB" ] && command -v sqlite3 &>/dev/null; then
+            sqlite3 "$GITEA_DB" "UPDATE user SET must_change_password=0 WHERE lower_name='$(echo "$GITEA_USER" | tr '[:upper:]' '[:lower:]')';" 2>/dev/null
+        elif [ -f "$GITEA_DB" ] && $PYTHON -c "import sqlite3" 2>/dev/null; then
+            $PYTHON -c "
+import sqlite3
+conn = sqlite3.connect('$GITEA_DB')
+conn.execute(\"UPDATE user SET must_change_password=0 WHERE lower_name=?\", ('$(echo "$GITEA_USER" | tr '[:upper:]' '[:lower:]')',))
+conn.commit()
+conn.close()
+" 2>/dev/null
+        fi
+
         if [ $CLI_EXIT -eq 0 ]; then
             ok "Admin user created via CLI"
         elif echo "$CLI_OUTPUT" | grep -qi "already exists"; then
