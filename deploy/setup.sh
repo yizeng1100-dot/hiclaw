@@ -385,7 +385,7 @@ else
             if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null; then
                 cd "$TMPDIR/skills"
                 git remote add gitea "http://$GITEA_USER:$GITEA_PASS@127.0.0.1:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
-                PUSH_OUTPUT=$(git push gitea master --force 2>&1)
+                PUSH_OUTPUT=$(http_proxy="" https_proxy="" HTTP_PROXY="" HTTPS_PROXY="" git -c http.proxy="" push gitea master --force 2>&1)
                 if [ $? -eq 0 ]; then
                     ok "Skills pushed to Gitea"
                 else
