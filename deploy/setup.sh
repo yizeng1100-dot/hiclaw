@@ -310,7 +310,7 @@ else
         log "Creating admin user '$GITEA_USER'..."
         CLI_OUTPUT=$(GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
             --username "$GITEA_USER" --password "$GITEA_PASS" \
-            --email admin@hiclaw.local --admin \
+            --email admin@hiclaw.local --admin --must-change-password=false \
             --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1)
         CLI_EXIT=$?
 
