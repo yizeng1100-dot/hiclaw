@@ -273,15 +273,23 @@ fi
 OH_DB="$HOME/.openhands/openhands.db"
 if [ -f "$OH_DB" ]; then
     $PYTHON -c "
-import sqlite3
-conn = sqlite3.connect('$OH_DB')
-cols = [r[1] for r in conn.execute('PRAGMA table_info(conversation_metadata)').fetchall()]
-if 'remote_agent_url' not in cols:
-    conn.execute('ALTER TABLE conversation_metadata ADD COLUMN remote_agent_url TEXT')
-    conn.commit()
-    print('  DB migration: added remote_agent_url column')
-conn.close()
-" 2>/dev/null
+import sqlite3, sys
+try:
+    conn = sqlite3.connect('$OH_DB')
+    tables = [r[0] for r in conn.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()]
+    if 'conversation_metadata' not in tables:
+        print('  DB migration: skipped (table not yet created)')
+        conn.close()
+        sys.exit(0)
+    cols = [r[1] for r in conn.execute('PRAGMA table_info(conversation_metadata)').fetchall()]
+    if 'remote_agent_url' not in cols:
+        conn.execute('ALTER TABLE conversation_metadata ADD COLUMN remote_agent_url TEXT')
+        conn.commit()
+        print('  DB migration: added remote_agent_url column')
+    conn.close()
+except Exception as e:
+    print(f'  DB migration: skipped ({e})')
+" || true
 fi
 
 # ─── 1. Gitea ───
