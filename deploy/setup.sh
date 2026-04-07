@@ -207,15 +207,8 @@ echo "[4/5] Gitea user + skills sync..."
 if [ ! -f "$GITEA_BIN" ]; then
     warn "Gitea not installed, skipping"
 else
-    # Step 1: Try creating admin user via CLI (works before first run)
-    log "Ensuring admin user exists..."
-    GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
-        --username "$GITEA_USER" --password "$GITEA_PASS" \
-        --email admin@hiclaw.local --admin \
-        --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 | grep -v "already exists" || true
-
-    # Step 2: Start Gitea
-    log "Starting Gitea temporarily..."
+    # Step 1: Start Gitea first to initialize database
+    log "Starting Gitea temporarily (to initialize DB)..."
     mkdir -p "$HICLAW_DIR/gitea/log"
     GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
         --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
@@ -235,6 +228,13 @@ else
 
     if $GITEA_READY; then
         ok "Gitea started (took ${i}s)"
+
+        # Step 2: Create admin user via CLI (now DB is initialized)
+        log "Creating admin user..."
+        GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
+            --username "$GITEA_USER" --password "$GITEA_PASS" \
+            --email admin@hiclaw.local --admin \
+            --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 | grep -v "already exists" || true
 
         # Step 3: Verify user exists via API, create via API if CLI failed
         log "Verifying admin user..."
