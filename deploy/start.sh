@@ -148,8 +148,8 @@ export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1"
 # ─── Runtime mode: auto-detect Docker availability ───
 # If Docker is not available, fall back to process mode (no sandbox isolation)
 if ! docker info > /dev/null 2>&1; then
-    echo "  ⚠ Docker not available — using process mode (no sandbox isolation)"
-    export RUNTIME=process
+    echo "  ⚠ Docker not available — using local mode (no sandbox isolation)"
+    export RUNTIME=local
 fi
 
 # ─── Secret key for encrypting API keys in persisted conversations ───
