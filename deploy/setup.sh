@@ -303,55 +303,79 @@ else
     if $GITEA_READY; then
         ok "Gitea started (took ${i}s)"
 
-        # Step 2: Create admin user via CLI (now DB is initialized)
-        log "Creating admin user..."
-        GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
+        # Give Gitea a moment to fully initialize DB tables
+        sleep 3
+
+        # Step 2: Create admin user via CLI (DB is now initialized)
+        log "Creating admin user '$GITEA_USER'..."
+        CLI_OUTPUT=$(GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
             --username "$GITEA_USER" --password "$GITEA_PASS" \
             --email admin@hiclaw.local --admin \
-            --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 | grep -v "already exists" || true
+            --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1)
+        CLI_EXIT=$?
 
-        # Step 3: Verify user exists via API, create via API if CLI failed
+        if [ $CLI_EXIT -eq 0 ]; then
+            ok "Admin user created via CLI"
+        elif echo "$CLI_OUTPUT" | grep -qi "already exists"; then
+            ok "Admin user already exists"
+            # Reset password in case it's wrong
+            GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user change-password \
+                --username "$GITEA_USER" --password "$GITEA_PASS" \
+                --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 || true
+        else
+            warn "CLI user creation failed (exit=$CLI_EXIT): $CLI_OUTPUT"
+            log "Trying API registration as fallback..."
+            # Try sign-up form (works when registration is enabled)
+            curl -s -X POST "http://localhost:$GITEA_PORT/user/sign_up" \
+                -d "user_name=$GITEA_USER&password=$GITEA_PASS&retype=$GITEA_PASS&email=admin@hiclaw.local" 2>&1 || true
+            sleep 1
+        fi
+
+        # Step 3: Verify user exists
         log "Verifying admin user..."
         USER_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
             "http://localhost:$GITEA_PORT/api/v1/user" 2>&1)
         if echo "$USER_CHECK" | grep -q '"login"'; then
-            ok "Admin user verified"
+            ok "Admin user verified (login OK)"
         else
-            log "CLI user creation may have failed, trying API registration..."
-            # Enable registration temporarily and create via API
-            curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/admin/users" \
-                -H "Content-Type: application/json" \
-                -d "{\"username\":\"$GITEA_USER\",\"password\":\"$GITEA_PASS\",\"email\":\"admin@hiclaw.local\",\"must_change_password\":false}" 2>&1 || true
-            # Try signing up
-            curl -s -X POST "http://localhost:$GITEA_PORT/user/sign_up" \
-                -d "user_name=$GITEA_USER&password=$GITEA_PASS&retype=$GITEA_PASS&email=admin@hiclaw.local" 2>&1 || true
-            # Verify again
-            USER_CHECK2=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
-                "http://localhost:$GITEA_PORT/api/v1/user" 2>&1)
-            if echo "$USER_CHECK2" | grep -q '"login"'; then
-                ok "Admin user created via API"
-            else
-                warn "Could not create admin user. Response: $(echo "$USER_CHECK2" | head -1)"
-                warn "Try manually: GITEA_WORK_DIR=$HICLAW_DIR/gitea $GITEA_BIN admin user create --username $GITEA_USER --password $GITEA_PASS --email admin@hiclaw.local --admin --config $HICLAW_DIR/gitea/custom/conf/app.ini"
-            fi
+            fail "Admin user NOT working. API response: $(echo "$USER_CHECK" | head -1)"
+            fail "Manual fix: GITEA_WORK_DIR=$HICLAW_DIR/gitea $GITEA_BIN admin user create --username $GITEA_USER --password '$GITEA_PASS' --email admin@hiclaw.local --admin --config $HICLAW_DIR/gitea/custom/conf/app.ini"
         fi
 
-        # Step 4: Create skills repo
-        log "Creating skills repo..."
-        REPO_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
-            "http://localhost:$GITEA_PORT/api/v1/repos/$GITEA_USER/skills" 2>&1)
-        if echo "$REPO_CHECK" | grep -q '"full_name"'; then
-            ok "Skills repo already exists"
-        else
-            REPO_CREATE=$(curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
-                -H "Content-Type: application/json" \
-                -u "$GITEA_USER:$GITEA_PASS" \
-                -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' 2>&1)
-            if echo "$REPO_CREATE" | grep -q '"full_name"'; then
-                ok "Skills repo created"
+        # Step 4: Create skills repo (only if user is working)
+        if echo "$USER_CHECK" | grep -q '"login"'; then
+            log "Creating skills repo..."
+            REPO_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+                "http://localhost:$GITEA_PORT/api/v1/repos/$GITEA_USER/skills" 2>&1)
+            if echo "$REPO_CHECK" | grep -q '"full_name"'; then
+                ok "Skills repo already exists"
             else
-                warn "Could not create skills repo: $(echo "$REPO_CREATE" | head -1)"
+                REPO_CREATE=$(curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
+                    -H "Content-Type: application/json" \
+                    -u "$GITEA_USER:$GITEA_PASS" \
+                    -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":true}' 2>&1)
+                if echo "$REPO_CREATE" | grep -q '"full_name"'; then
+                    ok "Skills repo created"
+                else
+                    fail "Could not create skills repo: $(echo "$REPO_CREATE" | head -1)"
+                fi
             fi
+
+            # Also create extensions repo
+            log "Creating extensions repo..."
+            EXT_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+                "http://localhost:$GITEA_PORT/api/v1/repos/$GITEA_USER/extensions" 2>&1)
+            if echo "$EXT_CHECK" | grep -q '"full_name"'; then
+                ok "Extensions repo already exists"
+            else
+                curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
+                    -H "Content-Type: application/json" \
+                    -u "$GITEA_USER:$GITEA_PASS" \
+                    -d '{"name":"extensions","description":"OpenHands extensions (mirrored)","default_branch":"main","auto_init":false}' >/dev/null 2>&1
+                ok "Extensions repo created"
+            fi
+        else
+            warn "Skipping repo creation — admin user not working"
         fi
 
         # Step 5: Push skills
