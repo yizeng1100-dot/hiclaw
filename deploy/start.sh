@@ -145,6 +145,13 @@ mkdir -p "$LOG_DIR"
 export no_proxy="${no_proxy:+$no_proxy,}localhost,127.0.0.1"
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1"
 
+# ─── Runtime mode: auto-detect Docker availability ───
+# If Docker is not available, fall back to process mode (no sandbox isolation)
+if ! docker info > /dev/null 2>&1; then
+    echo "  ⚠ Docker not available — using process mode (no sandbox isolation)"
+    export RUNTIME=process
+fi
+
 # ─── Secret key for encrypting API keys in persisted conversations ───
 # Without this, LLM API keys are NOT saved to disk and conversations break on restart.
 # Generate a random key if not set.

@@ -1,0 +1,1 @@
+import{p as r}from"./chunk-JZWAC4HX-BjkQ_KaV.js";import{I as s}from"./declaration-C3wdrYHn.js";import{u as a}from"./useTranslation-DzcgiRiH.js";function i(){const{t}=a();return r.jsx("span",{className:"text-xs text-tertiary-alt",children:t(s.COMMON$OPTIONAL)})}export{i as O};
