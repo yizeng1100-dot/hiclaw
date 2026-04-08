@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 from custom.agent_mgmt.db import get_agent_db
@@ -12,6 +15,64 @@ from custom.agent_mgmt.service import AgentService
 from custom.agent_mgmt.task_service import TaskService
 
 router = APIRouter(prefix='/tasks', tags=['Tasks'])
+
+TERMINAL_EXECUTION_STATUS_TO_TASK_STATUS = {
+    'finished': 'completed',
+    'stopped': 'completed',
+    'error': 'failed',
+    'rejected': 'failed',
+}
+
+
+async def _resolve_app_conversation_id(conversation_id: str) -> str | None:
+    if not conversation_id:
+        return None
+    if not conversation_id.startswith('task-'):
+        return conversation_id
+    start_task_id = conversation_id[5:]
+    async with httpx.AsyncClient(timeout=8) as client:
+        resp = await client.get(
+            f'http://127.0.0.1:12000/api/v1/app-conversations/start-tasks?ids={start_task_id}'
+        )
+        resp.raise_for_status()
+        tasks_data = resp.json()
+    if not tasks_data or not tasks_data[0]:
+        return None
+    return tasks_data[0].get('app_conversation_id')
+
+
+async def _get_execution_status(app_conversation_id: str) -> str | None:
+    async with httpx.AsyncClient(timeout=8) as client:
+        resp = await client.get(
+            f'http://127.0.0.1:12000/api/v1/app-conversations?ids={app_conversation_id}'
+        )
+        resp.raise_for_status()
+        convs = resp.json()
+    if not convs or not convs[0]:
+        return None
+    status = convs[0].get('execution_status')
+    return status.lower() if isinstance(status, str) else None
+
+
+async def _sync_task_status_from_execution(task_svc: TaskService, task_info):
+    if task_info.status != 'running' or not task_info.conversation_id:
+        return task_info
+    try:
+        app_conversation_id = await _resolve_app_conversation_id(task_info.conversation_id)
+        if not app_conversation_id:
+            return task_info
+        execution_status = await _get_execution_status(app_conversation_id)
+        new_status = TERMINAL_EXECUTION_STATUS_TO_TASK_STATUS.get(execution_status or '')
+        if not new_status:
+            return task_info
+        kwargs: dict = {'status': new_status}
+        if new_status in ('completed', 'failed'):
+            kwargs['completed_at'] = datetime.now(timezone.utc)
+        await task_svc.update_task(task_info.id, **kwargs)
+        updated = await task_svc.get_task(task_info.id)
+        return updated if updated else task_info
+    except Exception:
+        return task_info
 
 
 @router.get('')
@@ -30,6 +91,7 @@ async def list_tasks(
             created_by=created_by, status=status, agent_id=agent_id,
             search=search, limit=limit, offset=offset,
         )
+        tasks = [await _sync_task_status_from_execution(svc, t) for t in tasks]
         total = await svc.count_tasks(created_by=created_by, status=status, agent_id=agent_id)
         return {'tasks': [t.model_dump() for t in tasks], 'total': total}
     finally:
@@ -84,6 +146,7 @@ async def get_task(task_id: str):
         task = await svc.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail='Task not found')
+        task = await _sync_task_status_from_execution(svc, task)
         return task.model_dump()
     finally:
         await db.close()
@@ -100,7 +163,6 @@ async def update_task(task_id: str, data: TaskUpdate):
         if data.status is not None:
             kwargs['status'] = data.status
             if data.status == 'completed':
-                from datetime import datetime, timezone
                 kwargs['completed_at'] = datetime.now(timezone.utc)
         if not kwargs:
             return {'status': 'no_change'}

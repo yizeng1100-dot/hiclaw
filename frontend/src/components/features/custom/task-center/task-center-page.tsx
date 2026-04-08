@@ -99,7 +99,7 @@ export function TaskCenterPage() {
             appConvId = st?.app_conversation_id ?? null;
           }
           if (!appConvId) continue;
-          const convs = await V1ConversationService.getConversations([
+          const convs = await V1ConversationService.batchGetAppConversations([
             appConvId,
           ]);
           const conv = convs?.[0];

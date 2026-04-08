@@ -44,6 +44,8 @@ export function TaskDetailPage() {
   const [loading, setLoading] = React.useState(true);
   const [phases, setPhases] = React.useState<WorkflowPhase[]>(DEFAULT_PHASES);
   const [phasesDone, setPhasesDone] = React.useState<boolean[]>([false]);
+  const [conversationExecutionStatus, setConversationExecutionStatus] =
+    React.useState<string | null>(null);
 
   // Load task and agent workflow phases
   React.useEffect(() => {
@@ -101,20 +103,19 @@ export function TaskDetailPage() {
     }
   }, [task?.conversation_id]);
 
-  // Auto-complete: poll conversation execution_status, mark task completed
-  // when the LLM finishes (FINISHED/STOPPED)
   React.useEffect(() => {
     if (!resolvedConvId || !taskId || task?.status !== "running") return;
-    const interval = setInterval(async () => {
+
+    const syncStatus = async () => {
       try {
-        const convs = await V1ConversationService.getConversations([
+        const convs = await V1ConversationService.batchGetAppConversations([
           resolvedConvId,
         ]);
         const conv = convs?.[0];
-        if (
-          conv?.execution_status?.toLowerCase() === "finished" ||
-          conv?.execution_status?.toLowerCase() === "stopped"
-        ) {
+        const execStatus = conv?.execution_status?.toLowerCase() ?? null;
+        setConversationExecutionStatus(execStatus);
+
+        if (execStatus === "finished" || execStatus === "stopped") {
           await TaskService.updateTask(taskId, { status: "completed" });
           const updated = await TaskService.getTask(taskId);
           setTask(updated);
@@ -122,17 +123,31 @@ export function TaskDetailPage() {
       } catch {
         /* ignore */
       }
-    }, 8000);
+    };
+
+    syncStatus();
+    const interval = setInterval(syncStatus, 8000);
     return () => clearInterval(interval);
   }, [resolvedConvId, taskId, task?.status]);
 
-  // Check real progress by probing output files from workflow phases
   React.useEffect(() => {
+    if (
+      task?.status === "running" &&
+      !["finished", "stopped", "error"].includes(
+        (conversationExecutionStatus || "").toLowerCase(),
+      )
+    ) {
+      setPhasesDone(phases.map(() => false));
+    }
+
     if (
       !resolvedConvId ||
       task?.status === "pending" ||
       task?.status === "cancelled" ||
-      phases.length === 0
+      phases.length === 0 ||
+      !["finished", "stopped", "error"].includes(
+        (conversationExecutionStatus || "").toLowerCase(),
+      )
     )
       return;
 
@@ -156,25 +171,10 @@ export function TaskDetailPage() {
         if (!phases[i].file && results[i + 1]) results[i] = true;
       }
       setPhasesDone(results);
-
-      // Auto-complete task when all phases with files are done
-      if (task?.status === "running" && taskId) {
-        const allDone = phases.every((p, idx) => !p.file || results[idx]);
-        const hasAnyDone = results.some(Boolean);
-        if (allDone && hasAnyDone) {
-          TaskService.updateTask(taskId, { status: "completed" })
-            .then(() => TaskService.getTask(taskId).then(setTask))
-            .catch(() => {});
-        }
-      }
     };
 
     checkFiles();
-    if (task?.status === "running") {
-      const interval = setInterval(checkFiles, 10000);
-      return () => clearInterval(interval);
-    }
-  }, [resolvedConvId, task?.status, phases, taskId]);
+  }, [resolvedConvId, task?.status, phases, conversationExecutionStatus]);
 
   const handleCancel = async () => {
     if (!taskId) return;
