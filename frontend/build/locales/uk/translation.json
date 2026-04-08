@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "Від'єднати",
   "ORG$CLAIM_SUCCESS": "Організацію успішно заявлено.",
   "ORG$DISCONNECT_SUCCESS": "Організацію від'єднано.",
-  "ORG$CLAIM_ERROR": "Помилка з'єднання. Організація вже заявлена."
+  "ORG$CLAIM_ERROR": "Помилка з'єднання. Організація вже заявлена.",
+  "ORG$DISCONNECT_ERROR": "Не вдалося від'єднати організацію.",
+  "ORG$NO_GIT_ORGANIZATIONS": "Організації Git не знайдено."
 }

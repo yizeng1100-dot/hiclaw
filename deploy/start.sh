@@ -270,6 +270,7 @@ if [ -f "$GITEA_TEMPLATE" ]; then
 fi
 
 # ─── DB schema migration (add HiClaw custom columns) ───
+# Adds columns for HiClaw remote agent support and upstream tags column
 OH_DB="$HOME/.openhands/openhands.db"
 if [ -f "$OH_DB" ]; then
     $PYTHON -c "
@@ -282,10 +283,20 @@ try:
         conn.close()
         sys.exit(0)
     cols = [r[1] for r in conn.execute('PRAGMA table_info(conversation_metadata)').fetchall()]
-    if 'remote_agent_url' not in cols:
-        conn.execute('ALTER TABLE conversation_metadata ADD COLUMN remote_agent_url TEXT')
+    migrations = [
+        ('remote_agent_url',  'TEXT'),
+        ('remote_working_dir','TEXT'),
+        ('remote_host',       'TEXT'),
+        ('tags',              'JSON'),
+    ]
+    added = []
+    for col, ctype in migrations:
+        if col not in cols:
+            conn.execute(f'ALTER TABLE conversation_metadata ADD COLUMN {col} {ctype}')
+            added.append(col)
+    if added:
         conn.commit()
-        print('  DB migration: added remote_agent_url column')
+        print(f'  DB migration: added columns {added}')
     conn.close()
 except Exception as e:
     print(f'  DB migration: skipped ({e})')

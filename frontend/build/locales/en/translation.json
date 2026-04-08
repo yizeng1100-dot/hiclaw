@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "Disconnect",
   "ORG$CLAIM_SUCCESS": "Organization claimed successfully.",
   "ORG$DISCONNECT_SUCCESS": "Organization disconnected.",
-  "ORG$CLAIM_ERROR": "Connection failed. Org is already claimed."
+  "ORG$CLAIM_ERROR": "Connection failed. Org is already claimed.",
+  "ORG$DISCONNECT_ERROR": "Failed to disconnect organization.",
+  "ORG$NO_GIT_ORGANIZATIONS": "No Git organizations found."
 }

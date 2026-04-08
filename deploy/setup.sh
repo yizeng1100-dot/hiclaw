@@ -19,7 +19,7 @@
 #   内容: 一个包搞定本机所有运行依赖
 #     ./hiclaw-python        — Python 3.12 可执行文件
 #     ./hiclaw-uvicorn       — Uvicorn 可执行文件
-#     ./packages/            — 所有 Python 依赖 (openhands-sdk, fastapi, playwright 等)
+#     ./packages/            — 所有 Python 依赖 (openhands-sdk 1.16.1, fastapi, playwright 等)
 #     ./bin/gitea            — Gitea 1.22.6 (bindata, 内嵌 Web 资源)
 #     ./ms-playwright/       — Chromium 浏览器二进制
 #   解压到: ~/.hiclaw/runtime/
@@ -27,6 +27,11 @@
 #     - 把 bin/gitea 移到 ~/.hiclaw/bin/gitea
 #     - 把 ms-playwright/ 移到 ~/.cache/ms-playwright/
 #   验证: ~/.hiclaw/runtime/hiclaw-python -c 'import uvicorn,fastapi;print("OK")'
+#
+#   ⚠ 版本依赖（重打包时务必匹配）:
+#     - openhands-sdk == openhands-tools == openhands-agent-server == 1.16.1
+#     - 与 ghcr.io/openhands/agent-server:1.16.1-python Docker 镜像配套使用
+#
 #   打包方法 (在有网机器上):
 #     1. 解压旧 runtime: tar xzf hiclaw-runtime.tar.gz -C /tmp/repack/
 #     2. 加 Gitea:       cp gitea /tmp/repack/bin/gitea && chmod +x /tmp/repack/bin/gitea

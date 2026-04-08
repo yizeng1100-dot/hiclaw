@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "Bağlantıyı Kes",
   "ORG$CLAIM_SUCCESS": "Organizasyon başarıyla talep edildi.",
   "ORG$DISCONNECT_SUCCESS": "Organizasyon bağlantısı kesildi.",
-  "ORG$CLAIM_ERROR": "Bağlantı başarısız. Organizasyon zaten talep edilmiş."
+  "ORG$CLAIM_ERROR": "Bağlantı başarısız. Organizasyon zaten talep edilmiş.",
+  "ORG$DISCONNECT_ERROR": "Organizasyon bağlantısı kesilemedi.",
+  "ORG$NO_GIT_ORGANIZATIONS": "Git organizasyonu bulunamadı."
 }

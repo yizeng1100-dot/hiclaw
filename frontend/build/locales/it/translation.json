@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "Disconnetti",
   "ORG$CLAIM_SUCCESS": "Organizzazione rivendicata con successo.",
   "ORG$DISCONNECT_SUCCESS": "Organizzazione disconnessa.",
-  "ORG$CLAIM_ERROR": "Connessione fallita. L'organizzazione è già stata rivendicata."
+  "ORG$CLAIM_ERROR": "Connessione fallita. L'organizzazione è già stata rivendicata.",
+  "ORG$DISCONNECT_ERROR": "Impossibile disconnettere l'organizzazione.",
+  "ORG$NO_GIT_ORGANIZATIONS": "Nessuna organizzazione Git trovata."
 }

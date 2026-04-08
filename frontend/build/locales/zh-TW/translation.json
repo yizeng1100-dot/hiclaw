@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "斷開連接",
   "ORG$CLAIM_SUCCESS": "組織認領成功。",
   "ORG$DISCONNECT_SUCCESS": "組織已斷開連接。",
-  "ORG$CLAIM_ERROR": "連接失敗。組織已被認領。"
+  "ORG$CLAIM_ERROR": "連接失敗。組織已被認領。",
+  "ORG$DISCONNECT_ERROR": "斷開組織連接失敗。",
+  "ORG$NO_GIT_ORGANIZATIONS": "未找到 Git 組織。"
 }

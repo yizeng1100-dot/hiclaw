@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "Trennen",
   "ORG$CLAIM_SUCCESS": "Organisation erfolgreich beansprucht.",
   "ORG$DISCONNECT_SUCCESS": "Organisation getrennt.",
-  "ORG$CLAIM_ERROR": "Verbindung fehlgeschlagen. Organisation wurde bereits beansprucht."
+  "ORG$CLAIM_ERROR": "Verbindung fehlgeschlagen. Organisation wurde bereits beansprucht.",
+  "ORG$DISCONNECT_ERROR": "Trennung der Organisation fehlgeschlagen.",
+  "ORG$NO_GIT_ORGANIZATIONS": "Keine Git-Organisationen gefunden."
 }

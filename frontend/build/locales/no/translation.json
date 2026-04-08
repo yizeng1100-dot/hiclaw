@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "Koble fra",
   "ORG$CLAIM_SUCCESS": "Organisasjonen ble krevd.",
   "ORG$DISCONNECT_SUCCESS": "Organisasjonen ble frakoblet.",
-  "ORG$CLAIM_ERROR": "Tilkobling mislyktes. Organisasjonen er allerede krevd."
+  "ORG$CLAIM_ERROR": "Tilkobling mislyktes. Organisasjonen er allerede krevd.",
+  "ORG$DISCONNECT_ERROR": "Kunne ikke koble fra organisasjonen.",
+  "ORG$NO_GIT_ORGANIZATIONS": "Ingen Git-organisasjoner funnet."
 }

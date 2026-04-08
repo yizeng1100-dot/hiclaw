@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "Déconnecter",
   "ORG$CLAIM_SUCCESS": "Organisation revendiquée avec succès.",
   "ORG$DISCONNECT_SUCCESS": "Organisation déconnectée.",
-  "ORG$CLAIM_ERROR": "Échec de la connexion. L'organisation est déjà revendiquée."
+  "ORG$CLAIM_ERROR": "Échec de la connexion. L'organisation est déjà revendiquée.",
+  "ORG$DISCONNECT_ERROR": "Échec de la déconnexion de l'organisation.",
+  "ORG$NO_GIT_ORGANIZATIONS": "Aucune organisation Git trouvée."
 }

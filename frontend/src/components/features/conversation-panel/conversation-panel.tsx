@@ -137,7 +137,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
     if (selectedIds.size === conversations.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(conversations.map((c) => c.conversation_id)));
+      setSelectedIds(new Set(conversations.map((c) => c.id)));
     }
   };
 

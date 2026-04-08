@@ -443,10 +443,7 @@ export function ChatInterface() {
           {/* >>> CUSTOM: HiClaw — skills commit bar <<< */}
           <SkillsCommitBar />
           {/* >>> END CUSTOM <<< */}
-          <InteractiveChatBox
-            onSubmit={handleSendMessage}
-            disabled={isNewConversationPending}
-          />
+          <InteractiveChatBox onSubmit={handleSendMessage} />
         </div>
 
         {config?.app_mode !== "saas" && !isV1Conversation && (
