@@ -130,13 +130,32 @@ async def proxy_http(port: int, path: str, request: Request):
                 headers=dict(resp.headers),
             )
         except httpx.ConnectError:
-            return Response(content=b'Tunnel not available', status_code=502)
+            # Tunnel is dead — return 410 Gone so frontend stops retrying.
+            # 502 makes browsers retry forever; 410 = "this resource is permanently gone"
+            return Response(
+                content=b'{"error":"sandbox_stopped","detail":"Tunnel disconnected. Restart the sandbox to continue."}',
+                status_code=410,
+                media_type='application/json',
+            )
 
 
 @router.websocket('/{port}/{path:path}')
 async def proxy_websocket(websocket: WebSocket, port: int, path: str):
     """Proxy WebSocket connections to the local SSH tunnel port."""
+    import socket as _socket
     import websockets
+
+    # >>> CUSTOM: HiClaw — pre-flight check before accepting WS connection.
+    # If tunnel port is dead, reject with 1011 (server error) so the browser
+    # WebSocket client surfaces it cleanly instead of looping reconnects.
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.settimeout(0.3)
+            s.connect(('127.0.0.1', port))
+    except Exception:
+        await websocket.close(code=1011, reason='sandbox_stopped')
+        return
+    # <<< END CUSTOM
 
     await websocket.accept()
 
