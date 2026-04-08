@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from openhands.integrations.provider import ProviderToken, ProviderType
+from openhands.integrations.service_types import UserGitInfo
 from openhands.server.app import app
 from openhands.server.user_auth.user_auth import UserAuth
 from openhands.storage.data_models.secrets import Secrets
@@ -51,6 +52,9 @@ class MockUserAuth(UserAuth):
     async def get_mcp_api_key(self) -> str | None:
         return None
 
+    async def get_user_git_info(self) -> UserGitInfo | None:
+        return None
+
     @classmethod
     async def get_instance(cls, request: Request) -> UserAuth:
         return MockUserAuth()
@@ -65,7 +69,7 @@ def test_client():
     # Create a test client
     with (
         patch.dict(os.environ, {'SESSION_API_KEY': ''}, clear=False),
-        patch('openhands.server.dependencies._SESSION_API_KEY', None),
+        patch('openhands.app_server.utils.dependencies._SESSION_API_KEY', None),
         patch(
             'openhands.server.user_auth.user_auth.UserAuth.get_instance',
             return_value=MockUserAuth(),
@@ -96,13 +100,13 @@ async def test_settings_api_endpoints(test_client):
     }
 
     # Make the POST request to store settings
-    response = test_client.post('/api/settings', json=settings_data)
+    response = test_client.post('/api/v1/settings', json=settings_data)
 
     # We're not checking the exact response, just that it doesn't error
     assert response.status_code == 200
 
     # Test the GET settings endpoint
-    response = test_client.get('/api/settings')
+    response = test_client.get('/api/v1/settings')
     assert response.status_code == 200
 
     # Test updating with partial settings
@@ -112,11 +116,11 @@ async def test_settings_api_endpoints(test_client):
         'llm_api_key': None,  # Should preserve existing value
     }
 
-    response = test_client.post('/api/settings', json=partial_settings)
+    response = test_client.post('/api/v1/settings', json=partial_settings)
     assert response.status_code == 200
 
     # Test the unset-provider-tokens endpoint
-    response = test_client.post('/api/unset-provider-tokens')
+    response = test_client.delete('/api/v1/secrets/git-providers')
     assert response.status_code == 200
 
 
@@ -128,11 +132,11 @@ async def test_search_api_key_preservation(test_client):
         'search_api_key': 'initial-secret-key',
         'llm_model': 'gpt-4',
     }
-    response = test_client.post('/api/settings', json=initial_settings)
+    response = test_client.post('/api/v1/settings', json=initial_settings)
     assert response.status_code == 200
 
     # Verify key is set
-    response = test_client.get('/api/settings')
+    response = test_client.get('/api/v1/settings')
     assert response.status_code == 200
     assert response.json()['search_api_key_set'] is True
 
@@ -142,11 +146,11 @@ async def test_search_api_key_preservation(test_client):
         'search_api_key': '',  # The frontend sends an empty string here
         'llm_model': 'claude-3-opus',
     }
-    response = test_client.post('/api/settings', json=update_settings)
+    response = test_client.post('/api/v1/settings', json=update_settings)
     assert response.status_code == 200
 
     # 3. Verify the key was NOT wiped out (The Critical Check)
-    response = test_client.get('/api/settings')
+    response = test_client.get('/api/v1/settings')
     assert response.status_code == 200
     # If the bug was present, this would be False
     assert response.json()['search_api_key_set'] is True
@@ -163,11 +167,11 @@ async def test_disabled_skills_persistence(test_client):
         'llm_api_key': 'test-key',
         'disabled_skills': ['skill_a', 'skill_b'],
     }
-    response = test_client.post('/api/settings', json=settings_data)
+    response = test_client.post('/api/v1/settings', json=settings_data)
     assert response.status_code == 200
 
     # 2. Retrieve and verify
-    response = test_client.get('/api/settings')
+    response = test_client.get('/api/v1/settings')
     assert response.status_code == 200
     data = response.json()
     assert data['disabled_skills'] == ['skill_a', 'skill_b']
@@ -176,10 +180,10 @@ async def test_disabled_skills_persistence(test_client):
     update_settings = {
         'disabled_skills': ['skill_c'],
     }
-    response = test_client.post('/api/settings', json=update_settings)
+    response = test_client.post('/api/v1/settings', json=update_settings)
     assert response.status_code == 200
 
-    response = test_client.get('/api/settings')
+    response = test_client.get('/api/v1/settings')
     assert response.status_code == 200
     data = response.json()
     assert data['disabled_skills'] == ['skill_c']
@@ -188,10 +192,10 @@ async def test_disabled_skills_persistence(test_client):
     update_settings = {
         'disabled_skills': [],
     }
-    response = test_client.post('/api/settings', json=update_settings)
+    response = test_client.post('/api/v1/settings', json=update_settings)
     assert response.status_code == 200
 
-    response = test_client.get('/api/settings')
+    response = test_client.get('/api/v1/settings')
     assert response.status_code == 200
     data = response.json()
     assert data['disabled_skills'] == []

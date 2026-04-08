@@ -106,6 +106,9 @@ class StoredConversationMetadata(Base):  # type: ignore
     remote_host = Column(String, nullable=True)
     # >>> END CUSTOM <<<
 
+    # Tags for conversation metadata (e.g., automation context, skills used)
+    tags = Column(create_json_type_decorator(dict[str, str]), nullable=True)
+
 
 @dataclass
 class SQLAppConversationInfoService(AppConversationInfoService):
@@ -374,6 +377,7 @@ class SQLAppConversationInfoService(AppConversationInfoService):
             remote_working_dir=info.remote_working_dir,
             remote_host=info.remote_host,
             # >>> END CUSTOM <<<
+            tags=info.tags if info.tags else None,
         )
 
         await self.db_session.merge(stored)
@@ -566,6 +570,7 @@ class SQLAppConversationInfoService(AppConversationInfoService):
             remote_working_dir=getattr(stored, 'remote_working_dir', None),
             remote_host=getattr(stored, 'remote_host', None),
             # >>> END CUSTOM <<<
+            tags=stored.tags or {},
             created_at=created_at,
             updated_at=updated_at,
         )
