@@ -11,7 +11,40 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from openhands.sdk.utils.redact import sanitize_dict
+# >>> CUSTOM: HiClaw — graceful fallback when older openhands-sdk lacks
+# `openhands.sdk.utils.redact`. Inlines sanitize_dict so the app boots on
+# whichever SDK version is bundled in the runtime.
+try:
+    from openhands.sdk.utils.redact import sanitize_dict  # type: ignore
+except (ImportError, ModuleNotFoundError):
+    _SECRET_KEY_TOKENS = (
+        'AUTHORIZATION',
+        'COOKIE',
+        'CREDENTIAL',
+        'KEY',
+        'PASSWORD',
+        'SECRET',
+        'SESSION',
+        'TOKEN',
+    )
+
+    def _looks_like_secret(key: str) -> bool:
+        upper = key.upper()
+        return any(token in upper for token in _SECRET_KEY_TOKENS)
+
+    def sanitize_dict(value: Any) -> Any:  # type: ignore[misc]
+        """Recursively replace values whose key looks like a secret."""
+        if isinstance(value, dict):
+            return {
+                k: ('<redacted>' if _looks_like_secret(str(k)) else sanitize_dict(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [sanitize_dict(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(sanitize_dict(item) for item in value)
+        return value
+# <<< END CUSTOM
 
 # ---------------------------------------------------------------------------
 # URL param redaction

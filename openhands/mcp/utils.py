@@ -24,7 +24,7 @@ from openhands.mcp.client import MCPClient
 from openhands.mcp.error_collector import mcp_error_collector
 from openhands.runtime.base import Runtime
 from openhands.runtime.impl.cli.cli_runtime import CLIRuntime
-from openhands.sdk.utils.redact import sanitize_dict
+from openhands.utils._redact_compat import sanitize_dict  # >>> CUSTOM: HiClaw — fallback for older SDK <<<
 
 
 def convert_mcp_clients_to_tools(mcp_clients: list[MCPClient] | None) -> list[dict]:
