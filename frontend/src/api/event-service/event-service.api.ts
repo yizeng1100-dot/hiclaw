@@ -42,38 +42,46 @@ class EventService {
   /**
    * Get event count for a V1 conversation
    * @param conversationId The conversation ID
-   * @param conversationUrl The conversation URL (e.g., "http://localhost:54928/api/conversations/...")
-   * @param sessionApiKey Session API key for authentication (required for V1)
+   * @param conversationUrl The conversation URL (kept for API compatibility, ignored)
+   * @param sessionApiKey Session API key (kept for API compatibility, ignored)
    * @returns The event count
+   *
+   * >>> CUSTOM: HiClaw <<<
+   * Read from app-server's local event store instead of the sandbox tunnel.
+   * This way, stopped/restarted conversations can still load history without
+   * needing the SSH tunnel to be alive.
    */
   static async getEventCount(
     conversationId: string,
-    conversationUrl: string,
-    sessionApiKey?: string | null,
+    _conversationUrl: string,
+    _sessionApiKey?: string | null,
   ): Promise<number> {
-    // Build the runtime URL using the conversation URL
-    const runtimeUrl = buildHttpBaseUrl(conversationUrl);
-
-    // Build session headers for authentication
-    const headers = buildSessionHeaders(sessionApiKey);
-
-    const { data } = await axios.get<number>(
-      `${runtimeUrl}/api/conversations/${conversationId}/events/count`,
-      { headers },
+    const { data } = await openHands.get<number>(
+      `/api/v1/conversation/${conversationId}/events/count`,
     );
     return data;
   }
 
   // V1 conversations — App Server REST endpoint
+  // >>> CUSTOM: HiClaw — paginate to load full history (was limited to 100) <<<
   static async searchEventsV1(conversationId: string, limit = 100) {
-    const { data } = await openHands.get<{
-      items: OpenHandsEvent[];
-    }>(`/api/v1/conversation/${conversationId}/events/search`, {
-      params: { limit },
-    });
-
-    return data.items;
+    const all: OpenHandsEvent[] = [];
+    let pageId: string | null = null;
+    // Cap pages to avoid runaway loops
+    for (let i = 0; i < 100; i += 1) {
+      const params: Record<string, string | number> = { limit };
+      if (pageId) params.page_id = pageId;
+      const { data } = await openHands.get<{
+        items: OpenHandsEvent[];
+        next_page_id?: string | null;
+      }>(`/api/v1/conversation/${conversationId}/events/search`, { params });
+      if (Array.isArray(data.items)) all.push(...data.items);
+      if (!data.next_page_id) break;
+      pageId = data.next_page_id;
+    }
+    return all;
   }
+  // >>> END CUSTOM <<<
 
   // V0 conversations — Legacy REST endpoint
   static async searchEventsV0(conversationId: string, limit = 100) {
