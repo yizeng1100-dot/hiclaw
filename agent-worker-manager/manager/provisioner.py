@@ -233,47 +233,76 @@ class Provisioner:
                 return
 
         # ── Step 2: Agent SDK ──
-        # Check: binary exists AND actually works (import test)
+        # Check: binary exists AND actually works (import test) AND version matches expected
         binary = self.tmpl["binary"].replace("$HOME", "~")
         venv = self.tmpl["venv_path"]
         has_sdk = await self._check_remote(
             f"test -f {binary} || test -f /opt/agent-venv/bin/agent-server"
         )
         sdk_healthy = False
+        # >>> CUSTOM: HiClaw — extract expected version from pip_package for comparison <<<
+        # pip_package example: "openhands-agent-server==1.16.1 openhands-sdk==1.16.1 ..."
+        import re as _re
+        _m = _re.search(r"openhands-sdk==(\S+)", self.tmpl.get("pip_package", ""))
+        expected_sdk_version = _m.group(1) if _m else None
+        # >>> END CUSTOM <<<
         if has_sdk:
-            # >>> CUSTOM: HiClaw — verify SDK actually works, not just file exists <<<
+            # >>> CUSTOM: HiClaw — verify SDK works AND matches expected version <<<
             verify_out, _, verify_ec = await self.ssh.run(
                 f"PYTHONPATH={venv}/lib {remote_python} -c '"
-                "import openhands.agent_server; print(\"VERIFY_OK\")"
+                "import openhands.agent_server; "
+                "import importlib.metadata; "
+                "print(\"VERIFY_OK\", importlib.metadata.version(\"openhands-sdk\"))"
                 "' 2>&1", timeout=15)
+            installed_version = None
             if "VERIFY_OK" in verify_out:
+                try:
+                    installed_version = verify_out.split("VERIFY_OK", 1)[1].strip().split()[0]
+                except Exception:
+                    installed_version = None
+            version_matches = (
+                expected_sdk_version is not None
+                and installed_version == expected_sdk_version
+            )
+            if "VERIFY_OK" in verify_out and version_matches:
                 sdk_healthy = True
-                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Already installed")
+                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped",
+                           detail=f"Already installed v{installed_version}")
                 # Always regenerate wrapper scripts (ensure monkey-patch is up to date)
                 await self._write_wrapper_scripts(venv, remote_python)
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed & verified")
-                logger.info(f"[{self._host}] SDK: already installed and verified, wrapper regenerated")
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed",
+                           detail=f"Already installed v{installed_version} & verified")
+                logger.info(f"[{self._host}] SDK: v{installed_version} already installed, wrapper regenerated")
             else:
-                # Binary exists but broken — clean up everything and reinstall
-                logger.warning(f"[{self._host}] SDK binary broken: {verify_out.strip()[-200:]}")
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
-                           detail="Existing install is broken, cleaning up and reinstalling...")
+                # Binary exists but broken OR outdated — clean up everything and reinstall
+                if "VERIFY_OK" in verify_out and not version_matches:
+                    reason = f"version mismatch: installed={installed_version}, expected={expected_sdk_version}"
+                    logger.warning(f"[{self._host}] SDK {reason}, upgrading")
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
+                               detail=f"Upgrading: {reason}")
+                else:
+                    logger.warning(f"[{self._host}] SDK binary broken: {verify_out.strip()[-200:]}")
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
+                               detail="Existing install is broken, cleaning up and reinstalling...")
                 await self.ssh.run(
                     f"rm -rf {venv} {REMOTE_DEPS_PATH}/wheels "
                     f"/opt/agent-venv "  # legacy path
                     f"~/.hiclaw/agent-deps/python3-standalone",  # old python path
                     timeout=30)
-                logger.info(f"[{self._host}] Cleaned up broken SDK install")
+                logger.info(f"[{self._host}] Cleaned up old SDK install")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
                            detail="Cleanup done. Re-uploading and reinstalling...")
             # >>> END CUSTOM <<<
 
         if not sdk_healthy:
-            # Check: wheels already on remote?
+            # >>> CUSTOM: HiClaw — ALWAYS re-upload wheels after cleanup (version mismatch or broken) <<<
+            # The cleanup step above removes REMOTE_DEPS_PATH/wheels, so the remote dir
+            # won't exist and we'll re-upload the latest wheels from our local deps/.
             has_wheels = await self._check_remote(f"test -d {REMOTE_DEPS_PATH}/wheels")
             if has_wheels:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Wheels already on remote")
                 logger.info(f"[{self._host}] SDK wheels already on remote, skipping upload")
+            # >>> END CUSTOM <<<
             else:
                 wheels_dir = os.path.join(DEPS_DIR, "wheels")
                 if not os.path.isdir(wheels_dir):
