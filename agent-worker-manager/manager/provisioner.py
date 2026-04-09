@@ -240,6 +240,9 @@ class Provisioner:
             f"test -f {binary} || test -f /opt/agent-venv/bin/agent-server"
         )
         sdk_healthy = False
+        # >>> CUSTOM: HiClaw — track whether to force re-upload wheels <<<
+        force_reupload_wheels = False
+        # >>> END CUSTOM <<<
         # >>> CUSTOM: HiClaw — extract expected version from pip_package for comparison <<<
         # pip_package example: "openhands-agent-server==1.16.1 openhands-sdk==1.16.1 ..."
         import re as _re
@@ -289,21 +292,37 @@ class Provisioner:
                     logger.warning(f"[{self._host}] SDK binary broken: {verify_out.strip()[-200:]}")
                     yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
                                detail="Existing install is broken, cleaning up and reinstalling...")
+                # >>> CUSTOM: HiClaw — force-clean wheels too, then verify removal <<<
                 await self.ssh.run(
                     f"rm -rf {venv} {REMOTE_DEPS_PATH}/wheels "
                     f"/opt/agent-venv "  # legacy path
                     f"~/.hiclaw/agent-deps/python3-standalone",  # old python path
                     timeout=30)
+                # Verify cleanup actually removed the wheels dir
+                check_cleanup, _, _ = await self.ssh.run(
+                    f"test -d {REMOTE_DEPS_PATH}/wheels && echo STILL_THERE || echo CLEAN",
+                    timeout=5,
+                )
+                if "STILL_THERE" in check_cleanup:
+                    # Force re-create as empty so the upload path runs
+                    await self.ssh.run(
+                        f"rm -rf {REMOTE_DEPS_PATH}/wheels && mkdir -p {REMOTE_DEPS_PATH}",
+                        timeout=10,
+                    )
+                # >>> END CUSTOM <<<
                 logger.info(f"[{self._host}] Cleaned up old SDK install")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
                            detail="Cleanup done. Re-uploading and reinstalling...")
+                # >>> CUSTOM: HiClaw — mark that we MUST re-upload after broken install <<<
+                force_reupload_wheels = True
             # >>> END CUSTOM <<<
 
         if not sdk_healthy:
-            # >>> CUSTOM: HiClaw — ALWAYS re-upload wheels after cleanup (version mismatch or broken) <<<
-            # The cleanup step above removes REMOTE_DEPS_PATH/wheels, so the remote dir
-            # won't exist and we'll re-upload the latest wheels from our local deps/.
-            has_wheels = await self._check_remote(f"test -d {REMOTE_DEPS_PATH}/wheels")
+            # >>> CUSTOM: HiClaw — re-upload wheels if forced OR not present <<<
+            has_wheels = (
+                False if force_reupload_wheels
+                else await self._check_remote(f"test -d {REMOTE_DEPS_PATH}/wheels")
+            )
             if has_wheels:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Wheels already on remote")
                 logger.info(f"[{self._host}] SDK wheels already on remote, skipping upload")
