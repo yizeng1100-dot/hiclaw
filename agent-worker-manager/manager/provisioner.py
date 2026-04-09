@@ -247,10 +247,15 @@ class Provisioner:
         expected_sdk_version = _m.group(1) if _m else None
         # >>> END CUSTOM <<<
         if has_sdk:
-            # >>> CUSTOM: HiClaw — verify SDK works AND matches expected version <<<
+            # >>> CUSTOM: HiClaw — verify ALL critical imports work AND version matches <<<
+            # Must check openhands.tools AND a sample dependency (binaryornot) too,
+            # otherwise broken installs (missing tools or deps) will be reused.
             verify_out, _, verify_ec = await self.ssh.run(
                 f"PYTHONPATH={venv}/lib {remote_python} -c '"
                 "import openhands.agent_server; "
+                "import openhands.sdk; "
+                "import openhands.tools; "
+                "import binaryornot; "
                 "import importlib.metadata; "
                 "print(\"VERIFY_OK\", importlib.metadata.version(\"openhands-sdk\"))"
                 "' 2>&1", timeout=15)
