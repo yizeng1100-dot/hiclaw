@@ -1,1 +1,0 @@
-import{R as o}from"./chunk-JZWAC4HX-BjkQ_KaV.js";import{u as r}from"./use-settings-COqadfoW.js";const i=s=>{if(!s)return[];const t=[];for(const e of Object.keys(s))e&&t.push(e);return t},d=()=>{const{data:s,isLoading:t}=r();return{providers:o.useMemo(()=>i(s?.provider_tokens_set),[s?.provider_tokens_set]),isLoadingSettings:t}};export{d as u};
