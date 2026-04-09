@@ -23,7 +23,16 @@ def upgrade() -> None:
 
     Tags store key-value pairs for automation context, skills used, etc.
     The column is nullable for backwards compatibility with existing rows.
+
+    >>> CUSTOM: HiClaw — idempotent: skip if column already exists
+    (handles DBs created via Base.metadata.create_all in tests/dev or
+    when re-running alembic against a partially-migrated DB).
     """
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_cols = {c['name'] for c in inspector.get_columns('conversation_metadata')}
+    if 'tags' in existing_cols:
+        return
     op.add_column(
         'conversation_metadata',
         sa.Column('tags', sa.JSON, nullable=True),

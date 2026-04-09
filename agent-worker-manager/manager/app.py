@@ -134,6 +134,33 @@ async def disconnect_machine(machine_id: str):
     return {"status": "disconnected"}
 
 
+# >>> CUSTOM: HiClaw — health probe + auto-reconnect endpoints <<<
+@app.post("/api/machines/{machine_id}/probe")
+async def probe_machine(machine_id: str):
+    """Probe machine health. Updates status to DISCONNECTED if checks fail."""
+    if not manager.get_machine(machine_id):
+        raise HTTPException(status_code=404, detail="Machine not found")
+    healthy = await manager.probe_machine_health(machine_id)
+    return {"healthy": healthy, "machine": manager.get_machine(machine_id)}
+
+
+@app.post("/api/machines/{machine_id}/reconnect")
+async def reconnect_machine(machine_id: str):
+    """Auto-reconnect using saved credentials. Returns 412 if no credentials saved."""
+    if not manager.get_machine(machine_id):
+        raise HTTPException(status_code=404, detail="Machine not found")
+    success, message = await manager.auto_reconnect(machine_id)
+    if not success:
+        if message == "no_saved_credentials":
+            raise HTTPException(
+                status_code=412,
+                detail={"error": "no_saved_credentials", "message": "No saved credentials, please reconnect manually"},
+            )
+        raise HTTPException(status_code=500, detail={"error": message})
+    return {"status": "reconnecting", "machine": manager.get_machine(machine_id)}
+# >>> END CUSTOM <<<
+
+
 # ─── SSE — provisioning progress stream ──────────────────
 
 @app.get("/api/machines/{machine_id}/events")

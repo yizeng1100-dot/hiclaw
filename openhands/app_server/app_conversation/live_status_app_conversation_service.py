@@ -616,6 +616,55 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             return []
 
     # >>> CUSTOM: HiClaw <<<
+    def _try_probe_and_reconnect(self, remote_host: str | None = None) -> None:
+        """Probe worker-manager machine health, trigger auto-reconnect if disconnected.
+
+        Synchronous wrapper around worker-manager API calls. Failures are silent —
+        the existing flow handles missing tunnel by returning PAUSED status.
+        """
+        if not remote_host:
+            return
+        try:
+            from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+            import httpx as _httpx
+            # Find machine_id matching the host
+            with _httpx.Client(timeout=2) as client:
+                resp = client.get(f'{WORKER_MANAGER_URL}/api/machines')
+                machines = resp.json()
+                target = None
+                for m in machines:
+                    if m.get('host') == remote_host:
+                        target = m
+                        break
+                if not target:
+                    return
+                machine_id = target['id']
+                status = target.get('status')
+                # Probe to refresh status if claimed READY
+                if status == 'ready':
+                    try:
+                        client.post(
+                            f'{WORKER_MANAGER_URL}/api/machines/{machine_id}/probe',
+                            timeout=8,
+                        )
+                        # Re-read status after probe
+                        resp2 = client.get(f'{WORKER_MANAGER_URL}/api/machines/{machine_id}')
+                        target = resp2.json()
+                        status = target.get('status')
+                    except Exception:
+                        pass
+                # If disconnected, attempt auto-reconnect using saved credentials
+                if status in ('disconnected', 'error'):
+                    try:
+                        client.post(
+                            f'{WORKER_MANAGER_URL}/api/machines/{machine_id}/reconnect',
+                            timeout=5,
+                        )
+                    except Exception:
+                        pass
+        except Exception as e:
+            _logger.debug(f'probe_and_reconnect failed for {remote_host}: {e}')
+
     def _get_tunnel_port_for_host(self, remote_host: str | None = None) -> int | None:
         """Get tunnel port from worker-manager, matching by remote_host if provided.
 
@@ -696,6 +745,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             conversation_url = None
             sandbox_status = SandboxStatus.PAUSED  # default: assume tunnel is dead
 
+            # >>> CUSTOM: HiClaw — probe machine health + auto-reconnect <<<
+            _conv_host = getattr(app_conversation_info, 'remote_host', None)
+            self._try_probe_and_reconnect(_conv_host)
+            # >>> END CUSTOM <<<
+
             # Try multiple sources for tunnel port:
             # 1. Saved remote_agent_url from conversation creation
             # 2. Worker Manager cache (for reconnected tunnels with new ports)
@@ -711,7 +765,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     pass
 
             # Also check Worker Manager for latest tunnel port (may have changed after reconnect)
-            _conv_host = getattr(app_conversation_info, 'remote_host', None)
             _wm_port = self._get_tunnel_port_for_host(_conv_host)
             if _wm_port:
                 tunnel_port = _wm_port  # prefer fresh port from Worker Manager

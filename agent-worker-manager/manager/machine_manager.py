@@ -27,6 +27,33 @@ logger = logging.getLogger(__name__)
 # >>> CUSTOM: HiClaw — persist machine state to disk <<<
 HICLAW_DIR = os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))
 STATE_FILE = os.path.join(HICLAW_DIR, 'machines-state.json')
+CREDS_FILE = os.path.join(HICLAW_DIR, 'machines-credentials.json')  # 0600 perm, separate from state
+
+
+def _save_credentials(creds: dict[str, dict]) -> None:
+    """Save SSH credentials separately, with restrictive perms."""
+    try:
+        os.makedirs(os.path.dirname(CREDS_FILE), exist_ok=True)
+        with open(CREDS_FILE, 'w') as f:
+            json.dump(creds, f)
+        try:
+            os.chmod(CREDS_FILE, 0o600)
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning(f'Failed to save credentials: {e}')
+
+
+def _load_credentials() -> dict[str, dict]:
+    """Load SSH credentials from disk."""
+    try:
+        if not os.path.exists(CREDS_FILE):
+            return {}
+        with open(CREDS_FILE) as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f'Failed to load credentials: {e}')
+        return {}
 
 
 def _save_machines_state(machines: dict[str, MachineInfo]) -> None:
@@ -92,6 +119,8 @@ class MachineManager:
     def __init__(self):
         # >>> CUSTOM: HiClaw — restore machines from disk <<<
         self._machines: dict[str, MachineInfo] = _load_machines_state()
+        # Credentials kept separately, only in memory + private file (0600)
+        self._credentials: dict[str, dict] = _load_credentials()
         # >>> END CUSTOM <<<
         self._ssh_clients: dict[str, SSHClient] = {}
         self._local_ports: dict[str, int] = {}
@@ -290,6 +319,22 @@ class MachineManager:
         self._event_queues[machine_id] = []
         self._provision_locks[machine_id] = asyncio.Lock()
         _save_machines_state(self._machines)  # >>> CUSTOM: HiClaw <<<
+
+        # >>> CUSTOM: HiClaw — persist credentials for auto-reconnect <<<
+        if req.password or req.private_key:
+            self._credentials[machine_id] = {
+                'host': req.host,
+                'port': req.port,
+                'username': req.username,
+                'password': req.password,
+                'private_key': req.private_key,
+                'mode': req.mode.value if hasattr(req.mode, 'value') else str(req.mode),
+                'template': req.template,
+                'workspace': req.workspace,
+                'agent_server_port': req.agent_server_port,
+            }
+            _save_credentials(self._credentials)
+        # >>> END CUSTOM <<<
 
         # Start provisioning in background
         asyncio.create_task(self._run_provisioning(machine_id, req))
@@ -916,6 +961,106 @@ class MachineManager:
 
     def list_machines(self) -> list[MachineInfo]:
         return list(self._machines.values())
+
+    # >>> CUSTOM: HiClaw — SSH health probe and auto-reconnect <<<
+    async def probe_machine_health(self, machine_id: str) -> bool:
+        """Quick liveness check: SSH ping + tunnel HTTP probe.
+
+        Updates machine.status to DISCONNECTED if any check fails.
+        Returns True if machine is healthy, False otherwise.
+        """
+        machine = self._machines.get(machine_id)
+        if not machine:
+            return False
+        if machine.status not in (MachineStatus.READY,):
+            return False  # Only check machines that claim to be ready
+
+        ssh = self._ssh_clients.get(machine_id)
+
+        # Check 1: SSH session alive
+        if not ssh or not ssh.connected:
+            logger.warning(f"[{machine.host}] SSH client missing or disconnected")
+            machine.status = MachineStatus.DISCONNECTED
+            machine.error = "SSH connection lost"
+            _save_machines_state(self._machines)
+            return False
+
+        # Check 2: SSH responds to a noop command quickly
+        try:
+            await asyncio.wait_for(ssh.run("true", timeout=3), timeout=4)
+        except Exception as e:
+            logger.warning(f"[{machine.host}] SSH ping failed: {e}")
+            machine.status = MachineStatus.DISCONNECTED
+            machine.error = f"SSH unresponsive: {e}"
+            _save_machines_state(self._machines)
+            return False
+
+        # Check 3: Tunnel HTTP probe
+        if machine.tunnel_port:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        f"http://localhost:{machine.tunnel_port}/health",
+                        timeout=3,
+                    )
+                    if resp.status_code != 200:
+                        logger.warning(f"[{machine.host}] Tunnel health returned {resp.status_code}")
+                        machine.status = MachineStatus.DISCONNECTED
+                        machine.error = f"Tunnel returned HTTP {resp.status_code}"
+                        _save_machines_state(self._machines)
+                        return False
+            except Exception as e:
+                logger.warning(f"[{machine.host}] Tunnel health probe failed: {e}")
+                machine.status = MachineStatus.DISCONNECTED
+                machine.error = f"Tunnel unreachable: {e}"
+                _save_machines_state(self._machines)
+                return False
+
+        return True
+
+    def get_saved_credentials(self, machine_id: str) -> dict | None:
+        """Return saved SSH credentials for auto-reconnect, or None if not stored."""
+        return self._credentials.get(machine_id)
+
+    async def auto_reconnect(self, machine_id: str) -> tuple[bool, str]:
+        """Try to reconnect a disconnected machine using saved credentials.
+
+        Returns (success, message). On failure, message tells the caller what to do.
+        """
+        creds = self._credentials.get(machine_id)
+        if not creds:
+            return False, "no_saved_credentials"
+
+        machine = self._machines.get(machine_id)
+        if not machine:
+            return False, "machine_not_found"
+
+        logger.info(f"[{machine.host}] Auto-reconnecting using saved credentials...")
+        # Clean up stale state first
+        await self._cleanup_machine(machine_id)
+        # Remove machine entry so connect_machine creates fresh
+        if machine_id in self._machines:
+            del self._machines[machine_id]
+
+        try:
+            mode_value = creds.get('mode', 'host')
+            req = ConnectMachineRequest(
+                host=creds['host'],
+                port=creds.get('port', 22),
+                username=creds['username'],
+                password=creds.get('password'),
+                private_key=creds.get('private_key'),
+                mode=WorkerMode(mode_value) if not isinstance(mode_value, WorkerMode) else mode_value,
+                template=creds.get('template', 'openhands'),
+                workspace=creds.get('workspace', ''),
+                agent_server_port=creds.get('agent_server_port', 8000),
+            )
+            await self.connect_machine(req)
+            return True, "reconnecting"
+        except Exception as e:
+            logger.error(f"[{machine.host}] Auto-reconnect failed: {e}", exc_info=True)
+            return False, f"reconnect_failed: {e}"
+    # >>> END CUSTOM <<<
 
     def get_ssh_client(self, machine_id: str) -> SSHClient | None:
         return self._ssh_clients.get(machine_id)

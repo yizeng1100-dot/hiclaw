@@ -116,7 +116,10 @@ async def proxy_http(port: int, path: str, request: Request):
     headers = dict(request.headers)
     headers.pop('host', None)
 
-    async with httpx.AsyncClient(timeout=300) as client:
+    # >>> CUSTOM: HiClaw — short request timeout so dead tunnels surface fast <<<
+    # The tunnel listener may be alive but SSH forwarding dead — TCP connect succeeds
+    # but the request hangs forever. Use 10s timeout to fail fast.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
         try:
             resp = await client.request(
                 method=request.method,
@@ -130,13 +133,49 @@ async def proxy_http(port: int, path: str, request: Request):
                 headers=dict(resp.headers),
             )
         except httpx.ConnectError:
-            # Tunnel is dead — return 410 Gone so frontend stops retrying.
-            # 502 makes browsers retry forever; 410 = "this resource is permanently gone"
+            # Tunnel listener is gone entirely
             return Response(
-                content=b'{"error":"sandbox_stopped","detail":"Tunnel disconnected. Restart the sandbox to continue."}',
+                content=b'{"error":"sandbox_disconnected","detail":"Tunnel disconnected. Reconnect needed."}',
                 status_code=410,
                 media_type='application/json',
             )
+        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ConnectTimeout):
+            # Listener is up but SSH forwarding is dead — auto-trigger reconnect
+            await _trigger_auto_reconnect_for_port(port)
+            return Response(
+                content=b'{"error":"sandbox_stale","detail":"Tunnel forwarding broken, reconnect triggered. Try again in a moment."}',
+                status_code=503,
+                media_type='application/json',
+            )
+
+
+async def _trigger_auto_reconnect_for_port(tunnel_port: int) -> None:
+    """When a tunnel is stale (TCP open but no forwarding), ask worker-manager
+    to find the matching machine and auto-reconnect using saved credentials."""
+    try:
+        from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f'{WORKER_MANAGER_URL}/api/machines')
+            machines = resp.json()
+            for m in machines:
+                if m.get('tunnel_port') == tunnel_port:
+                    machine_id = m['id']
+                    # Mark unhealthy then trigger reconnect
+                    try:
+                        await client.post(
+                            f'{WORKER_MANAGER_URL}/api/machines/{machine_id}/probe',
+                            timeout=5,
+                        )
+                        await client.post(
+                            f'{WORKER_MANAGER_URL}/api/machines/{machine_id}/reconnect',
+                            timeout=3,
+                        )
+                    except Exception:
+                        pass
+                    break
+    except Exception as e:
+        logger.debug(f'Auto-reconnect trigger failed: {e}')
+    # >>> END CUSTOM <<<
 
 
 @router.websocket('/{port}/{path:path}')
