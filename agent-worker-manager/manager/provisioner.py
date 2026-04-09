@@ -360,23 +360,27 @@ class Provisioner:
                 f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1; echo EXIT_CODE=$?", timeout=600)
             logger.info(f"[{self._host}] Pip pass 1 tail: {stdout_all[-300:]}")
 
-            # >>> CUSTOM: HiClaw — clean openhands/ namespace before pass 2 <<<
-            # When multiple wheels share the openhands/ namespace package, pip's
-            # --upgrade --ignore-installed --target mode can lose subpackages
-            # because each wheel install touches the shared dir. Clean slate first.
+            # >>> CUSTOM: HiClaw — aggressive clean before pass 2 <<<
+            # pip --target with shared namespace packages is unreliable across
+            # pip versions. Clean ALL openhands stuff completely first, then
+            # use --upgrade to force pip to write fresh files.
             await self.ssh.run(
-                f"rm -rf {venv}/lib/openhands {venv}/lib/openhands_*",
+                f"rm -rf {venv}/lib/openhands "
+                f"{venv}/lib/openhands_aci* "
+                f"{venv}/lib/openhands_sdk* "
+                f"{venv}/lib/openhands_tools* "
+                f"{venv}/lib/openhands_agent_server* "
+                f"{venv}/lib/binaryornot*",
                 timeout=15,
             )
             # >>> END CUSTOM <<<
 
             # Step 2c: Install openhands wheels EXPLICITLY by file path WITH deps.
             # Use file paths (not package names) to avoid shared-namespace
-            # confusion. Don't use --no-deps so pip will pull binaryornot,
-            # litellm, etc. from the local wheels dir even if pass 1 missed them.
+            # confusion. Use --upgrade to force pip to replace any leftover files.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
             stdout2, stderr2, ec2 = await self.ssh.run(
-                f"{pip_env} {remote_python} -m pip install -q --break-system-packages "
+                f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
                 f"--prefer-binary --target {venv}/lib "
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{REMOTE_DEPS_PATH}/wheels/openhands_aci-*.whl "
@@ -413,11 +417,24 @@ class Provisioner:
                 "import openhands.agent_server; "
                 "import openhands.sdk; "
                 "import openhands.tools; "
+                "import binaryornot; "
                 "print(\"VERIFY_OK\")"
                 "' 2>&1", timeout=15)
             if "VERIFY_OK" not in verify_out:
+                # Diagnostic: list what's actually in the venv to understand what pip did
+                ls_out, _, _ = await self.ssh.run(
+                    f"echo '=== openhands/ contents ==='; "
+                    f"ls {venv}/lib/openhands/ 2>&1; "
+                    f"echo '=== openhands_*.dist-info ==='; "
+                    f"ls -d {venv}/lib/openhands_* 2>&1; "
+                    f"echo '=== binaryornot ==='; "
+                    f"ls -d {venv}/lib/binaryornot* 2>&1; "
+                    f"echo '=== pip output tail ==='; "
+                    f"echo {stdout2[-800:]!r}",
+                    timeout=10,
+                )
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
-                           detail=f"Post-install verification failed: {verify_out.strip()[-500:]}")
+                           detail=f"Post-install verify failed: {verify_out.strip()[-300:]}\n\nDiagnostic:\n{ls_out.strip()[-1500:]}")
                 return
             # Also verify the binary wrapper works
             binary_check, _, binary_ec = await self.ssh.run(
