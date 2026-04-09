@@ -213,7 +213,9 @@ if [ -f "$DEPS_BUNDLE" ]; then
                 chmod +x "$GITEA_BIN"
                 ok "Gitea binary installed"
             fi
-            # Agent deps
+            # Agent deps — support two layouts:
+            # 1. Legacy: agent-deps/wheels.tar.gz nested
+            # 2. Flat:   wheels/ directly in the root
             if [ -d "$DEPS_TMP/agent-deps" ]; then
                 mkdir -p "$MANAGER_DIR/deps"
                 cp "$DEPS_TMP/agent-deps/"* "$MANAGER_DIR/deps/" 2>/dev/null
@@ -223,8 +225,13 @@ if [ -f "$DEPS_BUNDLE" ]; then
                     rm -f "$MANAGER_DIR/deps/wheels.tar.gz"
                     ok "Agent deps extracted ($(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | wc -l) wheels)"
                 fi
+            elif [ -d "$DEPS_TMP/wheels" ]; then
+                # Flat layout — wheels/ directly in tar root
+                mkdir -p "$MANAGER_DIR/deps"
+                cp -r "$DEPS_TMP/wheels" "$MANAGER_DIR/deps/"
+                ok "Agent deps copied ($(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | wc -l) wheels)"
             else
-                warn "No agent-deps/ in bundle"
+                warn "No agent-deps/ or wheels/ in bundle"
             fi
         else
             fail "Failed to extract hiclaw-deps.tar.gz"
