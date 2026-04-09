@@ -369,48 +369,60 @@ class Provisioner:
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"pip setuptools wheel 2>&1 || true", timeout=60)
 
-            # Step 2b: Install all wheels with --no-deps first (avoid resolution failures)
-            # Use -q (quiet) to reduce output volume — large output can block SSH channel
+            # Step 2b: Install all NON-openhands wheels first (deps only).
+            # Excluding openhands_* here avoids the namespace package corruption
+            # that happens when pip --target installs multiple wheels sharing the
+            # same top-level package. The openhands wheels are installed
+            # individually in pass 2.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 1/2)...")
             stdout_all, stderr, ec = await self.ssh.run(
+                f"cd {REMOTE_DEPS_PATH}/wheels && "
+                f"NON_OH=$(ls *.whl | grep -v '^openhands_' | tr '\\n' ' ') && "
                 f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1; echo EXIT_CODE=$?", timeout=600)
+                f"$NON_OH 2>&1; echo EXIT_CODE=$?", timeout=600)
             logger.info(f"[{self._host}] Pip pass 1 tail: {stdout_all[-300:]}")
 
-            # >>> CUSTOM: HiClaw — aggressive clean before pass 2 <<<
-            # pip --target with shared namespace packages is unreliable across
-            # pip versions. Clean ALL openhands stuff completely first, then
-            # use --upgrade to force pip to write fresh files.
+            # >>> CUSTOM: HiClaw — clean only openhands namespace before pass 2 <<<
+            # Pass 1 no longer installs openhands_* (excluded by grep) but a
+            # previous failed run might have left stale files. Clean only the
+            # openhands namespace; do NOT remove binaryornot — it was just
+            # installed in pass 1 and pass 2 uses --no-deps.
             await self.ssh.run(
                 f"rm -rf {venv}/lib/openhands "
                 f"{venv}/lib/openhands_aci* "
                 f"{venv}/lib/openhands_sdk* "
                 f"{venv}/lib/openhands_tools* "
-                f"{venv}/lib/openhands_agent_server* "
-                f"{venv}/lib/binaryornot*",
+                f"{venv}/lib/openhands_agent_server*",
                 timeout=15,
             )
             # >>> END CUSTOM <<<
 
-            # Step 2c: Install openhands wheels EXPLICITLY by file path WITH deps.
-            # Use file paths (not package names) to avoid shared-namespace
-            # confusion. Use --upgrade to force pip to replace any leftover files.
+            # Step 2c: Install openhands wheels ONE AT A TIME without --upgrade.
+            # pip --target with shared namespace packages (openhands.*) is broken
+            # when multiple wheels share the same top-level package — pip will
+            # overwrite/remove sibling subpackages. Installing sequentially with
+            # --no-deps lets each wheel ADD files to openhands/ instead of
+            # replacing the directory.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
-            stdout2, stderr2, ec2 = await self.ssh.run(
-                f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
-                f"--prefer-binary --target {venv}/lib "
-                f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"{REMOTE_DEPS_PATH}/wheels/openhands_aci-*.whl "
-                f"{REMOTE_DEPS_PATH}/wheels/openhands_sdk-*.whl "
-                f"{REMOTE_DEPS_PATH}/wheels/openhands_tools-*.whl "
-                f"{REMOTE_DEPS_PATH}/wheels/openhands_agent_server-*.whl "
-                f"2>&1; echo EXIT_CODE=$?", timeout=600)
-            # Parse real exit code from output (since we used ; instead of &&)
-            ec2 = 1
-            if "EXIT_CODE=0" in stdout2:
-                ec2 = 0
+            stdout2 = ""
+            stderr2 = ""
+            ec2 = 0
+            for pkg in ('openhands_sdk', 'openhands_tools', 'openhands_aci', 'openhands_agent_server'):
+                out, err, _ = await self.ssh.run(
+                    f"{pip_env} {remote_python} -m pip install -q --break-system-packages "
+                    f"--prefer-binary --target {venv}/lib "
+                    f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                    f"{REMOTE_DEPS_PATH}/wheels/{pkg}-*.whl "
+                    f"2>&1; echo EXIT_CODE=$?", timeout=300)
+                stdout2 += f"\n--- {pkg} ---\n{out}"
+                stderr2 += err or ""
+                if "EXIT_CODE=0" not in out:
+                    ec2 = 1
+                    logger.warning(f"[{self._host}] {pkg} install failed: {out[-300:]}")
+                else:
+                    logger.info(f"[{self._host}] {pkg} installed")
             logger.info(f"[{self._host}] Pip pass 2 tail: {stdout2[-300:]}")
 
             # Step 2d: Verify core import works
