@@ -399,30 +399,22 @@ class Provisioner:
             )
             # >>> END CUSTOM <<<
 
-            # Step 2c: Install openhands wheels ONE AT A TIME without --upgrade.
-            # pip --target with shared namespace packages (openhands.*) is broken
-            # when multiple wheels share the same top-level package — pip will
-            # overwrite/remove sibling subpackages. Installing sequentially with
-            # --no-deps lets each wheel ADD files to openhands/ instead of
-            # replacing the directory.
+            # Step 2c: Install ALL openhands wheels in a SINGLE pip command.
+            # pip --target with shared namespace packages (openhands.*) needs all
+            # wheels passed at once. Sequential pip install commands break the
+            # namespace because pip cleans the existing namespace dir each call.
+            # Single command lets pip merge all subpackages correctly.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
-            stdout2 = ""
-            stderr2 = ""
-            ec2 = 0
-            for pkg in ('openhands_sdk', 'openhands_tools', 'openhands_aci', 'openhands_agent_server'):
-                out, err, _ = await self.ssh.run(
-                    f"{pip_env} {remote_python} -m pip install -q --break-system-packages "
-                    f"--prefer-binary --target {venv}/lib "
-                    f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                    f"{REMOTE_DEPS_PATH}/wheels/{pkg}-*.whl "
-                    f"2>&1; echo EXIT_CODE=$?", timeout=300)
-                stdout2 += f"\n--- {pkg} ---\n{out}"
-                stderr2 += err or ""
-                if "EXIT_CODE=0" not in out:
-                    ec2 = 1
-                    logger.warning(f"[{self._host}] {pkg} install failed: {out[-300:]}")
-                else:
-                    logger.info(f"[{self._host}] {pkg} installed")
+            stdout2, stderr2, _ = await self.ssh.run(
+                f"{pip_env} {remote_python} -m pip install -q --break-system-packages "
+                f"--prefer-binary --target {venv}/lib "
+                f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_sdk-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_tools-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_aci-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_agent_server-*.whl "
+                f"2>&1; echo EXIT_CODE=$?", timeout=600)
+            ec2 = 0 if "EXIT_CODE=0" in stdout2 else 1
             logger.info(f"[{self._host}] Pip pass 2 tail: {stdout2[-300:]}")
 
             # Step 2d: Verify core import works
