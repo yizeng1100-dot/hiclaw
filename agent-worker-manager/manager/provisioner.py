@@ -355,13 +355,29 @@ class Provisioner:
                 f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1; echo EXIT_CODE=$?", timeout=600)
             logger.info(f"[{self._host}] Pip pass 1 tail: {stdout_all[-300:]}")
 
+            # >>> CUSTOM: HiClaw — clean openhands/ namespace before pass 2 <<<
+            # When multiple wheels share the openhands/ namespace package, pip's
+            # --upgrade --ignore-installed --target mode can lose subpackages
+            # because each wheel install touches the shared dir. Clean slate first.
+            await self.ssh.run(
+                f"rm -rf {venv}/lib/openhands {venv}/lib/openhands_*",
+                timeout=15,
+            )
+            # >>> END CUSTOM <<<
+
             # Step 2c: Install main packages with deps (they'll find deps from pass 1)
+            # Install openhands wheels EXPLICITLY by file path so pip can't get
+            # confused by package name resolution with shared namespace.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
             stdout2, stderr2, ec2 = await self.ssh.run(
-                f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
-                f"--ignore-installed --prefer-binary --target {venv}/lib "
-                f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"{self.tmpl['pip_package']} 2>&1; echo EXIT_CODE=$?", timeout=600)
+                f"{pip_env} {remote_python} -m pip install -q --break-system-packages "
+                f"--prefer-binary --target {venv}/lib "
+                f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_aci-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_sdk-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_tools-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_agent_server-*.whl "
+                f"2>&1; echo EXIT_CODE=$?", timeout=600)
             # Parse real exit code from output (since we used ; instead of &&)
             ec2 = 1
             if "EXIT_CODE=0" in stdout2:
