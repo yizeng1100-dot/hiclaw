@@ -49,6 +49,10 @@ export function GenericEventMessageWrapper({
       details
     );
 
+  // >>> CUSTOM: HiClaw — extract timestamp from event <<<
+  const timestamp = (event as { timestamp?: string }).timestamp;
+  // >>> END CUSTOM <<<
+
   return (
     <div>
       <GenericEventMessage
@@ -56,6 +60,9 @@ export function GenericEventMessageWrapper({
         details={skillReadyDetails}
         success={success}
         initiallyExpanded={false}
+        // >>> CUSTOM: HiClaw <<<
+        timestamp={timestamp}
+        // >>> END CUSTOM <<<
       />
       {isLastMessage && <V1ConfirmationButtons />}
     </div>
