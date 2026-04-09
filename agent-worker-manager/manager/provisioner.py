@@ -365,14 +365,15 @@ class Provisioner:
             )
             # >>> END CUSTOM <<<
 
-            # Step 2c: Install main packages with deps (they'll find deps from pass 1)
-            # Install openhands wheels EXPLICITLY by file path so pip can't get
-            # confused by package name resolution with shared namespace.
+            # Step 2c: Install openhands wheels EXPLICITLY by file path WITH deps.
+            # Use file paths (not package names) to avoid shared-namespace
+            # confusion. Don't use --no-deps so pip will pull binaryornot,
+            # litellm, etc. from the local wheels dir even if pass 1 missed them.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
             stdout2, stderr2, ec2 = await self.ssh.run(
                 f"{pip_env} {remote_python} -m pip install -q --break-system-packages "
                 f"--prefer-binary --target {venv}/lib "
-                f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{REMOTE_DEPS_PATH}/wheels/openhands_aci-*.whl "
                 f"{REMOTE_DEPS_PATH}/wheels/openhands_sdk-*.whl "
                 f"{REMOTE_DEPS_PATH}/wheels/openhands_tools-*.whl "
