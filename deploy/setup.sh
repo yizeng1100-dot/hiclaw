@@ -198,9 +198,21 @@ DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
 
 # Extract deps bundle if needed
 if [ -f "$DEPS_BUNDLE" ]; then
+    # Count wheels expected from the bundle (single source of truth)
+    EXPECTED_WHEELS=$(tar -tzf "$DEPS_BUNDLE" 2>/dev/null | grep -c '^.*wheels/.*\.whl$' || echo 0)
+    INSTALLED_WHEELS=0
+    [ -d "$MANAGER_DIR/deps/wheels" ] && \
+        INSTALLED_WHEELS=$(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | grep -c '\.whl$' || echo 0)
+
     NEED_EXTRACT=false
     [ ! -f "$GITEA_BIN" ] && NEED_EXTRACT=true
     [ ! -d "$MANAGER_DIR/deps/wheels" ] && NEED_EXTRACT=true
+    # Re-extract if local wheels count doesn't match the bundle (incomplete prior install)
+    if [ "$EXPECTED_WHEELS" -gt 0 ] && [ "$INSTALLED_WHEELS" -lt "$EXPECTED_WHEELS" ]; then
+        warn "Wheels incomplete: $INSTALLED_WHEELS/$EXPECTED_WHEELS — will re-extract"
+        rm -rf "$MANAGER_DIR/deps/wheels"
+        NEED_EXTRACT=true
+    fi
 
     if $NEED_EXTRACT; then
         log "Extracting hiclaw-deps.tar.gz..."
@@ -223,22 +235,28 @@ if [ -f "$DEPS_BUNDLE" ]; then
                     log "Extracting wheels..."
                     tar xzf "$MANAGER_DIR/deps/wheels.tar.gz" -C "$MANAGER_DIR/deps/"
                     rm -f "$MANAGER_DIR/deps/wheels.tar.gz"
-                    ok "Agent deps extracted ($(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | wc -l) wheels)"
                 fi
             elif [ -d "$DEPS_TMP/wheels" ]; then
                 # Flat layout — wheels/ directly in tar root
                 mkdir -p "$MANAGER_DIR/deps"
                 cp -r "$DEPS_TMP/wheels" "$MANAGER_DIR/deps/"
-                ok "Agent deps copied ($(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | wc -l) wheels)"
             else
                 warn "No agent-deps/ or wheels/ in bundle"
+            fi
+
+            # Verify wheels completeness after extraction
+            FINAL_WHEELS=$(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | grep -c '\.whl$' || echo 0)
+            if [ "$EXPECTED_WHEELS" -gt 0 ] && [ "$FINAL_WHEELS" -lt "$EXPECTED_WHEELS" ]; then
+                fail "Wheels extraction incomplete: $FINAL_WHEELS/$EXPECTED_WHEELS"
+            else
+                ok "Agent deps extracted ($FINAL_WHEELS wheels)"
             fi
         else
             fail "Failed to extract hiclaw-deps.tar.gz"
         fi
         rm -rf "$DEPS_TMP"
     else
-        ok "Gitea and agent deps already present"
+        ok "Gitea and agent deps already present ($INSTALLED_WHEELS/$EXPECTED_WHEELS wheels)"
     fi
 else
     warn "hiclaw-deps.tar.gz not found — will try online download"
@@ -284,7 +302,17 @@ mkdir -p ~/.ssh 2>/dev/null; touch ~/.ssh/authorized_keys 2>/dev/null || true
 echo ""
 echo "[3/5] Worker Manager..."
 if [ -d "$MANAGER_DIR/deps/wheels" ]; then
-    ok "Agent deps present ($(ls "$MANAGER_DIR/deps/wheels/" | wc -l) wheels)"
+    INSTALLED=$(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | grep -c '\.whl$')
+    if [ -f "$DEPS_BUNDLE" ]; then
+        EXPECTED=$(tar -tzf "$DEPS_BUNDLE" 2>/dev/null | grep -c '^.*wheels/.*\.whl$')
+        if [ "$EXPECTED" -gt 0 ] && [ "$INSTALLED" -lt "$EXPECTED" ]; then
+            fail "Agent deps incomplete: $INSTALLED/$EXPECTED wheels — re-run setup or remove $MANAGER_DIR/deps/wheels"
+        else
+            ok "Agent deps present ($INSTALLED wheels)"
+        fi
+    else
+        ok "Agent deps present ($INSTALLED wheels)"
+    fi
 elif [ -f "$MANAGER_DIR/deps/code-server.tar.gz" ]; then
     ok "Agent deps present (code-server only, no wheels)"
 else
