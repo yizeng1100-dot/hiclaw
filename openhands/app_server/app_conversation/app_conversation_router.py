@@ -204,14 +204,19 @@ async def _get_agent_server_context(
             content={'error': f'Sandbox not ready for conversation {conversation_id}'},
         )
 
-    # Get the sandbox spec to find the working directory
-    sandbox_spec = await sandbox_spec_service.get_sandbox_spec(sandbox.sandbox_spec_id)
-    if not sandbox_spec:
+    # Get the sandbox spec to find the working directory. Use an intermediate
+    # variable name so mypy can narrow the Optional return of get_sandbox_spec
+    # before the non-Optional `sandbox_spec` variable is assigned (sandbox_spec
+    # was already typed as SandboxSpecInfo on the remote-worker branch above).
+    _maybe_spec = await sandbox_spec_service.get_sandbox_spec(sandbox.sandbox_spec_id)
+    if _maybe_spec is None:
         # TODO: This is a temporary work around for the fact that we don't store previous
         # sandbox spec versions when updating OpenHands. When the SandboxSpecServices
         # transition to truly multi sandbox spec model this should raise a 404 error
         logger.warning('Sandbox spec not found - using default.')
         sandbox_spec = await sandbox_spec_service.get_default_sandbox_spec()
+    else:
+        sandbox_spec = _maybe_spec
 
     # Get the agent server URL
     if not sandbox.exposed_urls:
@@ -687,6 +692,9 @@ async def get_conversation_skills(
         if isinstance(app_conversation_service, AppConversationServiceBase):
             project_dir = get_project_dir(
                 ctx.sandbox_spec.working_dir, ctx.conversation.selected_repository
+            )
+            assert ctx.sandbox is not None, (
+                'sandbox must be set when reaching skill loader'
             )
             all_skills = await app_conversation_service.load_and_merge_all_skills(
                 ctx.sandbox,

@@ -6,7 +6,6 @@ that can be injected into the agent context alongside built-in skills.
 
 from __future__ import annotations
 
-import json
 import logging
 import pathlib
 
@@ -56,23 +55,25 @@ async def load_custom_skills() -> list[Skill]:
             # Build the skill content: .md content + embedded scripts
             content = detail.content
             if detail.scripts:
-                content += "\n\n---\n\n## 关联脚本\n\n"
-                content += "以下脚本文件是此 Skill 的组成部分。执行任务时，请先将脚本保存到工作目录再运行。\n\n"
+                content += '\n\n---\n\n## 关联脚本\n\n'
+                content += '以下脚本文件是此 Skill 的组成部分。执行任务时，请先将脚本保存到工作目录再运行。\n\n'
                 for script in detail.scripts:
-                    lang = script.language or ""
-                    content += f"### 文件: `{script.filename}`\n"
+                    lang = script.language or ''
+                    content += f'### 文件: `{script.filename}`\n'
                     if script.description:
-                        content += f"{script.description}\n\n"
-                    content += f"```{lang}\n{script.content}\n```\n\n"
+                        content += f'{script.description}\n\n'
+                    content += f'```{lang}\n{script.content}\n```\n\n'
 
-            repo_skills.append(Skill(
-                name=detail.name,
-                content=content,
-                trigger=None,
-                source='custom-db',
-                description=detail.description,
-                is_agentskills_format=False,
-            ))
+            repo_skills.append(
+                Skill(
+                    name=detail.name,
+                    content=content,
+                    trigger=None,
+                    source='custom-db',
+                    description=detail.description,
+                    is_agentskills_format=False,
+                )
+            )
 
         _logger.info(
             f'Loaded {len(repo_skills)} repo skills from DB (always in prompt), '
@@ -111,7 +112,7 @@ def load_file_skills() -> list[Skill]:
                 skill_type = meta.get('type', 'knowledge')
                 content = post.content
 
-                trigger = None
+                trigger: TaskTrigger | KeywordTrigger | None = None
                 if triggers:
                     if any(t.startswith('/') for t in triggers):
                         trigger = TaskTrigger(triggers=triggers)
@@ -173,13 +174,15 @@ def get_workflow_phases(skill_name: str) -> list[dict] | None:
                     # may legitimately be skipped if chromium isn't installed).
                     normalized = []
                     for p in phases:
-                        normalized.append({
-                            'key': p.get('key', ''),
-                            'label': p.get('label', ''),
-                            'desc': p.get('desc', ''),
-                            'file': p.get('output'),
-                            'optional': bool(p.get('optional', False)),
-                        })
+                        normalized.append(
+                            {
+                                'key': p.get('key', ''),
+                                'label': p.get('label', ''),
+                                'desc': p.get('desc', ''),
+                                'file': p.get('output'),
+                                'optional': bool(p.get('optional', False)),
+                            }
+                        )
                     _workflow_phases_cache[name] = normalized
             except Exception:
                 pass

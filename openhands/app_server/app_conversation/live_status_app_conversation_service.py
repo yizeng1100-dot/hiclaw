@@ -8,7 +8,7 @@ import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, AsyncGenerator, Sequence, cast
+from typing import Any, AsyncGenerator, ClassVar, Sequence, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -149,6 +149,10 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
     access_token_hard_timeout: timedelta | None
     app_mode: str | None = None
     tavily_api_key: str | None = None
+    # Class-level tunnel port cache used by _get_cached_tunnel_port(). Declared
+    # here so mypy knows the attribute exists on the class object (the method
+    # assigns to cls._tunnel_cache_data lazily on first call).
+    _tunnel_cache_data: ClassVar[dict[str, dict]] = {}
 
     async def _get_sandbox_grouping_strategy(self) -> SandboxGroupingStrategy:
         """Get the sandbox grouping strategy from user settings."""
@@ -343,8 +347,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     yield updated_task
 
                 # Get the sandbox
+                assert task.sandbox_id is not None
                 sandbox_id = task.sandbox_id
-                assert sandbox_id is not None
                 _logger.info(f'[STARTUP] Step 2: Sandbox started, id={sandbox_id}')
                 sandbox = await self.sandbox_service.get_sandbox(sandbox_id)
                 assert sandbox is not None
@@ -352,7 +356,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     f'[STARTUP] Step 2: Sandbox status={sandbox.status}, urls={[u.url for u in (sandbox.exposed_urls or [])]}'
                 )
                 agent_server_url = self._get_agent_server_url(sandbox)
-                session_api_key = sandbox.session_api_key
+                session_api_key = sandbox.session_api_key or ''
                 _logger.info(f'[STARTUP] Step 2: agent_server_url={agent_server_url}')
 
                 # Get the working dir
@@ -552,15 +556,15 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         ]
         if tasks:
             # >>> CUSTOM: HiClaw — add timeout to prevent one slow sandbox from blocking all <<<
-            sandbox_conversation_infos = await asyncio.gather(
+            gather_results = await asyncio.gather(
                 *[asyncio.wait_for(t, timeout=5) for t in tasks],
                 return_exceptions=True,
             )
-            # Filter out exceptions (timeouts, connection errors)
-            sandbox_conversation_infos = [
-                r
-                for r in sandbox_conversation_infos
-                if not isinstance(r, BaseException)
+            # Filter out exceptions (timeouts, connection errors). Annotate the
+            # result explicitly so mypy knows each element is an iterable list
+            # of conversation infos rather than `list | BaseException`.
+            sandbox_conversation_infos: list[list] = [
+                r for r in gather_results if not isinstance(r, BaseException)
             ]
             # >>> END CUSTOM <<<
         else:
@@ -1284,7 +1288,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             # 总重试等待 ~12min + 每次请求最多10min = 极端情况可撑 ~20min+
             # >>> END CUSTOM <<<
             log_completions=bool(os.environ.get('HICLAW_LLM_DEBUG')),
-            **({'log_completions_folder': _log_folder} if _log_folder else {}),
+            # LLM expects str (not Optional); empty string disables per-conv
+            # log writing while keeping the type-checker happy.
+            log_completions_folder=_log_folder or '',
         )
 
     async def _get_tavily_api_key(self, user: UserInfo) -> str | None:
@@ -1779,7 +1785,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         # Load and merge skills if remote workspace is available
         hook_config: HookConfig | None = None
-        if remote_workspace:
+        if remote_workspace and sandbox is not None:
             try:
                 agent = await self._load_skills_and_update_agent(
                     sandbox,

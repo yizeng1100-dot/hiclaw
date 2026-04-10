@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
-
-from custom.agent_mgmt.db import get_agent_db
 from pydantic import BaseModel
 
+from custom.agent_mgmt.db import get_agent_db
 from custom.agent_mgmt.models import TaskCreate, TaskUpdate
 from custom.agent_mgmt.service import AgentService
 from custom.agent_mgmt.task_service import TaskService
@@ -58,11 +58,15 @@ async def _sync_task_status_from_execution(task_svc: TaskService, task_info):
     if task_info.status != 'running' or not task_info.conversation_id:
         return task_info
     try:
-        app_conversation_id = await _resolve_app_conversation_id(task_info.conversation_id)
+        app_conversation_id = await _resolve_app_conversation_id(
+            task_info.conversation_id
+        )
         if not app_conversation_id:
             return task_info
         execution_status = await _get_execution_status(app_conversation_id)
-        new_status = TERMINAL_EXECUTION_STATUS_TO_TASK_STATUS.get(execution_status or '')
+        new_status = TERMINAL_EXECUTION_STATUS_TO_TASK_STATUS.get(
+            execution_status or ''
+        )
         if not new_status:
             return task_info
         kwargs: dict = {'status': new_status}
@@ -88,11 +92,17 @@ async def list_tasks(
     try:
         svc = TaskService(db)
         tasks = await svc.list_tasks(
-            created_by=created_by, status=status, agent_id=agent_id,
-            search=search, limit=limit, offset=offset,
+            created_by=created_by,
+            status=status,
+            agent_id=agent_id,
+            search=search,
+            limit=limit,
+            offset=offset,
         )
         tasks = [await _sync_task_status_from_execution(svc, t) for t in tasks]
-        total = await svc.count_tasks(created_by=created_by, status=status, agent_id=agent_id)
+        total = await svc.count_tasks(
+            created_by=created_by, status=status, agent_id=agent_id
+        )
         return {'tasks': [t.model_dump() for t in tasks], 'total': total}
     finally:
         await db.close()
@@ -147,6 +157,8 @@ async def get_task(task_id: str):
         if not task:
             raise HTTPException(status_code=404, detail='Task not found')
         task = await _sync_task_status_from_execution(svc, task)
+        if task is None:
+            raise HTTPException(status_code=404, detail='Task not found')
         return task.model_dump()
     finally:
         await db.close()
@@ -157,7 +169,7 @@ async def update_task(task_id: str, data: TaskUpdate):
     db = await get_agent_db()
     try:
         svc = TaskService(db)
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if data.name is not None:
             kwargs['name'] = data.name
         if data.status is not None:
@@ -205,8 +217,10 @@ async def cancel_task(task_id: str):
         # Try to stop the running agent in sandbox
         conv_id = task.conversation_id
         if conv_id:
-            import httpx
             import logging
+
+            import httpx
+
             logger = logging.getLogger(__name__)
             try:
                 if conv_id.startswith('task-'):
@@ -226,7 +240,9 @@ async def cancel_task(task_id: str):
                                     stop_resp = await client.post(
                                         f'{server_url}/api/conversations/{app_conv_id}/stop'
                                     )
-                                    logger.info(f'Stop conversation {app_conv_id} via {server_url}: {stop_resp.status_code}')
+                                    logger.info(
+                                        f'Stop conversation {app_conv_id} via {server_url}: {stop_resp.status_code}'
+                                    )
                 else:
                     async with httpx.AsyncClient(timeout=10) as client:
                         resp = await client.post(
@@ -237,6 +253,7 @@ async def cancel_task(task_id: str):
                 logger.warning(f'Failed to stop conversation for task {task_id}: {e}')
 
         from datetime import datetime, timezone
+
         ok = await svc.update_task(
             task_id,
             status='cancelled',
