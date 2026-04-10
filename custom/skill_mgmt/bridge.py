@@ -166,7 +166,11 @@ def get_workflow_phases(skill_name: str) -> list[dict] | None:
                 name = meta.get('name', md_file.stem)
                 phases = meta.get('phases')
                 if phases:
-                    # Normalize: rename 'output' to 'file' for frontend compatibility
+                    # Normalize: rename 'output' to 'file' for frontend compatibility.
+                    # `optional: true` phases are kept around for display but the
+                    # frontend treats them as non-blocking when computing
+                    # error/done state for a failed task (e.g. screenshot phase
+                    # may legitimately be skipped if chromium isn't installed).
                     normalized = []
                     for p in phases:
                         normalized.append({
@@ -174,6 +178,7 @@ def get_workflow_phases(skill_name: str) -> list[dict] | None:
                             'label': p.get('label', ''),
                             'desc': p.get('desc', ''),
                             'file': p.get('output'),
+                            'optional': bool(p.get('optional', False)),
                         })
                     _workflow_phases_cache[name] = normalized
             except Exception:

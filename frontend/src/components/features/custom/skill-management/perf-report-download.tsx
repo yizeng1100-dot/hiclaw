@@ -9,15 +9,20 @@ interface ReportFile {
   filename: string;
 }
 
+// Paths are *relative* to the conversation's working_dir. The backend
+// `read_conversation_file` endpoint resolves relative paths against the
+// per-conv working_dir (see app_conversation_router.py), so each task's
+// reports are read from its own isolated directory rather than a shared
+// `/workspace/perf_analysis_output` that multiple tasks could clobber.
 const REPORT_FILES: ReportFile[] = [
   {
     label: "完整报告 (Full Report)",
-    path: "/workspace/perf_analysis_output/full_report.html",
+    path: "perf_analysis_output/full_report.html",
     filename: "full_report.html",
   },
   {
     label: "问题报告 (Issue Report)",
-    path: "/workspace/perf_analysis_output/issue_report.html",
+    path: "perf_analysis_output/issue_report.html",
     filename: "issue_report.html",
   },
 ];

@@ -30,6 +30,10 @@ interface WorkflowPhase {
   label: string;
   desc: string;
   file: string | null;
+  // Phase that is allowed to be skipped (e.g. screenshot when chromium isn't
+  // installed). Skipped optional phases don't poison later phases as `pending`
+  // and don't get rendered as `error` in failed-task state.
+  optional?: boolean;
 }
 
 // Fallback phases if agent has no workflow_phases in config
@@ -131,23 +135,16 @@ export function TaskDetailPage() {
   }, [resolvedConvId, taskId, task?.status]);
 
   React.useEffect(() => {
-    if (
-      task?.status === "running" &&
-      !["finished", "stopped", "error"].includes(
-        (conversationExecutionStatus || "").toLowerCase(),
-      )
-    ) {
-      setPhasesDone(phases.map(() => false));
-    }
-
+    // Poll phase files whenever we have a conv id and the task is in a state
+    // where progress is meaningful (running or already terminal). Each V1
+    // conversation has its own working_dir keyed by conversation_id, so stale
+    // files from other tasks cannot leak in — no need to gate on terminal
+    // execution_status like the previous version did.
     if (
       !resolvedConvId ||
       task?.status === "pending" ||
       task?.status === "cancelled" ||
-      phases.length === 0 ||
-      !["finished", "stopped", "error"].includes(
-        (conversationExecutionStatus || "").toLowerCase(),
-      )
+      phases.length === 0
     )
       return;
 
@@ -224,15 +221,27 @@ export function TaskDetailPage() {
   const getPhaseStatus = (index: number) => {
     if (task.status === "completed") return "done";
     if (task.status === "failed") {
-      // All checked phases are done, first unchecked is error
+      // All checked phases are done; first non-optional unchecked is error.
+      // Optional phases (e.g. screenshot when chromium isn't installed) are
+      // legitimately allowed to stay unchecked, so we skip them when looking
+      // for the first real failure, and render them as `skipped` rather than
+      // poisoning later phases with `pending`.
       if (phasesDone[index]) return "done";
-      const firstUnchecked = phasesDone.findIndex((d) => !d);
+      if (phases[index]?.optional) return "skipped";
+      const firstUnchecked = phasesDone.findIndex(
+        (d, i) => !d && !phases[i]?.optional,
+      );
       return index === firstUnchecked ? "error" : "pending";
     }
     if (phasesDone[index]) return "done";
-    // First unchecked phase after last done = active
+    // First unchecked (non-optional) phase after last done = active
     const lastDoneIdx = phasesDone.lastIndexOf(true);
-    if (task.status === "running" && index === lastDoneIdx + 1) return "active";
+    if (
+      task.status === "running" &&
+      index === lastDoneIdx + 1 &&
+      !phases[index]?.optional
+    )
+      return "active";
     return "pending";
   };
 
@@ -383,7 +392,9 @@ export function TaskDetailPage() {
                                 ? "bg-blue-500"
                                 : status === "error"
                                   ? "bg-red-500"
-                                  : "bg-gray-700",
+                                  : status === "skipped"
+                                    ? "bg-amber-700/60"
+                                    : "bg-gray-700",
                           )}
                         />
                       )}
@@ -396,7 +407,9 @@ export function TaskDetailPage() {
                               ? "bg-blue-900/50 border-blue-500 text-blue-400 animate-pulse"
                               : status === "error"
                                 ? "bg-red-900/50 border-red-500 text-red-400"
-                                : "bg-gray-800 border-gray-600 text-gray-500",
+                                : status === "skipped"
+                                  ? "bg-amber-900/30 border-amber-700 text-amber-500"
+                                  : "bg-gray-800 border-gray-600 text-gray-500",
                         )}
                       >
                         {status === "done"
@@ -405,13 +418,19 @@ export function TaskDetailPage() {
                             ? "✕"
                             : status === "active"
                               ? "●"
-                              : i + 1}
+                              : status === "skipped"
+                                ? "⊘"
+                                : i + 1}
                       </div>
                       {i < phases.length - 1 && (
                         <div
                           className={cn(
                             "w-0.5 h-3",
-                            status === "done" ? "bg-green-500" : "bg-gray-700",
+                            status === "done"
+                              ? "bg-green-500"
+                              : status === "skipped"
+                                ? "bg-amber-700/60"
+                                : "bg-gray-700",
                           )}
                         />
                       )}
@@ -428,7 +447,9 @@ export function TaskDetailPage() {
                               ? "text-blue-400"
                               : status === "error"
                                 ? "text-red-400"
-                                : "text-gray-500",
+                                : status === "skipped"
+                                  ? "text-amber-500"
+                                  : "text-gray-500",
                         )}
                       >
                         {phase.label}
@@ -446,7 +467,9 @@ export function TaskDetailPage() {
                             ? "bg-blue-900/30 text-blue-400"
                             : status === "error"
                               ? "bg-red-900/30 text-red-400"
-                              : "bg-gray-800 text-gray-600",
+                              : status === "skipped"
+                                ? "bg-amber-900/30 text-amber-500"
+                                : "bg-gray-800 text-gray-600",
                       )}
                     >
                       {status === "done"
@@ -455,7 +478,9 @@ export function TaskDetailPage() {
                           ? "执行中"
                           : status === "error"
                             ? "失败"
-                            : "等待"}
+                            : status === "skipped"
+                              ? "跳过"
+                              : "等待"}
                     </span>
                   </div>
                 );
