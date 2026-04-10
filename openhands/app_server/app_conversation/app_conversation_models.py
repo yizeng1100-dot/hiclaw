@@ -97,6 +97,9 @@ class AppConversationInfo(BaseModel):
     remote_host: str | None = None  # IP of the remote machine this conversation belongs to
     # >>> END CUSTOM <<<
 
+    # Tags for conversation metadata (e.g., automation context, skills used)
+    tags: dict[str, str] = Field(default_factory=dict)
+
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

@@ -4,14 +4,48 @@
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Usage:
-#   1. git clone -b test https://github.com/yizeng1100-dot/hiclaw.git && cd hiclaw
+#   1. git clone -b dev https://github.com/yizeng1100-dot/hiclaw.git && cd hiclaw
 #   2. Put these files in deploy/ directory:
-#      - hiclaw-runtime.tar.gz  — App Server: Python 3.12 + all deps
-#      - hiclaw-deps.tar.gz     — Remote terminal deps + Gitea
+#      - hiclaw-runtime.tar.gz  (必需) Python 3.12 + 所有依赖 + Gitea + 浏览器
+#      - hiclaw-deps.tar.gz    (远程worker需要) 远程 agent-worker 依赖
 #   3. bash deploy/setup.sh
 #   4. bash deploy/start.sh pro
 #
 # All files installed to $HICLAW_DIR (default: ~/.hiclaw), NO sudo needed.
+#
+# ─── 离线包说明 (均在有网机器上打包，传到内网) ───
+#
+# hiclaw-runtime.tar.gz (~777MB, 解压后 ~1.5GB)
+#   内容: 一个包搞定本机所有运行依赖
+#     ./hiclaw-python        — Python 3.12 可执行文件
+#     ./hiclaw-uvicorn       — Uvicorn 可执行文件
+#     ./packages/            — 所有 Python 依赖 (openhands-sdk 1.16.1, fastapi, playwright 等)
+#     ./bin/gitea            — Gitea 1.22.6 (bindata, 内嵌 Web 资源)
+#     ./ms-playwright/       — Chromium 浏览器二进制
+#   解压到: ~/.hiclaw/runtime/
+#   setup.sh 会自动:
+#     - 把 bin/gitea 移到 ~/.hiclaw/bin/gitea
+#     - 把 ms-playwright/ 移到 ~/.cache/ms-playwright/
+#   验证: ~/.hiclaw/runtime/hiclaw-python -c 'import uvicorn,fastapi;print("OK")'
+#
+#   ⚠ 版本依赖（重打包时务必匹配）:
+#     - openhands-sdk == openhands-tools == openhands-agent-server == 1.16.1
+#     - 与 ghcr.io/openhands/agent-server:1.16.1-python Docker 镜像配套使用
+#
+#   打包方法 (在有网机器上):
+#     1. 解压旧 runtime: tar xzf hiclaw-runtime.tar.gz -C /tmp/repack/
+#     2. 加 Gitea:       cp gitea /tmp/repack/bin/gitea && chmod +x /tmp/repack/bin/gitea
+#     3. 加浏览器:       cp -r ~/.cache/ms-playwright /tmp/repack/ms-playwright
+#     4. 重新打包:       tar czf hiclaw-runtime.tar.gz -C /tmp/repack .
+#
+# hiclaw-deps.tar.gz (~219MB) [远程 worker 场景需要]
+#   内容:
+#     wheels/              — 187 个 Python wheel 包 (用于远程 agent-worker 离线安装)
+#     python3-standalone.tar.gz (21MB) — 轻量 Python 3.12 (远程 worker 用)
+#     code-server.tar.gz (109MB) — VS Code Server (远程代码编辑)
+#   用途: 给远程 agent-worker 机器用，本机单机部署可不需要
+#   解压到: agent-worker-manager/deps/
+#
 # ═══════════════════════════════════════════════════════════════════════════
 
 # NO set -e — we handle errors explicitly with logging
@@ -50,6 +84,29 @@ elif [ -f "$RUNTIME_BUNDLE" ]; then
     if tar xzf "$RUNTIME_BUNDLE" -C "$RUNTIME_DIR"; then
         ok "Extracted"
         log "Testing: $($RUNTIME_DIR/hiclaw-python --version 2>&1)"
+
+        # Install Gitea from runtime bundle (if included)
+        if [ -f "$RUNTIME_DIR/bin/gitea" ]; then
+            mkdir -p "$HICLAW_DIR/bin"
+            mv "$RUNTIME_DIR/bin/gitea" "$HICLAW_DIR/bin/gitea"
+            chmod +x "$HICLAW_DIR/bin/gitea"
+            ok "Gitea installed from runtime bundle: $($HICLAW_DIR/bin/gitea --version 2>&1 | head -1)"
+        fi
+
+        # Install Playwright browsers from runtime bundle (if included)
+        if [ -d "$RUNTIME_DIR/ms-playwright" ]; then
+            # Detect where playwright expects browsers
+            PW_BROWSER_PATH=$($RUNTIME_DIR/hiclaw-python -c "
+from pathlib import Path; import os
+print(os.environ.get('PLAYWRIGHT_BROWSERS_PATH', str(Path.home() / '.cache' / 'ms-playwright')))
+" 2>/dev/null || echo "$HOME/.cache/ms-playwright")
+            mkdir -p "$(dirname "$PW_BROWSER_PATH")"
+            # Remove old browsers if exist, then install new
+            rm -rf "$PW_BROWSER_PATH"
+            mv "$RUNTIME_DIR/ms-playwright" "$PW_BROWSER_PATH"
+            ok "Playwright browsers installed to $PW_BROWSER_PATH"
+        fi
+
         VERIFY="$($RUNTIME_DIR/hiclaw-python -c 'import uvicorn,fastapi;print("OK")' 2>&1)"
         if [ "$VERIFY" = "OK" ]; then
             ok "All imports OK"
@@ -67,6 +124,35 @@ else
 fi
 
 PYTHON="$RUNTIME_DIR/hiclaw-python"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# [0.5/5] Playwright (optional — for browser automation)
+# ═══════════════════════════════════════════════════════════════════════════
+PLAYWRIGHT_BUNDLE="$SCRIPT_DIR/playwright-bundle.tar.gz"
+if [ -f "$PLAYWRIGHT_BUNDLE" ]; then
+    # Check if already installed
+    if $PYTHON -c "import playwright" 2>/dev/null; then
+        ok "Playwright already installed"
+    else
+        echo "[0.5/5] Installing Playwright..."
+        PW_TMP="$(mktemp -d)"
+        if tar xzf "$PLAYWRIGHT_BUNDLE" -C "$PW_TMP"; then
+            # Install Python wheels
+            $PYTHON -m pip install --no-index --find-links="$PW_TMP/playwright-bundle/" playwright 2>&1 | tail -3
+            ok "Playwright Python package installed"
+            # Extract browsers
+            if [ -f "$PW_TMP/playwright-bundle/browsers.tar.gz" ]; then
+                tar xzf "$PW_TMP/playwright-bundle/browsers.tar.gz" -C "$HOME/.cache/"
+                ok "Playwright browsers installed to ~/.cache/ms-playwright/"
+            fi
+        else
+            warn "Failed to extract playwright-bundle.tar.gz"
+        fi
+        rm -rf "$PW_TMP"
+    fi
+else
+    log "playwright-bundle.tar.gz not found — skipping (browser tools disabled)"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # [1/5] Skills Git Repo
@@ -112,9 +198,21 @@ DEPS_BUNDLE="$SCRIPT_DIR/hiclaw-deps.tar.gz"
 
 # Extract deps bundle if needed
 if [ -f "$DEPS_BUNDLE" ]; then
+    # Count wheels expected from the bundle (single source of truth)
+    EXPECTED_WHEELS=$(tar -tzf "$DEPS_BUNDLE" 2>/dev/null | grep -c '^.*wheels/.*\.whl$' || echo 0)
+    INSTALLED_WHEELS=0
+    [ -d "$MANAGER_DIR/deps/wheels" ] && \
+        INSTALLED_WHEELS=$(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | grep -c '\.whl$' || echo 0)
+
     NEED_EXTRACT=false
     [ ! -f "$GITEA_BIN" ] && NEED_EXTRACT=true
     [ ! -d "$MANAGER_DIR/deps/wheels" ] && NEED_EXTRACT=true
+    # Re-extract if local wheels count doesn't match the bundle (incomplete prior install)
+    if [ "$EXPECTED_WHEELS" -gt 0 ] && [ "$INSTALLED_WHEELS" -lt "$EXPECTED_WHEELS" ]; then
+        warn "Wheels incomplete: $INSTALLED_WHEELS/$EXPECTED_WHEELS — will re-extract"
+        rm -rf "$MANAGER_DIR/deps/wheels"
+        NEED_EXTRACT=true
+    fi
 
     if $NEED_EXTRACT; then
         log "Extracting hiclaw-deps.tar.gz..."
@@ -127,7 +225,9 @@ if [ -f "$DEPS_BUNDLE" ]; then
                 chmod +x "$GITEA_BIN"
                 ok "Gitea binary installed"
             fi
-            # Agent deps
+            # Agent deps — support two layouts:
+            # 1. Legacy: agent-deps/wheels.tar.gz nested
+            # 2. Flat:   wheels/ directly in the root
             if [ -d "$DEPS_TMP/agent-deps" ]; then
                 mkdir -p "$MANAGER_DIR/deps"
                 cp "$DEPS_TMP/agent-deps/"* "$MANAGER_DIR/deps/" 2>/dev/null
@@ -135,17 +235,28 @@ if [ -f "$DEPS_BUNDLE" ]; then
                     log "Extracting wheels..."
                     tar xzf "$MANAGER_DIR/deps/wheels.tar.gz" -C "$MANAGER_DIR/deps/"
                     rm -f "$MANAGER_DIR/deps/wheels.tar.gz"
-                    ok "Agent deps extracted ($(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | wc -l) wheels)"
                 fi
+            elif [ -d "$DEPS_TMP/wheels" ]; then
+                # Flat layout — wheels/ directly in tar root
+                mkdir -p "$MANAGER_DIR/deps"
+                cp -r "$DEPS_TMP/wheels" "$MANAGER_DIR/deps/"
             else
-                warn "No agent-deps/ in bundle"
+                warn "No agent-deps/ or wheels/ in bundle"
+            fi
+
+            # Verify wheels completeness after extraction
+            FINAL_WHEELS=$(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | grep -c '\.whl$' || echo 0)
+            if [ "$EXPECTED_WHEELS" -gt 0 ] && [ "$FINAL_WHEELS" -lt "$EXPECTED_WHEELS" ]; then
+                fail "Wheels extraction incomplete: $FINAL_WHEELS/$EXPECTED_WHEELS"
+            else
+                ok "Agent deps extracted ($FINAL_WHEELS wheels)"
             fi
         else
             fail "Failed to extract hiclaw-deps.tar.gz"
         fi
         rm -rf "$DEPS_TMP"
     else
-        ok "Gitea and agent deps already present"
+        ok "Gitea and agent deps already present ($INSTALLED_WHEELS/$EXPECTED_WHEELS wheels)"
     fi
 else
     warn "hiclaw-deps.tar.gz not found — will try online download"
@@ -191,7 +302,17 @@ mkdir -p ~/.ssh 2>/dev/null; touch ~/.ssh/authorized_keys 2>/dev/null || true
 echo ""
 echo "[3/5] Worker Manager..."
 if [ -d "$MANAGER_DIR/deps/wheels" ]; then
-    ok "Agent deps present ($(ls "$MANAGER_DIR/deps/wheels/" | wc -l) wheels)"
+    INSTALLED=$(ls "$MANAGER_DIR/deps/wheels/" 2>/dev/null | grep -c '\.whl$')
+    if [ -f "$DEPS_BUNDLE" ]; then
+        EXPECTED=$(tar -tzf "$DEPS_BUNDLE" 2>/dev/null | grep -c '^.*wheels/.*\.whl$')
+        if [ "$EXPECTED" -gt 0 ] && [ "$INSTALLED" -lt "$EXPECTED" ]; then
+            fail "Agent deps incomplete: $INSTALLED/$EXPECTED wheels — re-run setup or remove $MANAGER_DIR/deps/wheels"
+        else
+            ok "Agent deps present ($INSTALLED wheels)"
+        fi
+    else
+        ok "Agent deps present ($INSTALLED wheels)"
+    fi
 elif [ -f "$MANAGER_DIR/deps/code-server.tar.gz" ]; then
     ok "Agent deps present (code-server only, no wheels)"
 else
@@ -207,7 +328,39 @@ echo "[4/5] Gitea user + skills sync..."
 if [ ! -f "$GITEA_BIN" ]; then
     warn "Gitea not installed, skipping"
 else
-    # Step 1: Start Gitea first to initialize database
+    # Kill any running Gitea first
+    pkill -f "gitea web" 2>/dev/null; sleep 1
+
+    # Clean Gitea data for fresh setup (ensures no stale must_change_password state)
+    # Only clean if user/repo verification fails
+    GITEA_DB="$HICLAW_DIR/gitea/data/gitea.db"
+    NEED_FRESH=false
+    if [ -f "$GITEA_DB" ]; then
+        # Quick test: can we authenticate?
+        # Start Gitea briefly to test
+        GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
+            --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
+            > "$HICLAW_DIR/gitea/log/setup-startup.log" 2>&1 &
+        _TEST_PID=$!
+        sleep 5
+        _AUTH_TEST=$(curl -s --noproxy "*" --max-time 3 -u "$GITEA_USER:$GITEA_PASS" \
+            "http://127.0.0.1:$GITEA_PORT/api/v1/user" 2>&1)
+        kill $_TEST_PID 2>/dev/null; wait $_TEST_PID 2>/dev/null || true; sleep 1
+        if echo "$_AUTH_TEST" | grep -qi "change.*password\|unauthorized"; then
+            log "Existing Gitea has auth issues, doing fresh setup..."
+            NEED_FRESH=true
+        fi
+    else
+        NEED_FRESH=true
+    fi
+
+    if $NEED_FRESH; then
+        log "Cleaning Gitea data for fresh initialization..."
+        rm -rf "$HICLAW_DIR/gitea/data" "$HICLAW_DIR/gitea/repos" "$HICLAW_DIR/gitea/log"
+        mkdir -p "$HICLAW_DIR/gitea/data" "$HICLAW_DIR/gitea/repos" "$HICLAW_DIR/gitea/log"
+    fi
+
+    # Step 1: Start Gitea to initialize database
     log "Starting Gitea temporarily (to initialize DB)..."
     mkdir -p "$HICLAW_DIR/gitea/log"
     GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
@@ -219,7 +372,7 @@ else
     # Wait up to 30 seconds for Gitea
     GITEA_READY=false
     for i in $(seq 1 30); do
-        if curl -s --max-time 2 "http://localhost:$GITEA_PORT" >/dev/null 2>&1; then
+        if curl -s --noproxy "*" --max-time 2 "http://127.0.0.1:$GITEA_PORT" >/dev/null 2>&1; then
             GITEA_READY=true
             break
         fi
@@ -229,55 +382,115 @@ else
     if $GITEA_READY; then
         ok "Gitea started (took ${i}s)"
 
-        # Step 2: Create admin user via CLI (now DB is initialized)
-        log "Creating admin user..."
-        GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
-            --username "$GITEA_USER" --password "$GITEA_PASS" \
-            --email admin@hiclaw.local --admin \
-            --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 | grep -v "already exists" || true
+        # Give Gitea a moment to fully initialize DB tables
+        sleep 3
 
-        # Step 3: Verify user exists via API, create via API if CLI failed
-        log "Verifying admin user..."
-        USER_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
-            "http://localhost:$GITEA_PORT/api/v1/user" 2>&1)
-        if echo "$USER_CHECK" | grep -q '"login"'; then
-            ok "Admin user verified"
-        else
-            log "CLI user creation may have failed, trying API registration..."
-            # Enable registration temporarily and create via API
-            curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/admin/users" \
-                -H "Content-Type: application/json" \
-                -d "{\"username\":\"$GITEA_USER\",\"password\":\"$GITEA_PASS\",\"email\":\"admin@hiclaw.local\",\"must_change_password\":false}" 2>&1 || true
-            # Try signing up
-            curl -s -X POST "http://localhost:$GITEA_PORT/user/sign_up" \
-                -d "user_name=$GITEA_USER&password=$GITEA_PASS&retype=$GITEA_PASS&email=admin@hiclaw.local" 2>&1 || true
-            # Verify again
-            USER_CHECK2=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
-                "http://localhost:$GITEA_PORT/api/v1/user" 2>&1)
-            if echo "$USER_CHECK2" | grep -q '"login"'; then
-                ok "Admin user created via API"
+        # Step 2: Create admin user via CLI (DB is now initialized)
+        log "Creating admin user '$GITEA_USER'..."
+        CLI_OUTPUT=$(GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user create \
+            --username "$GITEA_USER" --password "$GITEA_PASS" \
+            --email admin@hiclaw.local --admin --must-change-password=false \
+            --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1)
+        CLI_EXIT=$?
+
+        # Always clear must_change_password flag via SQLite, then restart Gitea
+        # Gitea caches user state in memory, so DB change alone is not enough
+        GITEA_DB="$HICLAW_DIR/gitea/data/gitea.db"
+        if [ -f "$GITEA_DB" ]; then
+            log "Clearing must_change_password flag..."
+            if command -v sqlite3 &>/dev/null; then
+                sqlite3 "$GITEA_DB" "UPDATE user SET must_change_password=0 WHERE lower_name='$(echo "$GITEA_USER" | tr '[:upper:]' '[:lower:]')';" 2>/dev/null
             else
-                warn "Could not create admin user. Response: $(echo "$USER_CHECK2" | head -1)"
-                warn "Try manually: GITEA_WORK_DIR=$HICLAW_DIR/gitea $GITEA_BIN admin user create --username $GITEA_USER --password $GITEA_PASS --email admin@hiclaw.local --admin --config $HICLAW_DIR/gitea/custom/conf/app.ini"
+                $PYTHON -c "
+import sqlite3
+conn = sqlite3.connect('$GITEA_DB')
+conn.execute(\"UPDATE user SET must_change_password=0 WHERE lower_name=?\", ('$(echo "$GITEA_USER" | tr '[:upper:]' '[:lower:]')',))
+conn.commit()
+conn.close()
+" 2>/dev/null
             fi
+
+            # Restart Gitea so it picks up the DB change
+            log "Restarting Gitea to apply changes..."
+            kill "$GITEA_PID" 2>/dev/null
+            wait "$GITEA_PID" 2>/dev/null || true
+            sleep 2
+            GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" web \
+                --config "$HICLAW_DIR/gitea/custom/conf/app.ini" \
+                > "$HICLAW_DIR/gitea/log/setup-startup.log" 2>&1 &
+            GITEA_PID=$!
+            # Wait for restart
+            for j in $(seq 1 15); do
+                if curl -s --noproxy "*" --max-time 2 "http://127.0.0.1:$GITEA_PORT" >/dev/null 2>&1; then
+                    break
+                fi
+                sleep 1
+            done
+            ok "Gitea restarted"
         fi
 
-        # Step 4: Create skills repo
-        log "Creating skills repo..."
-        REPO_CHECK=$(curl -s --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
-            "http://localhost:$GITEA_PORT/api/v1/repos/$GITEA_USER/skills" 2>&1)
-        if echo "$REPO_CHECK" | grep -q '"full_name"'; then
-            ok "Skills repo already exists"
+        if [ $CLI_EXIT -eq 0 ]; then
+            ok "Admin user created via CLI"
+        elif echo "$CLI_OUTPUT" | grep -qi "already exists"; then
+            ok "Admin user already exists"
+            # Reset password in case it's wrong
+            GITEA_WORK_DIR="$HICLAW_DIR/gitea" "$GITEA_BIN" admin user change-password \
+                --username "$GITEA_USER" --password "$GITEA_PASS" \
+                --config "$HICLAW_DIR/gitea/custom/conf/app.ini" 2>&1 || true
         else
-            REPO_CREATE=$(curl -s -X POST "http://localhost:$GITEA_PORT/api/v1/user/repos" \
-                -H "Content-Type: application/json" \
-                -u "$GITEA_USER:$GITEA_PASS" \
-                -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":false}' 2>&1)
-            if echo "$REPO_CREATE" | grep -q '"full_name"'; then
-                ok "Skills repo created"
+            warn "CLI user creation failed (exit=$CLI_EXIT): $CLI_OUTPUT"
+            log "Trying API registration as fallback..."
+            # Try sign-up form (works when registration is enabled)
+            curl -s --noproxy "*" -X POST "http://127.0.0.1:$GITEA_PORT/user/sign_up" \
+                -d "user_name=$GITEA_USER&password=$GITEA_PASS&retype=$GITEA_PASS&email=admin@hiclaw.local" 2>&1 || true
+            sleep 1
+        fi
+
+        # Step 3: Verify user exists
+        log "Verifying admin user..."
+        USER_CHECK=$(curl -s --noproxy "*" --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+            "http://127.0.0.1:$GITEA_PORT/api/v1/user" 2>&1)
+        if echo "$USER_CHECK" | grep -q '"login"'; then
+            ok "Admin user verified (login OK)"
+        else
+            fail "Admin user NOT working. API response: $(echo "$USER_CHECK" | head -1)"
+            fail "Manual fix: GITEA_WORK_DIR=$HICLAW_DIR/gitea $GITEA_BIN admin user create --username $GITEA_USER --password '$GITEA_PASS' --email admin@hiclaw.local --admin --config $HICLAW_DIR/gitea/custom/conf/app.ini"
+        fi
+
+        # Step 4: Create skills repo (only if user is working)
+        if echo "$USER_CHECK" | grep -q '"login"'; then
+            log "Creating skills repo..."
+            REPO_CHECK=$(curl -s --noproxy "*" --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+                "http://127.0.0.1:$GITEA_PORT/api/v1/repos/$GITEA_USER/skills" 2>&1)
+            if echo "$REPO_CHECK" | grep -q '"full_name"'; then
+                ok "Skills repo already exists"
             else
-                warn "Could not create skills repo: $(echo "$REPO_CREATE" | head -1)"
+                REPO_CREATE=$(curl -s --noproxy "*" -X POST "http://127.0.0.1:$GITEA_PORT/api/v1/user/repos" \
+                    -H "Content-Type: application/json" \
+                    -u "$GITEA_USER:$GITEA_PASS" \
+                    -d '{"name":"skills","description":"HiClaw Skills Repository","default_branch":"master","auto_init":true}' 2>&1)
+                if echo "$REPO_CREATE" | grep -q '"full_name"'; then
+                    ok "Skills repo created"
+                else
+                    fail "Could not create skills repo: $(echo "$REPO_CREATE" | head -1)"
+                fi
             fi
+
+            # Also create extensions repo
+            log "Creating extensions repo..."
+            EXT_CHECK=$(curl -s --noproxy "*" --max-time 5 -u "$GITEA_USER:$GITEA_PASS" \
+                "http://127.0.0.1:$GITEA_PORT/api/v1/repos/$GITEA_USER/extensions" 2>&1)
+            if echo "$EXT_CHECK" | grep -q '"full_name"'; then
+                ok "Extensions repo already exists"
+            else
+                curl -s --noproxy "*" -X POST "http://127.0.0.1:$GITEA_PORT/api/v1/user/repos" \
+                    -H "Content-Type: application/json" \
+                    -u "$GITEA_USER:$GITEA_PASS" \
+                    -d '{"name":"extensions","description":"OpenHands extensions (mirrored)","default_branch":"main","auto_init":false}' >/dev/null 2>&1
+                ok "Extensions repo created"
+            fi
+        else
+            warn "Skipping repo creation — admin user not working"
         fi
 
         # Step 5: Push skills
@@ -286,8 +499,8 @@ else
             TMPDIR="$(mktemp -d)"
             if git clone "$HICLAW_DIR/skills-repo.git" "$TMPDIR/skills" 2>/dev/null; then
                 cd "$TMPDIR/skills"
-                git remote add gitea "http://$GITEA_USER:$GITEA_PASS@localhost:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
-                PUSH_OUTPUT=$(git push gitea master --force 2>&1)
+                git remote add gitea "http://$GITEA_USER:$GITEA_PASS@127.0.0.1:$GITEA_PORT/$GITEA_USER/skills.git" 2>/dev/null || true
+                PUSH_OUTPUT=$(http_proxy="" https_proxy="" HTTP_PROXY="" HTTPS_PROXY="" git -c http.proxy="" push gitea master --force 2>&1)
                 if [ $? -eq 0 ]; then
                     ok "Skills pushed to Gitea"
                 else

@@ -137,7 +137,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
     if (selectedIds.size === conversations.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(conversations.map((c) => c.conversation_id)));
+      setSelectedIds(new Set(conversations.map((c) => c.id)));
     }
   };
 
@@ -178,8 +178,8 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
   // Fetch in-progress start tasks
   const { data: startTasks } = useStartTasks();
 
-  // Flatten all pages into a single array of conversations
-  const conversations = data?.pages.flatMap((page) => page.results) ?? [];
+  // Flatten all pages into a single array of conversations (V1 uses 'items' instead of 'results')
+  const conversations = data?.pages.flatMap((page) => page.items) ?? [];
 
   const { mutate: deleteConversation } = useDeleteConversation();
   const { mutate: pauseConversationSandbox } =
@@ -335,18 +335,18 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
         </NavLink>
       ))}
       {/* Then render completed conversations */}
-      {conversations?.map((project) => (
+      {conversations?.map((conversation) => (
         batchMode ? (
           <div
-            key={project.conversation_id}
-            onClick={() => toggleSelect(project.conversation_id)}
-            className={`cursor-pointer flex items-center gap-2 ${selectedIds.has(project.conversation_id) ? "bg-blue-900/30" : ""}`}
+            key={conversation.id}
+            onClick={() => toggleSelect(conversation.id)}
+            className={`cursor-pointer flex items-center gap-2 ${selectedIds.has(conversation.id) ? "bg-blue-900/30" : ""}`}
           >
             <div className="shrink-0 pl-2">
               <input
                 type="checkbox"
-                checked={selectedIds.has(project.conversation_id)}
-                onChange={() => toggleSelect(project.conversation_id)}
+                checked={selectedIds.has(conversation.id)}
+                onChange={() => toggleSelect(conversation.id)}
                 className="accent-blue-500 w-3.5 h-3.5"
               />
             </div>
@@ -355,17 +355,16 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
                 onDelete={() => {}}
                 onStop={() => {}}
                 onChangeTitle={() => {}}
-                title={project.title}
+                title={conversation.title ?? ""}
                 selectedRepository={{
-                  selected_repository: project.selected_repository,
-                  selected_branch: project.selected_branch,
-                  git_provider: project.git_provider as Provider,
+                  selected_repository: conversation.selected_repository,
+                  selected_branch: conversation.selected_branch,
+                  git_provider: conversation.git_provider as Provider,
                 }}
-                lastUpdatedAt={project.last_updated_at}
-                createdAt={project.created_at}
-                conversationStatus={project.status}
-                conversationId={project.conversation_id}
-                conversationVersion={project.conversation_version}
+                lastUpdatedAt={conversation.updated_at}
+                createdAt={conversation.created_at}
+                sandboxStatus={conversation.sandbox_status}
+                conversationId={conversation.id}
                 contextMenuOpen={false}
                 onContextMenuToggle={() => {}}
               />
@@ -373,11 +372,11 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
           </div>
         ) : (
         <NavLink
-          key={project.conversation_id}
-          to={`/conversations/${project.conversation_id}`}
+          key={conversation.id}
+          to={`/conversations/${conversation.id}`}
           onClick={async (e) => {
             // >>> CUSTOM: HiClaw — remote conversations: check if already connected <<<
-            if (project.sandbox_id?.startsWith("remote-")) {
+            if (conversation.sandbox_id?.startsWith("remote-")) {
               try {
                 const resp = await fetch(`${workerManagerUrl}/api/machines`);
                 const machines = await resp.json();
@@ -392,7 +391,7 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
                 }
               } catch { /* fall through to password prompt */ }
               // Not connected — show password prompt
-              handleRemoteConversationClick(project.conversation_id, e);
+              handleRemoteConversationClick(conversation.id, e);
               return;
             }
             // >>> END CUSTOM <<<
@@ -401,33 +400,33 @@ export function ConversationPanel({ onClose }: ConversationPanelProps) {
         >
           <ConversationCard
             onDelete={() =>
-              handleDeleteProject(project.conversation_id, project.title)
+              handleDeleteProject(conversation.id, conversation.title ?? "")
             }
             onStop={() =>
               handleStopConversation(
-                project.conversation_id,
-                project.conversation_version,
-                project.sandbox_id,
+                conversation.id,
+                "V1",
+                conversation.sandbox_id,
               )
             }
             onChangeTitle={(title) =>
-              handleConversationTitleChange(project.conversation_id, title)
+              handleConversationTitleChange(conversation.id, title)
             }
-            title={project.title}
+            title={conversation.title ?? ""}
             selectedRepository={{
-              selected_repository: project.selected_repository,
-              selected_branch: project.selected_branch,
-              git_provider: project.git_provider as Provider,
+              selected_repository: conversation.selected_repository,
+              selected_branch: conversation.selected_branch,
+              git_provider: conversation.git_provider as Provider,
             }}
-            lastUpdatedAt={project.last_updated_at}
-            createdAt={project.created_at}
-            conversationStatus={project.status}
-            conversationId={project.conversation_id}
-            conversationVersion={project.conversation_version}
-            contextMenuOpen={openContextMenuId === project.conversation_id}
+            lastUpdatedAt={conversation.updated_at}
+            createdAt={conversation.created_at}
+            sandboxStatus={conversation.sandbox_status}
+            conversationId={conversation.id}
+            contextMenuOpen={openContextMenuId === conversation.id}
             onContextMenuToggle={(isOpen) =>
-              setOpenContextMenuId(isOpen ? project.conversation_id : null)
+              setOpenContextMenuId(isOpen ? conversation.id : null)
             }
+            llmModel={conversation.llm_model}
           />
         </NavLink>
         )

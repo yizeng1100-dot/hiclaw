@@ -1,0 +1,1 @@
+import{c as t}from"./react-Yf0r3PuM.js";const r={optimisticUserMessage:null},c=t((s,e)=>({...r,setOptimisticUserMessage:i=>s(()=>({optimisticUserMessage:i})),getOptimisticUserMessage:()=>e().optimisticUserMessage,removeOptimisticUserMessage:()=>s(()=>({optimisticUserMessage:null}))}));export{c as u};

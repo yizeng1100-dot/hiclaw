@@ -1,0 +1,1 @@
+import{o as s}from"./open-hands-axios-CqGYhNQT.js";class r{static async getUser(){const t=await s.get("/api/user/info"),{data:a}=t;return{id:a.id,login:a.login,avatar_url:a.avatar_url,company:a.company,name:a.name,email:a.email}}static async getGitOrganizations(){const{data:t}=await s.get("/api/user/git-organizations");return t}}export{r as U};

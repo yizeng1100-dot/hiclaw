@@ -93,6 +93,7 @@ from openhands.sdk.llm import LLM
 from openhands.sdk.plugin import PluginSource
 from openhands.sdk.secret import LookupSecret, SecretValue, StaticSecret
 from openhands.sdk.utils.paging import page_iterator
+from openhands.utils._redact_compat import sanitize_dict  # >>> CUSTOM: HiClaw — fallback for older SDK <<<
 from openhands.sdk.workspace.remote.async_remote_workspace import AsyncRemoteWorkspace
 from openhands.server.types import AppMode
 from openhands.storage.data_models.conversation_metadata import ConversationTrigger
@@ -404,10 +405,13 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 f'litellm_extra_body={_agent_llm.get("litellm_extra_body")}'
             )
             # >>> END CUSTOM <<<
+            headers = (
+                {'X-Session-API-Key': session_api_key} if session_api_key else {}
+            )
             response = await self.httpx_client.post(
                 f'{agent_server_url}/api/conversations',
                 json=body_json,
-                headers={'X-Session-API-Key': session_api_key} if session_api_key else {},
+                headers=headers,
                 timeout=self.sandbox_startup_timeout,
             )
 
@@ -612,6 +616,55 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             return []
 
     # >>> CUSTOM: HiClaw <<<
+    def _try_probe_and_reconnect(self, remote_host: str | None = None) -> None:
+        """Probe worker-manager machine health, trigger auto-reconnect if disconnected.
+
+        Synchronous wrapper around worker-manager API calls. Failures are silent —
+        the existing flow handles missing tunnel by returning PAUSED status.
+        """
+        if not remote_host:
+            return
+        try:
+            from openhands.server.routes.hiclaw_config import WORKER_MANAGER_URL
+            import httpx as _httpx
+            # Find machine_id matching the host
+            with _httpx.Client(timeout=2) as client:
+                resp = client.get(f'{WORKER_MANAGER_URL}/api/machines')
+                machines = resp.json()
+                target = None
+                for m in machines:
+                    if m.get('host') == remote_host:
+                        target = m
+                        break
+                if not target:
+                    return
+                machine_id = target['id']
+                status = target.get('status')
+                # Probe to refresh status if claimed READY
+                if status == 'ready':
+                    try:
+                        client.post(
+                            f'{WORKER_MANAGER_URL}/api/machines/{machine_id}/probe',
+                            timeout=8,
+                        )
+                        # Re-read status after probe
+                        resp2 = client.get(f'{WORKER_MANAGER_URL}/api/machines/{machine_id}')
+                        target = resp2.json()
+                        status = target.get('status')
+                    except Exception:
+                        pass
+                # If disconnected, attempt auto-reconnect using saved credentials
+                if status in ('disconnected', 'error'):
+                    try:
+                        client.post(
+                            f'{WORKER_MANAGER_URL}/api/machines/{machine_id}/reconnect',
+                            timeout=5,
+                        )
+                    except Exception:
+                        pass
+        except Exception as e:
+            _logger.debug(f'probe_and_reconnect failed for {remote_host}: {e}')
+
     def _get_tunnel_port_for_host(self, remote_host: str | None = None) -> int | None:
         """Get tunnel port from worker-manager, matching by remote_host if provided.
 
@@ -692,6 +745,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             conversation_url = None
             sandbox_status = SandboxStatus.PAUSED  # default: assume tunnel is dead
 
+            # >>> CUSTOM: HiClaw — probe machine health + auto-reconnect <<<
+            _conv_host = getattr(app_conversation_info, 'remote_host', None)
+            self._try_probe_and_reconnect(_conv_host)
+            # >>> END CUSTOM <<<
+
             # Try multiple sources for tunnel port:
             # 1. Saved remote_agent_url from conversation creation
             # 2. Worker Manager cache (for reconnected tunnels with new ports)
@@ -707,7 +765,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     pass
 
             # Also check Worker Manager for latest tunnel port (may have changed after reconnect)
-            _conv_host = getattr(app_conversation_info, 'remote_host', None)
             _wm_port = self._get_tunnel_port_for_host(_conv_host)
             if _wm_port:
                 tunnel_port = _wm_port  # prefer fresh port from Worker Manager
@@ -1119,7 +1176,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 static_token = await self.user_context.get_latest_token(provider_type)
                 if static_token:
                     secrets[secret_name] = StaticSecret(
-                        value=static_token, description=description
+                        value=SecretStr(static_token), description=description
                     )
 
         return secrets
@@ -1135,7 +1192,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         Returns:
             Configured LLM instance
         """
-        model = llm_model or user.llm_model
+        model: str = llm_model or user.llm_model or LLM.model_fields['model'].default
         base_url = user.llm_base_url
         if model and (
             model.startswith('openhands/') or model.startswith('litellm_proxy/')
@@ -1154,14 +1211,15 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             base_url=base_url,
             api_key=user.llm_api_key,
             usage_id='agent',
-            # >>> CUSTOM: HiClaw — faster error feedback for internal networks <<<
-            timeout=30,            # HTTP timeout: 30s (default 300s)
-            num_retries=2,         # only retry twice (default 5)
-            retry_min_wait=2,      # min wait 2s between retries (default 8s)
-            retry_max_wait=10,     # max wait 10s between retries (default 64s)
-            retry_multiplier=2.0,  # gentler backoff (default 8.0)
+            # >>> CUSTOM: HiClaw — tuned for unstable internal network + long tasks <<<
+            timeout=600,           # HTTP timeout: 10min (长任务模型可能思考很久)
+            num_retries=10,        # retry 10 times (网络不稳定尽量多重试)
+            retry_min_wait=5,      # min wait 5s between retries
+            retry_max_wait=120,    # max wait 2min between retries
+            retry_multiplier=2.0,  # backoff: 5→10→20→40→80→120→120→120→120→120s
+            # 总重试等待 ~12min + 每次请求最多10min = 极端情况可撑 ~20min+
             # >>> END CUSTOM <<<
-            log_completions=True,
+            log_completions=bool(os.environ.get('HICLAW_LLM_DEBUG')),
             **({"log_completions_folder": _log_folder} if _log_folder else {}),
         )
 
@@ -1372,7 +1430,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
 
         # Wrap in the mcpServers structure required by the SDK
         mcp_config = {'mcpServers': mcp_servers} if mcp_servers else {}
-        _logger.info(f'Final MCP configuration: {mcp_config}')
+        _logger.info(f'Final MCP configuration: {sanitize_dict(mcp_config)}')
 
         return llm, mcp_config
 
@@ -1419,7 +1477,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 system_prompt_filename='system_prompt_planning.j2',
                 system_prompt_kwargs={'plan_structure': format_plan_structure()},
                 condenser=condenser,
-                security_analyzer=None,
                 mcp_config=mcp_config,
             )
         else:

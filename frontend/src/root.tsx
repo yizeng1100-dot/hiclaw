@@ -11,6 +11,9 @@ import "./index.css";
 import React from "react";
 import { Toaster } from "react-hot-toast";
 import { useInvitation } from "#/hooks/use-invitation";
+// >>> CUSTOM: HiClaw <<<
+import { SandboxReconnectModal } from "#/components/features/custom/sandbox-reconnect-modal";
+// >>> END CUSTOM <<<
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -42,5 +45,12 @@ export default function App() {
   // This runs on all pages to catch redirects from auth callback
   useInvitation();
 
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      {/* >>> CUSTOM: HiClaw — global sandbox reconnect prompt <<< */}
+      <SandboxReconnectModal />
+      {/* >>> END CUSTOM <<< */}
+    </>
+  );
 }

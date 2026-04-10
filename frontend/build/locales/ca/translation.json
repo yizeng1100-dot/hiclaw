@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "Desconnectar",
   "ORG$CLAIM_SUCCESS": "Organització reclamada amb èxit.",
   "ORG$DISCONNECT_SUCCESS": "Organització desconnectada.",
-  "ORG$CLAIM_ERROR": "Error de connexió. L'organització ja ha estat reclamada."
+  "ORG$CLAIM_ERROR": "Error de connexió. L'organització ja ha estat reclamada.",
+  "ORG$DISCONNECT_ERROR": "No s'ha pogut desconnectar l'organització.",
+  "ORG$NO_GIT_ORGANIZATIONS": "No s'han trobat organitzacions Git."
 }

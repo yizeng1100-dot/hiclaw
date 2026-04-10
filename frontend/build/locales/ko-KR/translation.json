@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "연결 해제",
   "ORG$CLAIM_SUCCESS": "조직이 성공적으로 클레임되었습니다.",
   "ORG$DISCONNECT_SUCCESS": "조직 연결이 해제되었습니다.",
-  "ORG$CLAIM_ERROR": "연결에 실패했습니다. 조직이 이미 클레임되었습니다."
+  "ORG$CLAIM_ERROR": "연결에 실패했습니다. 조직이 이미 클레임되었습니다.",
+  "ORG$DISCONNECT_ERROR": "조직 연결 해제에 실패했습니다.",
+  "ORG$NO_GIT_ORGANIZATIONS": "Git 조직을 찾을 수 없습니다."
 }

@@ -21,6 +21,14 @@ DEFAULT_BRANCH = master
 INSTALL_LOCK = true
 SECRET_KEY = hiclaw-secret-key-change-me
 X_FRAME_OPTIONS =
+PASSWORD_CHECK_PWN = false
+
+[admin]
+DISABLE_REGULAR_ORG_CREATION = false
+
+[openid]
+ENABLE_OPENID_SIGNIN = false
+ENABLE_OPENID_SIGNUP = false
 
 [service]
 DISABLE_REGISTRATION = false

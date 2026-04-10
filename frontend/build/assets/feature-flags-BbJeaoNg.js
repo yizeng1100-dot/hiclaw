@@ -1,1 +1,0 @@
-function E(O,_=!1){try{const N=localStorage.getItem(`FEATURE_${O}`)||_.toString();return!!JSON.parse(N)}catch{return _}}const R=()=>E("VSCODE_IN_NEW_TAB"),a=()=>E("ENABLE_ONBOARDING"),s=()=>E("PROJ_USER_JOURNEY"),A=()=>E("SANDBOX_GROUPING"),n=()=>E("ORG_CLAIMS_RESOLVER_ROUTING");export{s as E,R as V,a,A as b,n as c};

@@ -1,4 +1,7 @@
 import axios, { AxiosError, AxiosResponse } from "axios";
+// >>> CUSTOM: HiClaw <<<
+import { dispatchSandboxError } from "#/utils/sandbox-error-event";
+// >>> END CUSTOM <<<
 
 export const openHands = axios.create({
   baseURL: `${window.location.protocol}//${import.meta.env.VITE_BACKEND_BASE_URL || window?.location.host}`,
@@ -40,6 +43,13 @@ const checkForEmailVerificationError = (data: any): boolean => {
   return false;
 };
 
+// >>> CUSTOM: HiClaw — re-export for backward compat <<<
+export {
+  SANDBOX_ERROR_EVENT,
+  type SandboxErrorKind,
+} from "#/utils/sandbox-error-event";
+// >>> END CUSTOM <<<
+
 // Set up the global interceptor
 openHands.interceptors.response.use(
   (response: AxiosResponse) => response,
@@ -53,6 +63,16 @@ openHands.interceptors.response.use(
         window.location.reload();
       }
     }
+
+    // >>> CUSTOM: HiClaw — surface sandbox disconnect errors as a global event <<<
+    const status = error.response?.status;
+    const data = error.response?.data as { error?: string } | undefined;
+    if (status === 410 && data?.error === "sandbox_disconnected") {
+      dispatchSandboxError("sandbox_disconnected");
+    } else if (status === 503 && data?.error === "sandbox_stale") {
+      dispatchSandboxError("sandbox_stale");
+    }
+    // >>> END CUSTOM <<<
 
     // Continue with the error for other error handlers
     return Promise.reject(error);

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 TEMPLATES = {
     "openhands": {
         "docker": {
-            "image": "ghcr.io/openhands/agent-server:1.14.0-python",
+            "image": "ghcr.io/openhands/agent-server:1.16.1-python",
             "port": 8000,
             "health_check": "/health",
         },
@@ -108,7 +108,7 @@ class WorkerManager:
     async def _start_docker(self, ssh: SSHClient, worker: WorkerInfo) -> None:
         """Start agent-server as a Docker container on the remote machine."""
         tmpl = TEMPLATES.get(worker.template, {}).get("docker", {})
-        image = tmpl.get("image", "ghcr.io/openhands/agent-server:1.14.0-python")
+        image = tmpl.get("image", "ghcr.io/openhands/agent-server:1.16.1-python")
         container_port = tmpl.get("port", 8000)
 
         container_name = f"agent-worker-{worker.id}"

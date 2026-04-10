@@ -45,6 +45,9 @@ import ChatStatusIndicator from "./chat-status-indicator";
 import { getStatusColor, getStatusText } from "#/utils/utils";
 import { useNewConversationCommand } from "#/hooks/mutation/use-new-conversation-command";
 import { I18nKey } from "#/i18n/declaration";
+// >>> CUSTOM: HiClaw <<<
+import { ContextUsageIndicator } from "#/components/features/custom/context-usage-indicator";
+// >>> END CUSTOM <<<
 
 function getEntryPoint(
   hasRepository: boolean | null,
@@ -424,6 +427,9 @@ export function ChatInterface() {
                   isSaasMode={config?.app_mode === "saas"}
                 />
               )}
+              {/* >>> CUSTOM: HiClaw — context window usage indicator <<< */}
+              <ContextUsageIndicator />
+              {/* >>> END CUSTOM <<< */}
             </div>
 
             <div className="absolute left-1/2 transform -translate-x-1/2 bottom-0">
@@ -443,10 +449,7 @@ export function ChatInterface() {
           {/* >>> CUSTOM: HiClaw — skills commit bar <<< */}
           <SkillsCommitBar />
           {/* >>> END CUSTOM <<< */}
-          <InteractiveChatBox
-            onSubmit={handleSendMessage}
-            disabled={isNewConversationPending}
-          />
+          <InteractiveChatBox onSubmit={handleSendMessage} />
         </div>
 
         {config?.app_mode !== "saas" && !isV1Conversation && (

@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "قطع الاتصال",
   "ORG$CLAIM_SUCCESS": "تمت المطالبة بالمنظمة بنجاح.",
   "ORG$DISCONNECT_SUCCESS": "تم قطع اتصال المنظمة.",
-  "ORG$CLAIM_ERROR": "فشل الاتصال. المنظمة مطالب بها بالفعل."
+  "ORG$CLAIM_ERROR": "فشل الاتصال. المنظمة مطالب بها بالفعل.",
+  "ORG$DISCONNECT_ERROR": "فشل في قطع اتصال المنظمة.",
+  "ORG$NO_GIT_ORGANIZATIONS": "لم يتم العثور على منظمات Git."
 }

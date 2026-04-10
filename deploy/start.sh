@@ -23,7 +23,8 @@
 #   HICLAW_LLM_DEBUG      LLM debug 日志   默认: 关闭 (设为1开启)
 # ═══════════════════════════════════════════════════════════════════════════
 
-set -e
+set -eE
+trap 'echo ""; echo "=== ERROR at line $LINENO ==="; echo "  Command: $BASH_COMMAND"; echo "  Exit code: $?"; echo "  Check log above for details."' ERR
 
 # ─── Handle restart subcommand ───
 if [ "${1:-}" = "restart" ]; then
@@ -269,18 +270,37 @@ if [ -f "$GITEA_TEMPLATE" ]; then
 fi
 
 # ─── DB schema migration (add HiClaw custom columns) ───
+# Adds columns for HiClaw remote agent support and upstream tags column
 OH_DB="$HOME/.openhands/openhands.db"
 if [ -f "$OH_DB" ]; then
     $PYTHON -c "
-import sqlite3
-conn = sqlite3.connect('$OH_DB')
-cols = [r[1] for r in conn.execute('PRAGMA table_info(conversation_metadata)').fetchall()]
-if 'remote_agent_url' not in cols:
-    conn.execute('ALTER TABLE conversation_metadata ADD COLUMN remote_agent_url TEXT')
-    conn.commit()
-    print('  DB migration: added remote_agent_url column')
-conn.close()
-" 2>/dev/null
+import sqlite3, sys
+try:
+    conn = sqlite3.connect('$OH_DB')
+    tables = [r[0] for r in conn.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()]
+    if 'conversation_metadata' not in tables:
+        print('  DB migration: skipped (table not yet created)')
+        conn.close()
+        sys.exit(0)
+    cols = [r[1] for r in conn.execute('PRAGMA table_info(conversation_metadata)').fetchall()]
+    migrations = [
+        ('remote_agent_url',  'TEXT'),
+        ('remote_working_dir','TEXT'),
+        ('remote_host',       'TEXT'),
+        ('tags',              'JSON'),
+    ]
+    added = []
+    for col, ctype in migrations:
+        if col not in cols:
+            conn.execute(f'ALTER TABLE conversation_metadata ADD COLUMN {col} {ctype}')
+            added.append(col)
+    if added:
+        conn.commit()
+        print(f'  DB migration: added columns {added}')
+    conn.close()
+except Exception as e:
+    print(f'  DB migration: skipped ({e})')
+" || true
 fi
 
 # ─── 1. Gitea ───

@@ -1277,5 +1277,7 @@
   "ORG$DISCONNECT": "切断",
   "ORG$CLAIM_SUCCESS": "組織の申請が完了しました。",
   "ORG$DISCONNECT_SUCCESS": "組織の接続が解除されました。",
-  "ORG$CLAIM_ERROR": "接続に失敗しました。組織はすでに申請されています。"
+  "ORG$CLAIM_ERROR": "接続に失敗しました。組織はすでに申請されています。",
+  "ORG$DISCONNECT_ERROR": "組織の切断に失敗しました。",
+  "ORG$NO_GIT_ORGANIZATIONS": "Git組織が見つかりません。"
 }

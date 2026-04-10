@@ -25,6 +25,9 @@ import {
   HookExecutionEventMessage,
 } from "./event-message-components";
 import { createSkillReadyEvent } from "./event-content-helpers/create-skill-ready-event";
+// >>> CUSTOM: HiClaw <<<
+import { CondensationEventMessage } from "./event-message-components/condensation-event-message";
+// >>> END CUSTOM <<<
 import { PlanPreview } from "../../features/chat/plan-preview";
 import { shouldShowPlanPreview } from "./hooks/use-plan-preview-events";
 
@@ -194,6 +197,15 @@ export function EventMessage({
   if (isHookExecutionEvent(event)) {
     return <HookExecutionEventMessage event={event} />;
   }
+
+  // >>> CUSTOM: HiClaw — Condensation events <<<
+  if (
+    typeof (event as { kind?: unknown }).kind === "string" &&
+    (event as { kind: string }).kind === "Condensation"
+  ) {
+    return <CondensationEventMessage event={event as never} />;
+  }
+  // >>> END CUSTOM <<<
 
   // Finish actions
   if (isActionEvent(event) && event.action.kind === "FinishAction") {

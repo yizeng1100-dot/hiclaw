@@ -8,7 +8,7 @@ server:
 templates:
   openhands:
     docker:
-      image: "ghcr.io/openhands/agent-server:1.14.0-python"
+      image: "ghcr.io/openhands/agent-server:1.16.1-python"
       port: 8000
       health_check: "/health"
       command: "--port 8000"

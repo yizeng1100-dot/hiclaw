@@ -1,1 +1,0 @@
-import{d as t}from"./use-selected-organization-BHut7euT.js";const r={optimisticUserMessage:null},c=t((s,e)=>({...r,setOptimisticUserMessage:i=>s(()=>({optimisticUserMessage:i})),getOptimisticUserMessage:()=>e().optimisticUserMessage,removeOptimisticUserMessage:()=>s(()=>({optimisticUserMessage:null}))}));export{c as u};

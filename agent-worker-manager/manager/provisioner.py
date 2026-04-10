@@ -27,7 +27,7 @@ REMOTE_PYTHON_INSTALL_PATH = os.environ.get('HICLAW_REMOTE_PYTHON_PATH', '$HOME/
 TEMPLATES = {
     "openhands": {
         "venv_path": REMOTE_VENV_PATH,
-        "pip_package": "openhands-agent-server==1.14 openhands-sdk==1.14 openhands-tools==1.14",
+        "pip_package": "openhands-agent-server==1.16.1 openhands-sdk==1.16.1 openhands-tools==1.16.1",
         "binary": f"{REMOTE_VENV_PATH}/bin/agent-server",
         "health_check": "/health",
     },
@@ -233,47 +233,100 @@ class Provisioner:
                 return
 
         # ── Step 2: Agent SDK ──
-        # Check: binary exists AND actually works (import test)
+        # Check: binary exists AND actually works (import test) AND version matches expected
         binary = self.tmpl["binary"].replace("$HOME", "~")
         venv = self.tmpl["venv_path"]
         has_sdk = await self._check_remote(
             f"test -f {binary} || test -f /opt/agent-venv/bin/agent-server"
         )
         sdk_healthy = False
+        # >>> CUSTOM: HiClaw — track whether to force re-upload wheels <<<
+        force_reupload_wheels = False
+        # >>> END CUSTOM <<<
+        # >>> CUSTOM: HiClaw — extract expected version from pip_package for comparison <<<
+        # pip_package example: "openhands-agent-server==1.16.1 openhands-sdk==1.16.1 ..."
+        import re as _re
+        _m = _re.search(r"openhands-sdk==(\S+)", self.tmpl.get("pip_package", ""))
+        expected_sdk_version = _m.group(1) if _m else None
+        # >>> END CUSTOM <<<
         if has_sdk:
-            # >>> CUSTOM: HiClaw — verify SDK actually works, not just file exists <<<
+            # >>> CUSTOM: HiClaw — verify ALL critical imports work AND version matches <<<
+            # Must check openhands.tools AND a sample dependency (binaryornot) too,
+            # otherwise broken installs (missing tools or deps) will be reused.
             verify_out, _, verify_ec = await self.ssh.run(
                 f"PYTHONPATH={venv}/lib {remote_python} -c '"
-                "import openhands.agent_server; print(\"VERIFY_OK\")"
+                "import openhands.agent_server; "
+                "import openhands.sdk; "
+                "import openhands.tools; "
+                "import binaryornot; "
+                "import importlib.metadata; "
+                "print(\"VERIFY_OK\", importlib.metadata.version(\"openhands-sdk\"))"
                 "' 2>&1", timeout=15)
+            installed_version = None
             if "VERIFY_OK" in verify_out:
+                try:
+                    installed_version = verify_out.split("VERIFY_OK", 1)[1].strip().split()[0]
+                except Exception:
+                    installed_version = None
+            version_matches = (
+                expected_sdk_version is not None
+                and installed_version == expected_sdk_version
+            )
+            if "VERIFY_OK" in verify_out and version_matches:
                 sdk_healthy = True
-                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Already installed")
+                yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped",
+                           detail=f"Already installed v{installed_version}")
                 # Always regenerate wrapper scripts (ensure monkey-patch is up to date)
                 await self._write_wrapper_scripts(venv, remote_python)
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed", detail="Already installed & verified")
-                logger.info(f"[{self._host}] SDK: already installed and verified, wrapper regenerated")
+                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed",
+                           detail=f"Already installed v{installed_version} & verified")
+                logger.info(f"[{self._host}] SDK: v{installed_version} already installed, wrapper regenerated")
             else:
-                # Binary exists but broken — clean up everything and reinstall
-                logger.warning(f"[{self._host}] SDK binary broken: {verify_out.strip()[-200:]}")
-                yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
-                           detail="Existing install is broken, cleaning up and reinstalling...")
+                # Binary exists but broken OR outdated — clean up everything and reinstall
+                if "VERIFY_OK" in verify_out and not version_matches:
+                    reason = f"version mismatch: installed={installed_version}, expected={expected_sdk_version}"
+                    logger.warning(f"[{self._host}] SDK {reason}, upgrading")
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
+                               detail=f"Upgrading: {reason}")
+                else:
+                    logger.warning(f"[{self._host}] SDK binary broken: {verify_out.strip()[-200:]}")
+                    yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
+                               detail="Existing install is broken, cleaning up and reinstalling...")
+                # >>> CUSTOM: HiClaw — force-clean wheels too, then verify removal <<<
                 await self.ssh.run(
                     f"rm -rf {venv} {REMOTE_DEPS_PATH}/wheels "
                     f"/opt/agent-venv "  # legacy path
                     f"~/.hiclaw/agent-deps/python3-standalone",  # old python path
                     timeout=30)
-                logger.info(f"[{self._host}] Cleaned up broken SDK install")
+                # Verify cleanup actually removed the wheels dir
+                check_cleanup, _, _ = await self.ssh.run(
+                    f"test -d {REMOTE_DEPS_PATH}/wheels && echo STILL_THERE || echo CLEAN",
+                    timeout=5,
+                )
+                if "STILL_THERE" in check_cleanup:
+                    # Force re-create as empty so the upload path runs
+                    await self.ssh.run(
+                        f"rm -rf {REMOTE_DEPS_PATH}/wheels && mkdir -p {REMOTE_DEPS_PATH}",
+                        timeout=10,
+                    )
+                # >>> END CUSTOM <<<
+                logger.info(f"[{self._host}] Cleaned up old SDK install")
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
                            detail="Cleanup done. Re-uploading and reinstalling...")
+                # >>> CUSTOM: HiClaw — mark that we MUST re-upload after broken install <<<
+                force_reupload_wheels = True
             # >>> END CUSTOM <<<
 
         if not sdk_healthy:
-            # Check: wheels already on remote?
-            has_wheels = await self._check_remote(f"test -d {REMOTE_DEPS_PATH}/wheels")
+            # >>> CUSTOM: HiClaw — re-upload wheels if forced OR not present <<<
+            has_wheels = (
+                False if force_reupload_wheels
+                else await self._check_remote(f"test -d {REMOTE_DEPS_PATH}/wheels")
+            )
             if has_wheels:
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped", detail="Wheels already on remote")
                 logger.info(f"[{self._host}] SDK wheels already on remote, skipping upload")
+            # >>> END CUSTOM <<<
             else:
                 wheels_dir = os.path.join(DEPS_DIR, "wheels")
                 if not os.path.isdir(wheels_dir):
@@ -316,27 +369,52 @@ class Provisioner:
                 f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"pip setuptools wheel 2>&1 || true", timeout=60)
 
-            # Step 2b: Install all wheels with --no-deps first (avoid resolution failures)
-            # Use -q (quiet) to reduce output volume — large output can block SSH channel
+            # Step 2b: Install all NON-openhands wheels first (deps only).
+            # Excluding openhands_* here avoids the namespace package corruption
+            # that happens when pip --target installs multiple wheels sharing the
+            # same top-level package. The openhands wheels are installed
+            # individually in pass 2.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 1/2)...")
             stdout_all, stderr, ec = await self.ssh.run(
+                f"cd {REMOTE_DEPS_PATH}/wheels && "
+                f"NON_OH=$(ls *.whl | grep -v '^openhands_' | tr '\\n' ' ') && "
                 f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"{REMOTE_DEPS_PATH}/wheels/*.whl 2>&1; echo EXIT_CODE=$?", timeout=600)
+                f"$NON_OH 2>&1; echo EXIT_CODE=$?", timeout=600)
             logger.info(f"[{self._host}] Pip pass 1 tail: {stdout_all[-300:]}")
 
-            # Step 2c: Install main packages with deps (they'll find deps from pass 1)
+            # >>> CUSTOM: HiClaw — clean only openhands namespace before pass 2 <<<
+            # Pass 1 no longer installs openhands_* (excluded by grep) but a
+            # previous failed run might have left stale files. Clean only the
+            # openhands namespace; do NOT remove binaryornot — it was just
+            # installed in pass 1 and pass 2 uses --no-deps.
+            await self.ssh.run(
+                f"rm -rf {venv}/lib/openhands "
+                f"{venv}/lib/openhands_aci* "
+                f"{venv}/lib/openhands_sdk* "
+                f"{venv}/lib/openhands_tools* "
+                f"{venv}/lib/openhands_agent_server*",
+                timeout=15,
+            )
+            # >>> END CUSTOM <<<
+
+            # Step 2c: Install ALL openhands wheels in a SINGLE pip command.
+            # pip --target with shared namespace packages (openhands.*) needs all
+            # wheels passed at once. Sequential pip install commands break the
+            # namespace because pip cleans the existing namespace dir each call.
+            # Single command lets pip merge all subpackages correctly.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
-            stdout2, stderr2, ec2 = await self.ssh.run(
-                f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
-                f"--ignore-installed --prefer-binary --target {venv}/lib "
-                f"--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"{self.tmpl['pip_package']} 2>&1; echo EXIT_CODE=$?", timeout=600)
-            # Parse real exit code from output (since we used ; instead of &&)
-            ec2 = 1
-            if "EXIT_CODE=0" in stdout2:
-                ec2 = 0
+            stdout2, stderr2, _ = await self.ssh.run(
+                f"{pip_env} {remote_python} -m pip install -q --break-system-packages "
+                f"--prefer-binary --target {venv}/lib "
+                f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_sdk-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_tools-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_aci-*.whl "
+                f"{REMOTE_DEPS_PATH}/wheels/openhands_agent_server-*.whl "
+                f"2>&1; echo EXIT_CODE=$?", timeout=600)
+            ec2 = 0 if "EXIT_CODE=0" in stdout2 else 1
             logger.info(f"[{self._host}] Pip pass 2 tail: {stdout2[-300:]}")
 
             # Step 2d: Verify core import works
@@ -362,11 +440,24 @@ class Provisioner:
                 "import openhands.agent_server; "
                 "import openhands.sdk; "
                 "import openhands.tools; "
+                "import binaryornot; "
                 "print(\"VERIFY_OK\")"
                 "' 2>&1", timeout=15)
             if "VERIFY_OK" not in verify_out:
+                # Diagnostic: list what's actually in the venv to understand what pip did
+                ls_out, _, _ = await self.ssh.run(
+                    f"echo '=== openhands/ contents ==='; "
+                    f"ls {venv}/lib/openhands/ 2>&1; "
+                    f"echo '=== openhands_*.dist-info ==='; "
+                    f"ls -d {venv}/lib/openhands_* 2>&1; "
+                    f"echo '=== binaryornot ==='; "
+                    f"ls -d {venv}/lib/binaryornot* 2>&1; "
+                    f"echo '=== pip output tail ==='; "
+                    f"echo {stdout2[-800:]!r}",
+                    timeout=10,
+                )
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "failed",
-                           detail=f"Post-install verification failed: {verify_out.strip()[-500:]}")
+                           detail=f"Post-install verify failed: {verify_out.strip()[-300:]}\n\nDiagnostic:\n{ls_out.strip()[-1500:]}")
                 return
             # Also verify the binary wrapper works
             binary_check, _, binary_ec = await self.ssh.run(
