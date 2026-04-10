@@ -3,7 +3,6 @@ import hashlib
 import json
 import logging
 import os
-import pathlib
 import tempfile
 import zipfile
 from collections import defaultdict
@@ -1990,25 +1989,29 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         # >>> END CUSTOM <<<
 
         # >>> CUSTOM: HiClaw — auto-inject task_tracker for workflow agents <<<
-        # Platform-level: if any loaded skill has workflow_phases, inject system
-        # prompt instructions forcing the LLM to use task_tracker. This makes the
-        # right-side Task List panel reliably show phase progress on every run.
+        # Platform-level: if the CURRENT agent's skills include a workflow with
+        # phases, inject system prompt instructions forcing the LLM to use
+        # task_tracker. Uses bridge.get_workflow_phases on each skill name loaded
+        # for THIS conversation — not a filesystem scan — so each agent only
+        # gets its own phases, and agents without phases get nothing injected.
         try:
             from custom.skill_mgmt.bridge import get_workflow_phases
 
             _phases = None
-            for _d in (pathlib.Path(__file__).resolve().parents[3] / 'custom' / 'skill_examples',):
-                if not _d.exists():
-                    continue
-                for _sub in _d.iterdir():
-                    if _sub.is_dir():
-                        for _md in _sub.glob('*.md'):
-                            _p = get_workflow_phases(_md.stem)
-                            if _p and len(_p) > 1:
-                                _phases = _p
-                                break
-                    if _phases:
-                        break
+            # system_message_suffix already contains the skill content injected
+            # by hiclaw_skill_loader above. The skill names are available from
+            # the bridge cache (populated during load_file_skills / load_custom_skills
+            # earlier in this request). Check each skill by name.
+            from custom.skill_mgmt.bridge import _workflow_phases_cache
+
+            for _skill_name, _cached_phases in _workflow_phases_cache.items():
+                if _cached_phases and len(_cached_phases) > 1:
+                    _phases = _cached_phases
+                    _logger.info(
+                        f'Found workflow phases from skill "{_skill_name}" '
+                        f'({len(_cached_phases)} phases)'
+                    )
+                    break
 
             if _phases:
                 _lines = '\n'.join(
