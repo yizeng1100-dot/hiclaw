@@ -60,19 +60,19 @@ phases:                       # 定义执行阶段列表
   - key: init                 # 阶段唯一标识，snake_case 或 kebab-case
     label: 初始化              # 前端显示名称（支持中英文）
     desc: 启动服务             # 阶段简要说明
-    output: /workspace/output/state.json  # 阶段完成的标志文件路径
+    output: my_output/state.json    # 相对会话工作目录的标志文件路径（推荐）
   - key: analyze
     label: 分析
     desc: 执行核心分析
-    output: /workspace/output/result.json
+    output: my_output/result.json
   - key: cleanup
     label: 清理
     desc: 停止服务
-    output: null               # null 表示��阶��无输出文件
+    output: null               # null 表示该阶段无输出文件
   - key: report
     label: 生成报告
     desc: 输出最终报告
-    output: /workspace/output/report.html
+    output: my_output/report.html
 ---
 ```
 
@@ -85,20 +85,31 @@ phases:                       # 定义执行阶段列表
 | `desc` | string | 是 | 阶段的简要描述 |
 | `output` | string \| null | 是 | 阶段完成后生成的文件路径。平台通过检测此文件是否存在来判断阶段完成。设为 `null` 表示该阶段无输出文件（如清理阶段） |
 
-### output 路径约定
+### output 路径约定（v1.1.0 更新：推荐相对路径）
 
-- 所有输出文件统一放在 `/workspace/<workflow_name>_output/` 目录下
-- JSON 输出使用 `.json` 后缀
-- HTML 报告使用 `.html` 后缀
+**推荐：使用相对路径，由平台自动隔离到当前 conversation 的工作目录下。**
+
+- 路径格式：`<workflow_name>_output/<filename>`（**相对路径**）
+- 平台行为：app-server 在 `read_conversation_file` endpoint 中将相对路径解析为
+  `<sandbox_spec.working_dir>/<conversation_id_hex>/<相对路径>`（启用 sandbox 分组时）或
+  `<sandbox_spec.working_dir>/<相对路径>`（NO_GROUPING 模式）
+- 隔离效果：每次新建 conversation 都拿到独立的子目录，**不会复用上次任务的残留**，
+  进度条不会"开局全亮"，多个并发任务也互不污染
+- 同时，agent 在 sandbox 内的 bash CWD 默认就是这个 per-conv 工作目录，所以脚本只需写
+  `--output-dir <workflow_name>_output/` 即可，文件会落到正确位置
+- JSON 输出使用 `.json` 后缀；HTML 报告使用 `.html` 后缀
 - 文件名应与 phase key 或脚本名对应，便于理解
-- 路径必须是 sandbox 内的绝对路径
 
-示例：
+示例（推荐写法）：
 ```
-/workspace/perf_analysis_output/tp_state.json
-/workspace/perf_analysis_output/thread_state.json
-/workspace/perf_analysis_output/full_report.html
+perf_analysis_output/tp_state.json
+perf_analysis_output/thread_state.json
+perf_analysis_output/full_report.html
 ```
+
+**向后兼容**：绝对路径（`/workspace/...`）仍受支持，endpoint 会原样透传给 agent-server。
+但绝对路径**不会**被自动隔离，**不要在新 workflow 里使用**。仅当 skill 需要读取 sandbox
+内固定位置（如老 agent 的硬编码工件路径）时才用绝对路径。
 
 ### 进度检测机制
 
@@ -193,19 +204,19 @@ phases:
   - key: connect
     label: 连接数据源
     desc: 建立数据库连接
-    output: /workspace/dq_output/connection.json
+    output: dq_output/connection.json
   - key: profile
     label: 数据概览
     desc: 统计字段分布
-    output: /workspace/dq_output/profile.json
+    output: dq_output/profile.json
   - key: validate
     label: 质量校验
     desc: 执行规则检查
-    output: /workspace/dq_output/validation.json
+    output: dq_output/validation.json
   - key: report
     label: 生成报告
     desc: 输出质量报告
-    output: /workspace/dq_output/report.html
+    output: dq_output/report.html
 ---
 
 # 数据质量检查工作流
@@ -224,7 +235,7 @@ phases:
 | 1. 连接 | `connect.py --dsn $DSN` | 用户提供的连接字符串 | connection.json |
 | 2. 概览 | `profile.py --tables $TABLES` | 表名列表 | profile.json |
 | 3. 校验 | `validate.py --rules rules.yaml` | 规则配置文件 | validation.json |
-| 4. 报告 | `gen_report.py --output-dir /workspace/dq_output` | — | report.html |
+| 4. 报告 | `gen_report.py --output-dir dq_output` | — | report.html |
 
 ## 完成后
 
@@ -292,3 +303,4 @@ custom/
 | 版本 | 日期 | 变更 |
 |------|------|------|
 | 1.0.0 | 2026-03-30 | 初始版本，定义 phases frontmatter 规范 |
+| 1.1.0 | 2026-04-09 | output 路径平台约定改为相对路径 + 自动 per-conversation 隔离；绝对路径作为向后兼容保留。详情见 `output 路径约定` 一节。 |

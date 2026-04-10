@@ -58,6 +58,33 @@ async def _link_skills_by_name(
 
 PERF_AGENT_NAME = '性能分析 Agent'
 
+# All perf-analysis skills that should be linked to the Perf Agent.
+# `perf-analysis-workflow` is the workflow rule — it carries the `phases`
+# frontmatter that drives the task-detail progress UI via
+# bridge.get_workflow_phases() + router.py's auto-populate overlay.
+# The rest are the analysis/utility skills the workflow invokes.
+PERF_AGENT_SKILL_NAMES = [
+    'perf-analysis-workflow',
+    'trace-processor-init',
+    'find-foreground-process',
+    'find-launch-range',
+    'analyze-main-thread-state',
+    'main-thread-big-core-ratio',
+    'analyze-cpu-frequency',
+    'analyze-compile-level',
+    'analyze-jit-thread',
+    'analyze-main-thread-priority',
+    'analyze-system-load',
+    'analyze-detailed-load',
+    'analyze-io-details',
+    'analyze-non-io',
+    'analyze-memory',
+    'analyze-rendering-depth',
+    'capture-trace-screenshot',
+    'generate-report',
+    'trace-processor-cleanup',
+]
+
 PERF_AGENT_DESCRIPTION = (
     '自动化 9 阶段 Perfetto trace 性能分析工作流。'
     '上传 Android trace 文件，选择分析方向，自动执行完整分析并生成 HTML 报告。'
@@ -168,10 +195,16 @@ async def seed_perf_agent(db: AsyncSession) -> None:
             if changed:
                 await db.commit()
                 _logger.info(f'Updated existing agent: {PERF_AGENT_NAME}')
+            # Ensure perf skills are linked even on existing agents (idempotent).
+            # This is what makes task-detail's phase progress bar work: without
+            # a linked workflow skill, router.py's config_json.workflow_phases
+            # overlay (via bridge.get_workflow_phases) never fires.
+            await _link_skills_by_name(db, existing.id, PERF_AGENT_SKILL_NAMES)
             return
 
+        agent_id = uuid4()
         agent = StoredAgent(
-            id=uuid4(),
+            id=agent_id,
             name=PERF_AGENT_NAME,
             description=PERF_AGENT_DESCRIPTION,
             system_prompt=_load_workflow_content(),
@@ -185,6 +218,10 @@ async def seed_perf_agent(db: AsyncSession) -> None:
         db.add(agent)
         await db.commit()
         _logger.info(f'Seeded built-in agent: {PERF_AGENT_NAME}')
+
+        # Link all perf skills so the workflow rule + analysis skills are
+        # available to the agent and the progress UI has phases to render.
+        await _link_skills_by_name(db, agent_id, PERF_AGENT_SKILL_NAMES)
 
     except Exception as e:
         _logger.warning(f'Failed to seed perf agent: {e}', exc_info=True)
