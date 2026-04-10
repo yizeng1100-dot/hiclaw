@@ -23,15 +23,42 @@ function TaskListTab() {
 
   return (
     <main className="h-full overflow-y-auto flex flex-col custom-scrollbar-always">
-      {taskList.map((task) => (
-        <div
-          key={task.id}
-          className={cn(
-            "px-4 py-2",
-            task.status === "in_progress" && "bg-[#2D3039]",
-          )}
-        >
-          <TaskItem task={task} />
+      {taskList.map((task, i) => (
+        <div key={task.id} className="flex px-4">
+          {/* >>> CUSTOM: HiClaw — vertical connector line between phases <<< */}
+          <div className="flex flex-col items-center mr-1 w-4 shrink-0">
+            {i > 0 && (
+              <div
+                className={cn(
+                  "w-0.5 h-2",
+                  task.status === "done"
+                    ? "bg-green-500"
+                    : task.status === "in_progress"
+                      ? "bg-blue-500"
+                      : "bg-gray-700",
+                )}
+              />
+            )}
+            <div className="flex-1" />
+            {i < taskList.length - 1 && (
+              <div
+                className={cn(
+                  "w-0.5 h-2",
+                  task.status === "done" ? "bg-green-500" : "bg-gray-700",
+                )}
+              />
+            )}
+          </div>
+          {/* >>> END CUSTOM <<< */}
+          <div
+            className={cn(
+              "flex-1 py-1.5",
+              task.status === "in_progress" &&
+                "bg-blue-900/20 rounded px-2 -mx-1",
+            )}
+          >
+            <TaskItem task={task} />
+          </div>
         </div>
       ))}
     </main>

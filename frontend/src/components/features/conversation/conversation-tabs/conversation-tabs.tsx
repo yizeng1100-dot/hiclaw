@@ -124,17 +124,17 @@ export function ConversationTabs() {
     },
   ];
 
-  if (hasTaskList) {
-    tabs.unshift({
-      tabValue: "tasklist",
-      isActive: isTabActive("tasklist"),
-      icon: DoubleCheckIcon,
-      onClick: () => selectTab("tasklist"),
-      tooltipContent: t(I18nKey.COMMON$TASK_LIST),
-      tooltipAriaLabel: t(I18nKey.COMMON$TASK_LIST),
-      label: t(I18nKey.COMMON$TASK_LIST),
-    });
-  }
+  // >>> CUSTOM: HiClaw — tasklist tab always visible (not conditional on hasTaskList) <<<
+  tabs.unshift({
+    tabValue: "tasklist",
+    isActive: isTabActive("tasklist"),
+    icon: DoubleCheckIcon,
+    onClick: () => selectTab("tasklist"),
+    tooltipContent: t(I18nKey.COMMON$TASK_LIST),
+    tooltipAriaLabel: t(I18nKey.COMMON$TASK_LIST),
+    label: t(I18nKey.COMMON$TASK_LIST),
+  });
+  // >>> END CUSTOM <<<
 
   // Filter out unpinned tabs
   const visibleTabs = tabs.filter(

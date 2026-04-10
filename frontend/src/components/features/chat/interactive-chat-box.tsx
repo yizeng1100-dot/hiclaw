@@ -18,6 +18,7 @@ import { TaskService } from "#/api/custom-skill-service/task-service.api";
 import { useCreateConversation } from "#/hooks/mutation/use-create-conversation";
 import { PerfAnalysisInlinePanel } from "#/components/features/custom/skill-management/perf-analysis-inline-panel";
 import { PerfReportDownload } from "#/components/features/custom/skill-management/perf-report-download";
+import { ConvPhaseProgress } from "#/components/features/custom/skill-management/conv-phase-progress";
 import { useConversationId } from "#/hooks/use-conversation-id";
 // >>> END CUSTOM <<<
 
@@ -52,7 +53,14 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
   );
   const [agentStarting, setAgentStarting] = React.useState(false);
   const [showPerfPanel, setShowPerfPanel] = React.useState(false);
-  const [perfAgentId, setPerfAgentId] = React.useState<string | null>(null);
+  const [perfAgentId, _setPerfAgentId] = React.useState<string | null>(
+    () => sessionStorage.getItem("hiclaw_perf_agent_id"),
+  );
+  const setPerfAgentId = (id: string | null) => {
+    _setPerfAgentId(id);
+    if (id) sessionStorage.setItem("hiclaw_perf_agent_id", id);
+    else sessionStorage.removeItem("hiclaw_perf_agent_id");
+  };
   const { mutateAsync: createConversation } = useCreateConversation();
 
   const handleSelectAgent = React.useCallback(
@@ -258,6 +266,8 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
 
   return (
     <div data-testid="interactive-chat-box">
+      {/* >>> CUSTOM: HiClaw — Phase progress moved to right-side tab (phase-progress-tab.tsx) <<< */}
+      {/* >>> END CUSTOM <<< */}
       {/* >>> CUSTOM: HiClaw — Performance report download (only after agent finishes) <<< */}
       {(curAgentState === AgentState.STOPPED || curAgentState === AgentState.FINISHED) &&
         conversation?.conversation_id && (

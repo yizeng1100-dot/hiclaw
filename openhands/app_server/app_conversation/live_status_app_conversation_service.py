@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import pathlib
 import tempfile
 import zipfile
 from collections import defaultdict
@@ -1987,6 +1988,46 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             if not mcp_servers:
                 mcp_config = {}
         # >>> END CUSTOM <<<
+
+        # >>> CUSTOM: HiClaw — auto-inject task_tracker for workflow agents <<<
+        # Platform-level: if any loaded skill has workflow_phases, inject system
+        # prompt instructions forcing the LLM to use task_tracker. This makes the
+        # right-side Task List panel reliably show phase progress on every run.
+        try:
+            from custom.skill_mgmt.bridge import get_workflow_phases
+
+            _phases = None
+            for _d in (pathlib.Path(__file__).resolve().parents[3] / 'custom' / 'skill_examples',):
+                if not _d.exists():
+                    continue
+                for _sub in _d.iterdir():
+                    if _sub.is_dir():
+                        for _md in _sub.glob('*.md'):
+                            _p = get_workflow_phases(_md.stem)
+                            if _p and len(_p) > 1:
+                                _phases = _p
+                                break
+                    if _phases:
+                        break
+
+            if _phases:
+                _lines = '\n'.join(
+                    f'  - Phase {i+1}: {p.get("label","")} — {p.get("desc","")}'
+                    for i, p in enumerate(_phases)
+                )
+                _instr = (
+                    '\n\n## 执行进度追踪（平台强制）\n\n'
+                    '开始执行前，必须用 task_tracker 创建以下任务（todo）：\n\n'
+                    f'{_lines}\n\n'
+                    '执行时：开始阶段→更新为 in_progress，完成→更新为 done。\n'
+                    '这是强制要求，不可跳过。\n'
+                )
+                system_message_suffix = f'{system_message_suffix or ""}{_instr}'
+                _logger.info(f'Injected task_tracker for {len(_phases)} phases')
+        except Exception as e:
+            _logger.warning(f'task_tracker injection failed: {e}')
+        # >>> END CUSTOM <<<
+
         agent = self._create_agent_with_context(
             llm,
             agent_type,

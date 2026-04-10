@@ -648,6 +648,143 @@ async def read_conversation_file(
     return ''
 
 
+@router.get('/{conversation_id}/phase-stream')
+async def phase_progress_stream(
+    conversation_id: UUID,
+    files: Annotated[
+        str,
+        Query(
+            title='Comma-separated relative file paths to monitor',
+            examples=['perf_analysis_output/tp_state.json,perf_analysis_output/target_process.json'],
+        ),
+    ] = '',
+    app_conversation_service: AppConversationService = (
+        app_conversation_service_dependency
+    ),
+    sandbox_service: SandboxService = sandbox_service_dependency,
+    sandbox_spec_service: SandboxSpecService = sandbox_spec_service_dependency,
+):
+    """SSE stream that pushes phase file existence changes.
+
+    Instead of the frontend polling ``read_conversation_file`` for every phase
+    file every 3 seconds, this endpoint checks server-side once per second and
+    only yields an SSE event when the set of existing files changes. The
+    frontend subscribes via ``EventSource`` and updates the progress bar
+    instantly on each push.
+
+    Query params:
+        files: comma-separated list of relative file paths to watch
+               (e.g. ``perf_analysis_output/tp_state.json,...``)
+
+    Each SSE ``data:`` payload is a JSON object mapping file path → bool::
+
+        {"perf_analysis_output/tp_state.json": true, ...}
+    """
+    import json as _json
+
+    file_list = [f.strip() for f in files.split(',') if f.strip()]
+    if not file_list:
+        return StreamingResponse(
+            iter(['']), media_type='text/event-stream',
+            headers={'Cache-Control': 'no-cache'},
+        )
+
+    # Pre-resolve workspace info once (not per tick)
+    conversation = await app_conversation_service.get_app_conversation(conversation_id)
+    if not conversation:
+        return StreamingResponse(
+            iter(['']), media_type='text/event-stream',
+            headers={'Cache-Control': 'no-cache'},
+        )
+
+    sandbox = await sandbox_service.get_sandbox(conversation.sandbox_id)
+    if not sandbox or sandbox.status != SandboxStatus.RUNNING:
+        return StreamingResponse(
+            iter(['']), media_type='text/event-stream',
+            headers={'Cache-Control': 'no-cache'},
+        )
+
+    sandbox_spec = await sandbox_spec_service.get_sandbox_spec(sandbox.sandbox_spec_id)
+    if sandbox_spec is None:
+        sandbox_spec = await sandbox_spec_service.get_default_sandbox_spec()
+
+    agent_server_url = None
+    for exposed_url in sandbox.exposed_urls or []:
+        if exposed_url.name == AGENT_SERVER:
+            agent_server_url = exposed_url.url
+            break
+    if not agent_server_url:
+        return StreamingResponse(
+            iter(['']), media_type='text/event-stream',
+            headers={'Cache-Control': 'no-cache'},
+        )
+    agent_server_url = replace_localhost_hostname_for_docker(agent_server_url)
+
+    if isinstance(app_conversation_service, AppConversationServiceBase):
+        per_conv_wd = await app_conversation_service.get_conversation_working_dir(
+            conversation_id, sandbox_spec.working_dir
+        )
+    else:
+        per_conv_wd = sandbox_spec.working_dir
+
+    async def _event_generator() -> AsyncGenerator[str, None]:
+        workspace = AsyncRemoteWorkspace(
+            host=agent_server_url,
+            api_key=sandbox.session_api_key or '',
+            working_dir=per_conv_wd,
+        )
+        prev_state: dict[str, bool] = {}
+        idle_count = 0
+        max_idle = 600  # stop after 10 min of no changes
+
+        while idle_count < max_idle:
+            current: dict[str, bool] = {}
+            for fp in file_list:
+                resolved = os.path.join(per_conv_wd, fp) if not os.path.isabs(fp) else fp
+                try:
+                    tmp = None
+                    with tempfile.NamedTemporaryFile(delete=False) as tf:
+                        tmp = tf.name
+                    result = await workspace.file_download(
+                        source_path=resolved, destination_path=tmp,
+                    )
+                    if result.success:
+                        sz = os.path.getsize(tmp)
+                        current[fp] = sz > 0
+                    else:
+                        current[fp] = False
+                except Exception:
+                    current[fp] = False
+                finally:
+                    if tmp:
+                        try:
+                            os.unlink(tmp)
+                        except Exception:
+                            pass
+
+            if current != prev_state:
+                yield f'data: {_json.dumps(current)}\n\n'
+                prev_state = dict(current)
+                idle_count = 0
+            else:
+                idle_count += 1
+
+            await asyncio.sleep(1)
+
+        # Final keepalive before closing
+        yield 'data: {"_done": true}\n\n'
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
 @router.get('/{conversation_id}/skills')
 async def get_conversation_skills(
     conversation_id: UUID,
