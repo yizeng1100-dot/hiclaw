@@ -574,11 +574,31 @@ async def read_conversation_file(
 
     agent_server_url = replace_localhost_hostname_for_docker(agent_server_url)
 
+    # Compute the per-conversation working_dir using the same logic the
+    # service uses at conversation startup. Skill/workflow phase outputs are
+    # expressed *relative* to this directory (platform convention), so any
+    # relative file_path coming in from the frontend must be resolved against
+    # it before hitting the agent-server (which only accepts absolute paths).
+    if isinstance(app_conversation_service, AppConversationServiceBase):
+        per_conv_working_dir = await app_conversation_service.get_conversation_working_dir(
+            conversation_id, sandbox_spec.working_dir
+        )
+    else:
+        per_conv_working_dir = sandbox_spec.working_dir
+
+    # Resolve relative paths against the per-conversation working_dir.
+    # Absolute paths are passed through unchanged for backward compatibility
+    # with old skills / external tools that hard-code workspace paths.
+    if not os.path.isabs(file_path):
+        resolved_file_path = os.path.join(per_conv_working_dir, file_path)
+    else:
+        resolved_file_path = file_path
+
     # Create remote workspace
     remote_workspace = AsyncRemoteWorkspace(
         host=agent_server_url,
         api_key=sandbox.session_api_key,
-        working_dir=sandbox_spec.working_dir,
+        working_dir=per_conv_working_dir,
     )
 
     # Read the file at the specified path
@@ -590,7 +610,7 @@ async def read_conversation_file(
 
         # Download the file from remote system
         result = await remote_workspace.file_download(
-            source_path=file_path,
+            source_path=resolved_file_path,
             destination_path=temp_file_path,
         )
 

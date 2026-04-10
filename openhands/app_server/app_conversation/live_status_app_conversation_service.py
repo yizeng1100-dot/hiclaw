@@ -257,6 +257,10 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         yield task
 
         try:
+            # >>> CUSTOM: HiClaw — ensure remote-host/user vars exist on all code paths
+            # (they're referenced unconditionally at lines ~422/444 even for local sandbox runs) <<<
+            _remote_host = ''
+            _remote_user = ''
             # >>> CUSTOM: HiClaw — remote worker support <<<
             if request.remote_agent_url:
                 # Use existing remote agent-server (shared across conversations).
@@ -344,11 +348,12 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 # Set up conversation id
                 conversation_id = request.conversation_id or uuid4()
 
-                # Setup working dir based on grouping
-                working_dir = sandbox_spec.working_dir
-                sandbox_grouping_strategy = await self._get_sandbox_grouping_strategy()
-                if sandbox_grouping_strategy != SandboxGroupingStrategy.NO_GROUPING:
-                    working_dir = f'{working_dir}/{conversation_id.hex}'
+                # Setup working dir based on grouping (delegates to base
+                # class so the same logic is reused by read_conversation_file
+                # and any other endpoint that needs per-conv isolation).
+                working_dir = await self.get_conversation_working_dir(
+                    conversation_id, sandbox_spec.working_dir
+                )
                 _logger.info(f'[STARTUP] Step 3: working_dir={working_dir}')
 
                 # Run setup scripts

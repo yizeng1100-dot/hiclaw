@@ -41,6 +41,7 @@ from openhands.sdk.security.confirmation_policy import (
 )
 from openhands.sdk.security.llm_analyzer import LLMSecurityAnalyzer
 from openhands.sdk.workspace.remote.async_remote_workspace import AsyncRemoteWorkspace
+from openhands.storage.data_models.settings import SandboxGroupingStrategy
 
 _logger = logging.getLogger(__name__)
 PRE_COMMIT_HOOK = '.git/hooks/pre-commit'
@@ -90,6 +91,30 @@ class AppConversationServiceBase(AppConversationService, ABC):
 
     init_git_in_empty_workspace: bool
     user_context: UserContext
+
+    async def get_conversation_working_dir(
+        self,
+        conversation_id: UUID,
+        sandbox_spec_working_dir: str,
+    ) -> str:
+        """Compute the per-conversation working directory.
+
+        Applies the user's sandbox grouping strategy: if grouping is enabled,
+        the per-conversation working_dir is the sandbox spec's working_dir
+        suffixed with the conversation's hex id (so each conversation gets an
+        isolated subdir under the shared sandbox base). Under NO_GROUPING the
+        sandbox itself is per-conversation, so the spec working_dir is
+        returned as-is.
+
+        This is the platform contract used by skills/workflows that write
+        per-phase artifacts: skill output paths should be expressed *relative*
+        to this directory, and consumers (e.g. the read_conversation_file
+        endpoint) join them with the value returned here.
+        """
+        user_info = await self.user_context.get_user_info()
+        if user_info.sandbox_grouping_strategy != SandboxGroupingStrategy.NO_GROUPING:
+            return f'{sandbox_spec_working_dir}/{conversation_id.hex}'
+        return sandbox_spec_working_dir
 
     async def load_and_merge_all_skills(
         self,
@@ -222,6 +247,7 @@ class AppConversationServiceBase(AppConversationService, ABC):
         remote_workspace: AsyncRemoteWorkspace,
         selected_repository: str | None,
         project_dir: str,
+        disabled_skills: list[str] | None = None,
     ):
         """Load all skills and update agent with them.
 
@@ -230,6 +256,9 @@ class AppConversationServiceBase(AppConversationService, ABC):
             remote_workspace: AsyncRemoteWorkspace for loading repo skills
             selected_repository: Repository name or None (used for org config)
             project_dir: Project root directory (already resolved via get_project_dir).
+            disabled_skills: Optional list of skill names the user has
+                disabled in settings; matching skills are filtered out
+                before being injected into the agent context.
 
         Returns:
             Updated agent with skills loaded into context
@@ -241,6 +270,17 @@ class AppConversationServiceBase(AppConversationService, ABC):
             project_dir,
             agent_server_url,
         )
+
+        # Filter out skills the user has explicitly disabled in settings.
+        if disabled_skills:
+            disabled_set = set(disabled_skills)
+            before = len(all_skills)
+            all_skills = [s for s in all_skills if s.name not in disabled_set]
+            if before != len(all_skills):
+                _logger.info(
+                    f'Filtered {before - len(all_skills)} disabled skills '
+                    f'(disabled_set={sorted(disabled_set)})'
+                )
 
         # Update agent with skills
         agent = self._create_agent_with_skills(agent, all_skills)
