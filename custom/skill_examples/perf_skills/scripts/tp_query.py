@@ -252,7 +252,7 @@ def parse_columns(result: dict) -> list[dict]:
     return rows
 
 
-def save_result(data: dict, filename: str, output_dir: str = "/workspace/perf_analysis_output"):
+def save_result(data: dict, filename: str, output_dir: str = "perf_analysis_output"):
     """Save result to JSON file."""
     os.makedirs(output_dir, exist_ok=True)
     filepath = os.path.join(output_dir, filename)
@@ -266,7 +266,24 @@ def print_result(data: dict):
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+def default_output_dir() -> str:
+    """Resolve the default --output-dir for perf workflow scripts.
+
+    Priority:
+      1. ``OPENHANDS_WORKING_DIR`` env var (set per-conversation by the platform).
+         Returns ``$OPENHANDS_WORKING_DIR/perf_analysis_output``.
+      2. Fallback: ``perf_analysis_output`` (relative to current CWD).
+
+    The env-driven path lets a script default to the correct per-conversation
+    output directory regardless of where the agent's bash CWD happens to be.
+    """
+    base = os.environ.get("OPENHANDS_WORKING_DIR")
+    if base:
+        return os.path.join(base, "perf_analysis_output")
+    return "perf_analysis_output"
+
+
 def add_common_args(parser: argparse.ArgumentParser):
     """Add common arguments to parser."""
     parser.add_argument("--port", type=int, default=9001, help="Trace Processor HTTP port")
-    parser.add_argument("--output-dir", default="/workspace/perf_analysis_output", help="Output directory")
+    parser.add_argument("--output-dir", default=default_output_dir(), help="Output directory")

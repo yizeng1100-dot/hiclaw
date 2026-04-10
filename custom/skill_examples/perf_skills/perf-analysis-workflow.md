@@ -7,35 +7,36 @@ phases:
   - key: init
     label: 初始化
     desc: 启动 Trace Processor
-    output: /workspace/perf_analysis_output/tp_state.json
+    output: perf_analysis_output/tp_state.json
   - key: target
     label: 查找进程
     desc: 确定分析目标
-    output: /workspace/perf_analysis_output/target_process.json
+    output: perf_analysis_output/target_process.json
   - key: range
     label: 时间范围
     desc: 确定启动时间
-    output: /workspace/perf_analysis_output/launch_range.json
+    output: perf_analysis_output/launch_range.json
   - key: state
     label: 状态分析
     desc: 主线程状态分布
-    output: /workspace/perf_analysis_output/thread_state.json
+    output: perf_analysis_output/thread_state.json
   - key: branch
     label: 分支分析
     desc: 条件分析路径
-    output: /workspace/perf_analysis_output/big_core_ratio.json
+    output: perf_analysis_output/big_core_ratio.json
   - key: memory
     label: 内存分析
     desc: OOM/GC/内存
-    output: /workspace/perf_analysis_output/memory.json
+    output: perf_analysis_output/memory.json
   - key: render
     label: 渲染分析
     desc: 帧率/掉帧
-    output: /workspace/perf_analysis_output/rendering.json
+    output: perf_analysis_output/rendering.json
   - key: screenshot
     label: 截图（可选）
     desc: 捕获 Perfetto UI 问题片段截图
-    output: /workspace/perf_analysis_output/screenshots/screenshot_manifest.json
+    output: perf_analysis_output/screenshots/screenshot_manifest.json
+    optional: true
   - key: cleanup
     label: 清理
     desc: 停止服务
@@ -43,19 +44,36 @@ phases:
   - key: report
     label: 生成报告
     desc: HTML 报告（含截图）
-    output: /workspace/perf_analysis_output/full_report.html
+    output: perf_analysis_output/full_report.html
 ---
 
 # 性能分析工作流
 
-按以下 10 个阶段顺序执行 Perfetto trace 性能分析。每阶段执行对应脚本，脚本位于 `/workspace/custom/skill_examples/perf_skills/scripts/`，输出保存到 `/workspace/perf_analysis_output/`。
+按以下 10 个阶段顺序执行 Perfetto trace 性能分析。
+
+## 🔴 命令模板（必须遵守，否则进度条无法点亮）
+
+**每个阶段的脚本调用必须使用如下绝对路径模板。绝对不要 `cd` 到脚本目录。**
+
+```bash
+python3 /workspace/custom/skill_examples/perf_skills/scripts/<脚本名>.py \
+  <脚本参数> \
+  --output-dir "$(pwd)/perf_analysis_output"
+```
+
+要点：
+- **`$(pwd)` 在每条命令开头被展开**，得到当前 conversation 的工作目录（由平台自动隔离到 `/workspace/project/<conv_hex>/`）
+- 所有 phase 的输出统一落到 `$(pwd)/perf_analysis_output/`，前端进度条按这个路径轮询
+- **绝对不要** `cd /workspace/custom/.../scripts &&` 这种写法 — 一旦 cd 出 conversation 目录，`$(pwd)` 就会改变，输出会落到错的地方
+- **绝对不要** hardcode `/workspace/perf_analysis_output` 这种共享路径 — 那是老 hack，会被多个任务互相覆盖
 
 ## 严格约束
 
 1. **禁止自行编写 SQL 查询、Python 脚本或任何分析代码** — 只能调用指定脚本
 2. **禁止修改已有脚本** — 脚本内容不可更改
-3. **参数必须来自上一步的输出** — 不要猜测进程名、时间范围等值
-4. **遇到脚本错误立即停止并报告** — 不要跳过失败步骤，不要自行编写替代方案
+3. **禁止 cd 到脚本目录或任何 conversation 工作目录之外的目录** — 必须用绝对脚本路径
+4. **参数必须来自上一步的输出** — 不要猜测进程名、时间范围等值
+5. **遇到脚本错误立即停止并报告** — 不要跳过失败步骤，不要自行编写替代方案
 
 ## 每步反思验证
 
@@ -66,6 +84,8 @@ phases:
 
 ## 执行步骤
 
+下表只列**脚本名 + 关键参数**。每个命令都必须按上方"命令模板"展开为绝对路径形式，并附加 `--output-dir "$(pwd)/perf_analysis_output"`。
+
 | 阶段 | 脚本 | 输入 | 关键输出 |
 |------|------|------|----------|
 | 1. 初始化 | `trace_processor_init.py --trace <路径> --port 9001` | 用户提供的 trace 文件 | `status: ready` |
@@ -75,9 +95,28 @@ phases:
 | 5. 分支分析 | 根据第4步 branches 动态选择，见下方 | 上述参数 | 各分支结果 |
 | 6. 内存分析 | `analyze_memory.py --start $S --end $E --port 9001` | 时间范围 | 内存问题 |
 | 7. 渲染分析 | `analyze_rendering.py --process $P --start $S --end $E --target-fps 60 --port 9001` | 上述参数 | 帧率/掉帧 |
-| 8. 截图（可选） | `capture_trace_screenshot.py --trace $TRACE --analysis-dir ... --output-dir ... --process-name $PROCESS_NAME` | trace + 分析结果 | 截图 PNG |
-| 9. 清理 | `trace_processor_cleanup.py --output-dir /workspace/perf_analysis_output` | — | 服务停止 |
-| 10. 报告 | `generate_report.py --output-dir /workspace/perf_analysis_output` | — | `full_report.html` + `issue_report.html` |
+| 8. 截图（可选） | `capture_trace_screenshot.py --trace $TRACE --process-name $PROCESS_NAME` | trace + 分析结果 | 截图 PNG |
+| 9. 清理 | `trace_processor_cleanup.py` | — | 服务停止 |
+| 10. 报告 | `generate_report.py` | — | `full_report.html` + `issue_report.html` |
+
+**示例**（阶段 1 的完整命令)：
+
+```bash
+python3 /workspace/custom/skill_examples/perf_skills/scripts/trace_processor_init.py \
+  --trace /workspace/test_trace.perfetto-trace \
+  --port 9001 \
+  --output-dir "$(pwd)/perf_analysis_output"
+```
+
+**反例**（绝对不要这样）：
+
+```bash
+# ❌ 错：cd 改变了 $(pwd)，输出会落到 /workspace/custom/.../scripts/perf_analysis_output/
+cd /workspace/custom/skill_examples/perf_skills/scripts && python3 trace_processor_init.py --trace ... --output-dir perf_analysis_output
+
+# ❌ 错：hardcode 共享路径，会被多个任务互相覆盖
+python3 /workspace/.../trace_processor_init.py --trace ... --output-dir /workspace/perf_analysis_output
+```
 
 ## 第5阶段分支选择
 
@@ -98,8 +137,8 @@ phases:
 ```bash
 python3 /workspace/custom/skill_examples/perf_skills/scripts/capture_trace_screenshot.py \
   --trace $TRACE_FILE \
-  --analysis-dir /workspace/perf_analysis_output \
-  --output-dir /workspace/perf_analysis_output/screenshots \
+  --analysis-dir "$(pwd)/perf_analysis_output" \
+  --output-dir "$(pwd)/perf_analysis_output/screenshots" \
   --process-name "$PROCESS_NAME"
 ```
 
@@ -110,4 +149,4 @@ python3 /workspace/custom/skill_examples/perf_skills/scripts/capture_trace_scree
 
 ## 完成后
 
-生成报告后向用户汇总：最严重的问题 + 建议的优化方向。报告文件位于 `/workspace/perf_analysis_output/full_report.html` 和 `issue_report.html`。
+生成报告后向用户汇总：最严重的问题 + 建议的优化方向。报告文件位于 `$(pwd)/perf_analysis_output/full_report.html` 和 `issue_report.html`。

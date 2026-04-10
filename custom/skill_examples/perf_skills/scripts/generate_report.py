@@ -7,6 +7,8 @@ import json
 import os
 import sys
 
+from tp_query import default_output_dir
+
 
 PRIORITY_ORDER = {
     "critical": 0,
@@ -165,7 +167,7 @@ tr:hover {{ background: #1c2128; }}
 
 def main():
     parser = argparse.ArgumentParser(description="Generate HTML reports")
-    parser.add_argument("--output-dir", default="/workspace/perf_analysis_output")
+    parser.add_argument("--output-dir", default=default_output_dir())
     args = parser.parse_args()
 
     results = load_results(args.output_dir)

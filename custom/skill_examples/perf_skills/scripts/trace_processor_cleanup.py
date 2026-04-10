@@ -8,10 +8,12 @@ import signal
 import subprocess
 import sys
 
+from tp_query import default_output_dir
+
 
 def main():
     parser = argparse.ArgumentParser(description="Cleanup Trace Processor")
-    parser.add_argument("--output-dir", default="/workspace/perf_analysis_output")
+    parser.add_argument("--output-dir", default=default_output_dir())
     args = parser.parse_args()
 
     state_file = os.path.join(args.output_dir, "tp_state.json")

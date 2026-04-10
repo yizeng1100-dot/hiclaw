@@ -10,6 +10,8 @@ import time
 import shutil
 import urllib.request
 
+from tp_query import default_output_dir
+
 
 def _is_real_binary(path: str) -> bool:
     """Check if file is a real binary (not a Python wrapper script)."""
@@ -68,7 +70,7 @@ def main():
     parser = argparse.ArgumentParser(description="Initialize Trace Processor")
     parser.add_argument("--trace", required=True, help="Path to trace file")
     parser.add_argument("--port", type=int, default=9001, help="HTTP port")
-    parser.add_argument("--output-dir", default="/workspace/perf_analysis_output")
+    parser.add_argument("--output-dir", default=default_output_dir())
     args = parser.parse_args()
 
     if not os.path.isfile(args.trace):
