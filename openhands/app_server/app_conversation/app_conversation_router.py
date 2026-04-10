@@ -141,9 +141,13 @@ async def _get_agent_server_context(
         )
 
     # >>> CUSTOM: HiClaw — remote worker shortcut <<<
-    if (conversation.sandbox_id and conversation.sandbox_id.startswith('remote-')
-            and conversation.remote_agent_url):
+    if (
+        conversation.sandbox_id
+        and conversation.sandbox_id.startswith('remote-')
+        and conversation.remote_agent_url
+    ):
         import httpx as _httpx
+
         agent_url = conversation.remote_agent_url
 
         # Check if stored URL still works; if not, get current tunnel from Worker Manager
@@ -158,7 +162,9 @@ async def _get_agent_server_context(
             conv_host = getattr(conversation, 'remote_host', None)
             try:
                 async with _httpx.AsyncClient() as _client:
-                    _resp = await _client.get('http://localhost:9090/api/machines', timeout=3)
+                    _resp = await _client.get(
+                        'http://localhost:9090/api/machines', timeout=3
+                    )
                     for _m in _resp.json():
                         if not _m.get('proxy_url') or _m.get('status') != 'ready':
                             continue
@@ -580,8 +586,10 @@ async def read_conversation_file(
     # relative file_path coming in from the frontend must be resolved against
     # it before hitting the agent-server (which only accepts absolute paths).
     if isinstance(app_conversation_service, AppConversationServiceBase):
-        per_conv_working_dir = await app_conversation_service.get_conversation_working_dir(
-            conversation_id, sandbox_spec.working_dir
+        per_conv_working_dir = (
+            await app_conversation_service.get_conversation_working_dir(
+                conversation_id, sandbox_spec.working_dir
+            )
         )
     else:
         per_conv_working_dir = sandbox_spec.working_dir
