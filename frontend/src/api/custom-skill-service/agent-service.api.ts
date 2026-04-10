@@ -129,6 +129,36 @@ export class AgentService {
     return resp.data;
   }
 
+  static async importFromFiles(
+    files: File[],
+    opts?: {
+      agent_name?: string;
+      agent_description?: string;
+      agent_category?: string;
+    },
+  ): Promise<{
+    status: string;
+    agent_id: string;
+    agent_name: string;
+    skill_count: number;
+    workflow_name: string | null;
+  }> {
+    const formData = new FormData();
+    for (const f of files) {
+      formData.append("files", f);
+    }
+    const params = new URLSearchParams();
+    if (opts?.agent_name) params.set("agent_name", opts.agent_name);
+    if (opts?.agent_description)
+      params.set("agent_description", opts.agent_description);
+    if (opts?.agent_category) params.set("agent_category", opts.agent_category);
+    const url = `/api/v1/agents/import-from-files${params.toString() ? `?${params}` : ""}`;
+    const resp = await openHands.post(url, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return resp.data;
+  }
+
   static async syncAgent(agentId: string): Promise<{
     status: string;
     skill_count: number;

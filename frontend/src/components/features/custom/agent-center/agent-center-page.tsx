@@ -71,6 +71,17 @@ export function AgentCenterPage() {
   const [newTags, setNewTags] = React.useState("");
   const [creating, setCreating] = React.useState(false);
 
+  // File import
+  const [showFileImportModal, setShowFileImportModal] = React.useState(false);
+  const [fileImporting, setFileImporting] = React.useState(false);
+  const [fileImportResult, setFileImportResult] = React.useState<{
+    agent_name: string;
+    skill_count: number;
+    workflow_name: string | null;
+  } | null>(null);
+  const [fileImportError, setFileImportError] = React.useState("");
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
   // Git import modal
   const [showImportModal, setShowImportModal] = React.useState(false);
   const [gitUrl, setGitUrl] = React.useState("");
@@ -254,6 +265,42 @@ export function AgentCenterPage() {
     }
   };
 
+  // File import
+  const handleFileImport = async (selectedFiles: FileList | null) => {
+    if (!selectedFiles || selectedFiles.length === 0) return;
+    const mdFiles = Array.from(selectedFiles).filter((f) =>
+      f.name.endsWith(".md"),
+    );
+    if (mdFiles.length === 0) {
+      setFileImportError("没有找到 .md 文件");
+      return;
+    }
+    setFileImporting(true);
+    setFileImportResult(null);
+    setFileImportError("");
+    try {
+      const result = await AgentService.importFromFiles(mdFiles);
+      setFileImportResult({
+        agent_name: result.agent_name,
+        skill_count: result.skill_count,
+        workflow_name: result.workflow_name,
+      });
+      fetchAgents();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "导入失败";
+      setFileImportError(msg);
+    } finally {
+      setFileImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const closeFileImportModal = () => {
+    setShowFileImportModal(false);
+    setFileImportResult(null);
+    setFileImportError("");
+  };
+
   const closeImportModal = () => {
     setShowImportModal(false);
     setGitUrl("");
@@ -277,6 +324,13 @@ export function AgentCenterPage() {
           <p className="text-sm text-gray-400 mt-1">共 {total} 个 Agent</p>
         </div>
         <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowFileImportModal(true)}
+            className="px-4 py-2 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded-lg text-sm font-medium transition"
+          >
+            从文件导入
+          </button>
           <button
             type="button"
             onClick={() => setShowImportModal(true)}
@@ -565,6 +619,71 @@ export function AgentCenterPage() {
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg text-sm font-medium transition"
               >
                 {creating ? "创建中..." : "创建"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* File Import Modal */}
+      {showFileImportModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-[#161b22] border border-[#30363d] rounded-xl p-6 w-full max-w-lg">
+            <h2 className="text-lg font-bold mb-4">从文件导入 Agent</h2>
+            <p className="text-sm text-gray-400 mb-4">
+              选择本地 .md 文件（Workflow + Skill），自动解析并创建 Agent。
+              支持同时上传多个 .md 文件。
+            </p>
+
+            {fileImportResult ? (
+              <div className="mb-4">
+                <p className="text-green-400 font-medium">导入成功</p>
+                <p className="text-sm text-gray-300">
+                  Agent: {fileImportResult.agent_name}
+                </p>
+                <p className="text-sm text-gray-300">
+                  Skills: {fileImportResult.skill_count} 个
+                </p>
+                {fileImportResult.workflow_name && (
+                  <p className="text-sm text-gray-300">
+                    Workflow: {fileImportResult.workflow_name}
+                  </p>
+                )}
+              </div>
+            ) : fileImportError ? (
+              <div className="mb-4">
+                <p className="text-red-400 font-medium">导入失败</p>
+                <p className="text-sm text-gray-400">{fileImportError}</p>
+              </div>
+            ) : null}
+
+            <div className="mb-4">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".md"
+                multiple
+                onChange={(e) => handleFileImport(e.target.files)}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={fileImporting}
+                className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg text-sm font-medium transition border-2 border-dashed border-blue-400/30"
+              >
+                {fileImporting
+                  ? "导入中..."
+                  : "点击选择 .md 文件（支持多选）"}
+              </button>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={closeFileImportModal}
+                className="px-4 py-2 bg-[#21262d] hover:bg-[#30363d] rounded-lg text-sm"
+              >
+                关闭
               </button>
             </div>
           </div>

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from custom.agent_mgmt.db import get_agent_db
@@ -53,6 +53,46 @@ async def import_from_git(data: GitImportRequest):
         'skill_count': result.skill_count,
         'workflow_name': result.workflow_name,
         'local_dir': result.local_dir,
+    }
+
+
+@router.post('/import-from-files')
+async def import_from_files(
+    files: list[UploadFile] = File(...),
+    agent_name: str | None = Query(None),
+    agent_description: str | None = Query(None),
+    agent_category: str | None = Query(None),
+):
+    """Upload .md skill/workflow files to create an Agent (local file import)."""
+    from custom.agent_mgmt.git_import_service import import_from_files as do_import
+
+    # Read uploaded files into dict[filename, content]
+    file_contents: dict[str, str] = {}
+    for f in files:
+        if not f.filename or not f.filename.endswith('.md'):
+            continue
+        raw = await f.read()
+        file_contents[f.filename] = raw.decode('utf-8')
+
+    if not file_contents:
+        raise HTTPException(status_code=400, detail='No .md files found in upload')
+
+    result = await do_import(
+        file_contents=file_contents,
+        agent_name=agent_name,
+        agent_description=agent_description,
+        agent_category=agent_category,
+    )
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    return {
+        'status': 'imported',
+        'agent_id': result.agent_id,
+        'agent_name': result.agent_name,
+        'skill_count': result.skill_count,
+        'workflow_name': result.workflow_name,
     }
 
 

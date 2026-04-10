@@ -294,6 +294,148 @@ async def import_from_git(
         return ImportResult(success=False, error=str(e))
 
 
+async def _register_skills_and_create_agent(
+    skills: list[ParsedSkill],
+    agent_name: str | None = None,
+    agent_description: str | None = None,
+    agent_category: str | None = None,
+    source_label: str = 'file upload',
+    config_extra: dict | None = None,
+) -> ImportResult:
+    """Shared logic: register parsed skills to DB and create an Agent.
+
+    Used by both ``import_from_git`` and ``import_from_files``.
+    """
+    if not skills:
+        return ImportResult(success=False, error='No .md skill files found')
+
+    workflow = None
+    for s in skills:
+        if s.phases:
+            workflow = s
+            break
+
+    from custom.agent_mgmt.db import get_agent_db
+    from custom.skill_mgmt.db import get_skill_db
+    from custom.skill_mgmt.service import SkillService
+    from custom.skill_mgmt.models import SkillCreate, SkillUpdate
+    from custom.agent_mgmt.service import AgentService
+    from custom.agent_mgmt.models import AgentCreate
+
+    skill_db = await get_skill_db()
+    skill_svc = SkillService(skill_db)
+
+    registered_skill_ids: list[str] = []
+    for s in skills:
+        try:
+            existing_list = await skill_svc.list_skills(limit=1, search=s.name)
+            existing = next((sk for sk in existing_list if sk.name == s.name), None)
+            if existing:
+                await skill_svc.update_skill(existing.id, SkillUpdate(description=s.description))
+                registered_skill_ids.append(existing.id)
+                _logger.info(f'Updated existing skill: {s.name}')
+            else:
+                detail = await skill_svc.create_skill(SkillCreate(
+                    name=s.name,
+                    content=s.content,
+                    description=s.description,
+                    triggers=s.triggers,
+                    category=agent_category or 'imported',
+                    skill_type=s.skill_type,
+                ))
+                registered_skill_ids.append(detail.id)
+                _logger.info(f'Registered new skill: {s.name}')
+        except Exception as e:
+            _logger.warning(f'Failed to register skill {s.name}: {e}')
+
+    await skill_db.close()
+
+    if not agent_name:
+        if workflow:
+            agent_name = workflow.name.replace('-workflow', '').replace('-', ' ').title() + ' Agent'
+        else:
+            agent_name = skills[0].name.replace('-', ' ').title() + ' Agent'
+
+    config: dict = config_extra or {}
+    config['imported_at'] = __import__('datetime').datetime.now(
+        __import__('datetime').timezone.utc
+    ).isoformat()
+
+    if workflow and workflow.phases:
+        config['workflow_phases'] = [
+            {'key': p.get('key', ''), 'label': p.get('label', ''), 'desc': p.get('desc', ''),
+             'file': p.get('output')}
+            for p in workflow.phases
+        ]
+
+    system_prompt = workflow.content if workflow else None
+
+    agent_db = await get_agent_db()
+    agent_svc = AgentService(agent_db)
+
+    agent_data = AgentCreate(
+        name=agent_name,
+        description=agent_description or (workflow.description if workflow else f'Imported via {source_label}'),
+        system_prompt=system_prompt,
+        category=agent_category,
+        config_json=json.dumps(config),
+        skill_ids=registered_skill_ids,
+    )
+    agent_id = await agent_svc.create_agent(agent_data)
+    await agent_db.close()
+
+    _logger.info(f'Created agent "{agent_name}" (id={agent_id}) with {len(registered_skill_ids)} skills')
+    return ImportResult(
+        success=True,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        skill_count=len(registered_skill_ids),
+        workflow_name=workflow.name if workflow else None,
+    )
+
+
+async def import_from_files(
+    file_contents: dict[str, str],
+    agent_name: str | None = None,
+    agent_description: str | None = None,
+    agent_category: str | None = None,
+) -> ImportResult:
+    """Import skills from uploaded file contents and create an Agent.
+
+    Args:
+        file_contents: Dict mapping filename -> file content (text).
+                       Only .md files will be parsed as skills.
+        agent_name: Name for the created agent (auto-detected if not provided)
+        agent_description: Description for the agent
+        agent_category: Category for the agent
+
+    Returns:
+        ImportResult with agent_id and metadata
+    """
+    import tempfile
+
+    try:
+        # Write uploaded contents to temp dir for parse_skills_from_dir
+        with tempfile.TemporaryDirectory(prefix='hiclaw_file_import_') as tmpdir:
+            tmp_path = pathlib.Path(tmpdir)
+            for filename, content in file_contents.items():
+                (tmp_path / filename).write_text(content, encoding='utf-8')
+
+            skills = parse_skills_from_dir(tmp_path)
+
+        return await _register_skills_and_create_agent(
+            skills,
+            agent_name=agent_name,
+            agent_description=agent_description,
+            agent_category=agent_category,
+            source_label='file upload',
+            config_extra={'source': 'file_upload'},
+        )
+    except Exception as e:
+        _logger.error(f'File import failed: {e}', exc_info=True)
+        return ImportResult(success=False, error=str(e))
+
+
 async def sync_agent_from_git(agent_id: str) -> ImportResult:
     """Re-pull the git repo and update skills for an existing agent.
 
