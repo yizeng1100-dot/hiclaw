@@ -137,7 +137,8 @@ def seed_skills() -> int:
         """)
 
         created = 0
-        md_files = sorted(SKILL_EXAMPLES_DIR.glob("*.md"))
+        # Recursively scan all subdirectories for .md skill files
+        md_files = sorted(SKILL_EXAMPLES_DIR.glob("**/*.md"))
 
         for md_path in md_files:
             content = md_path.read_text(encoding="utf-8")
