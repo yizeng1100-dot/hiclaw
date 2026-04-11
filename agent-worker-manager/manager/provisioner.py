@@ -261,7 +261,7 @@ class Provisioner:
                 "import binaryornot; "
                 "import importlib.metadata; "
                 "print(\"VERIFY_OK\", importlib.metadata.version(\"openhands-sdk\"))"
-                "' 2>&1", timeout=15)
+                "' 2>&1", timeout=60)
             installed_version = None
             if "VERIFY_OK" in verify_out:
                 try:
