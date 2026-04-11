@@ -197,24 +197,42 @@ def extract_issues_from_analysis(analysis_dir: Path) -> list[IssueRegion]:
             if not has_issue or severity == "normal":
                 continue
 
+            # Try issue_regions first, then fall back to top_frames
+            # (analyze_app_jank / analyze_sf_jank output top_frames with
+            # ts, dur, jank_type fields instead of issue_regions)
             issue_regions = data.get("issue_regions", [])
-            if issue_regions:
-                for region in issue_regions:
-                    ts = int(region.get("ts", 0))
-                    dur = int(region.get("dur", 0))
+            if not issue_regions:
+                for frame in data.get("top_frames", []):
+                    ts = int(frame.get("ts", 0))
+                    dur = int(frame.get("dur", 0))
                     if ts > 0 and dur > 0:
-                        # Determine jank category from region name
-                        rname = region.get("name", "")
-                        cat = _classify_jank_category(rname, default_cat)
+                        jt = frame.get("jank_type", "")
+                        cat = _classify_jank_category(jt, default_cat)
                         issues.append(IssueRegion(
-                            name=region.get("name", cn_name),
-                            description=region.get("desc", en_desc),
+                            name=jt or cn_name,
+                            description=frame.get("problem_description", en_desc),
                             start_ns=ts,
                             end_ns=ts + dur,
-                            severity=region.get("severity", severity),
+                            severity=frame.get("severity", severity),
                             source_file=filename,
                             jank_category=cat,
                         ))
+
+            for region in issue_regions:
+                ts = int(region.get("ts", 0))
+                dur = int(region.get("dur", 0))
+                if ts > 0 and dur > 0:
+                    rname = region.get("name", "")
+                    cat = _classify_jank_category(rname, default_cat)
+                    issues.append(IssueRegion(
+                        name=region.get("name", cn_name),
+                        description=region.get("desc", en_desc),
+                        start_ns=ts,
+                        end_ns=ts + dur,
+                        severity=region.get("severity", severity),
+                        source_file=filename,
+                        jank_category=cat,
+                    ))
         except Exception as e:
             print(f"[screenshot] Warning: failed to parse {filename}: {e}")
 
