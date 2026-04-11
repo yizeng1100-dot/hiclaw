@@ -1409,6 +1409,43 @@ def capture_screenshots(
                         });
                     }""")
 
+                # >>> CUSTOM: HiClaw — dynamic viewport height <<<
+                _BASE_WIDTH = 1920
+                _MIN_HEIGHT = 1080
+                _MAX_HEIGHT = 2400
+
+                def _fit_viewport():
+                    """Measure track container height and resize viewport to fit.
+
+                    After expanding/pinning tracks, the content may exceed the
+                    default 1080px viewport. This measures the actual scrollable
+                    track tree height plus header/ruler, resizes the viewport,
+                    and returns the clip height for the screenshot.
+                    """
+                    measured = page.evaluate("""() => {
+                        const tree = document.querySelector(
+                            '.pf-timeline-page__scrolling-track-tree'
+                        ) || document.querySelector('[class*="scrolling-track"]');
+                        const header = document.querySelector(
+                            '.pf-timeline-page__header'
+                        ) || document.querySelector('[class*="header-panel"]');
+                        const ruler = document.querySelector(
+                            '.pf-timeline-page__ruler'
+                        ) || document.querySelector('[class*="time-axis"]');
+                        const treeH = tree ? tree.scrollHeight : 800;
+                        const headerH = header ? header.offsetHeight : 0;
+                        const rulerH = ruler ? ruler.offsetHeight : 40;
+                        return {treeH, headerH, rulerH};
+                    }""")
+                    needed = (measured.get("headerH", 0) +
+                              measured.get("rulerH", 40) +
+                              measured.get("treeH", 800) + 20)
+                    h = max(_MIN_HEIGHT, min(_MAX_HEIGHT, needed))
+                    page.set_viewport_size({"width": _BASE_WIDTH, "height": h})
+                    time.sleep(0.3)
+                    return h
+                # >>> END CUSTOM <<<
+
                 # --- View 0: 概览图 (Overview) ---
                 # Strategy: Collapse all → Pin only 2-3 key tracks → Zoom → Screenshot
                 # Pinned tracks appear at the TOP and fill the screen.
@@ -1462,13 +1499,16 @@ def capture_screenshots(
                 page.keyboard.press("Escape")
                 time.sleep(0.3)
 
+                # Resize viewport to fit all expanded tracks
+                clip_h = _fit_viewport()
+
                 shot_name_0 = f"{i:02d}_{issue.name}_0.png"
                 raw_0 = str(output_dir / shot_name_0) + ".raw.png"
                 page.screenshot(path=raw_0,
-                    clip={"x": 0, "y": 0, "width": 1920, "height": 1080})
+                    clip={"x": 0, "y": 0, "width": _BASE_WIDTH, "height": clip_h})
                 _annotate(raw_0, str(output_dir / shot_name_0), "概览")
                 shot_files.append(shot_name_0)
-                print(f"[screenshot]   -> saved {shot_name_0} (概览)")
+                print(f"[screenshot]   -> saved {shot_name_0} (概览, h={clip_h})")
 
                 # --- View 1: 详情图 (Detail with selected slice) ---
                 # Select key slice to show Thread State details panel
@@ -1516,14 +1556,15 @@ def capture_screenshots(
                     _dismiss_cookies()
                     _hide_sidebar()
 
+                    clip_h = _fit_viewport()
                     shot_name_1 = f"{i:02d}_{issue.name}_1.png"
                     raw_1 = str(output_dir / shot_name_1) + ".raw.png"
                     page.screenshot(path=raw_1,
-                        clip={"x": 0, "y": 0, "width": 1920, "height": 1080})
+                        clip={"x": 0, "y": 0, "width": _BASE_WIDTH, "height": clip_h})
                     _annotate_detail(raw_1, str(output_dir / shot_name_1),
                                      "详情", issue, issue_desc)
                     shot_files.append(shot_name_1)
-                    print(f"[screenshot]   -> saved {shot_name_1} (详情)")
+                    print(f"[screenshot]   -> saved {shot_name_1} (详情, h={clip_h})")
                 else:
                     # Fallback: show the other process view
                     fallback_expand = ("surfaceflinger" if not is_sf_issue
@@ -1540,15 +1581,16 @@ def capture_screenshots(
                     _close_bottom_panel(page)
                     _dismiss_cookies()
 
+                    clip_h = _fit_viewport()
                     shot_name_1 = f"{i:02d}_{issue.name}_1.png"
                     raw_1 = str(output_dir / shot_name_1) + ".raw.png"
                     page.screenshot(path=raw_1,
-                        clip={"x": 0, "y": 0, "width": 1920, "height": 1080})
+                        clip={"x": 0, "y": 0, "width": _BASE_WIDTH, "height": clip_h})
                     v1_label = ("SF详情" if "surfaceflinger" in fallback_expand.lower()
                                 else "App详情")
                     _annotate(raw_1, str(output_dir / shot_name_1), v1_label)
                     shot_files.append(shot_name_1)
-                    print(f"[screenshot]   -> saved {shot_name_1} ({v1_label})")
+                    print(f"[screenshot]   -> saved {shot_name_1} ({v1_label}, h={clip_h})")
 
                 screenshot_path = output_dir / shot_files[0]
 
