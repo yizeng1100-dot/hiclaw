@@ -11,6 +11,7 @@
 | npm | 10+ | 前端包管理 |
 | Poetry | 2.x | Python 依赖管理 |
 | Docker | 24+ | 运行 agent-server 容器（每个会话一个容器） |
+| Claude Code CLI | 2.0+ | **可选** — 仅 Claude SDK 引擎模式需要 |
 
 ## 一键部署步骤
 

@@ -406,6 +406,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     remote_workspace=remote_workspace,
                     selected_repository=request.selected_repository,
                     plugins=request.plugins,
+                    # >>> CUSTOM: HiClaw <<<
+                    agent_engine=getattr(request, 'agent_engine', None),
+                    # >>> END CUSTOM <<<
                 )
             )
 
@@ -1015,6 +1018,16 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         self, task: AppConversationStartTask
     ) -> AsyncGenerator[AppConversationStartTask, None]:
         """Wait for sandbox to start and return info."""
+        # >>> CUSTOM: HiClaw — Claude SDK must use Process sandbox (Host mode)
+        # because Docker containers don't have our fork or Claude CLI
+        agent_engine = getattr(task.request, 'agent_engine', 'openhands_sdk')
+        if agent_engine == 'claude_sdk' and self.sandbox_service_host is not None:
+            sbox_service = self.sandbox_service_host
+            _logger.info('[STARTUP] Claude SDK mode → using Process sandbox (host)')
+        else:
+            sbox_service = self.sandbox_service
+        # >>> END CUSTOM <<<
+
         # Get or create the sandbox
         if not task.request.sandbox_id:
             # First try to find a running sandbox for the current user
@@ -1033,7 +1046,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     else None
                 )
 
-                sandbox = await self.sandbox_service.start_sandbox(
+                sandbox = await sbox_service.start_sandbox(
                     sandbox_id=sandbox_id_str
                 )
                 _logger.info(
@@ -1045,7 +1058,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 )
             task.sandbox_id = sandbox.id
         else:
-            sandbox_info = await self.sandbox_service.get_sandbox(
+            sandbox_info = await sbox_service.get_sandbox(
                 task.request.sandbox_id
             )
             if sandbox_info is None:
@@ -1073,7 +1086,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         # Resume if paused
         if sandbox.status == SandboxStatus.PAUSED:
             _logger.info('[STARTUP] Step 1c: Resuming paused sandbox...')
-            await self.sandbox_service.resume_sandbox(sandbox.id)
+            await sbox_service.resume_sandbox(sandbox.id)
 
         # Check for immediate error states
         if sandbox.status in (None, SandboxStatus.ERROR):
@@ -1095,7 +1108,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             '[STARTUP] Step 1d: Waiting for sandbox agent-server to be ready...'
         )
         # Use shared wait_for_sandbox_running utility to poll for ready state
-        await self.sandbox_service.wait_for_sandbox_running(
+        await sbox_service.wait_for_sandbox_running(
             sandbox.id,
             timeout=self.sandbox_startup_timeout,
             poll_interval=self.sandbox_startup_poll_frequency,
@@ -1850,6 +1863,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             secrets=secrets,
             plugins=sdk_plugins,
             hook_config=hook_config,
+            # >>> CUSTOM: HiClaw — pass agent_engine to agent-server <<<
+            agent_engine=agent_engine or 'openhands_sdk',
+            # >>> END CUSTOM <<<
         )
 
     async def _build_start_conversation_request_for_user(
@@ -1865,6 +1881,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         remote_workspace: AsyncRemoteWorkspace | None = None,
         selected_repository: str | None = None,
         plugins: list[PluginSpec] | None = None,
+        agent_engine: str | None = None,
     ) -> StartConversationRequest:
         """Build a complete conversation request for a user.
 

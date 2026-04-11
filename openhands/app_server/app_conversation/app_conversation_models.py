@@ -170,6 +170,13 @@ class AppConversationStartRequest(OpenHandsModel):
     parent_conversation_id: OpenHandsUUID | None = None
     agent_type: AgentType = Field(default=AgentType.DEFAULT)
 
+    # >>> CUSTOM: HiClaw — agent engine selection <<<
+    agent_engine: str = Field(
+        default='openhands_sdk',
+        description='Agent engine: openhands_sdk (multi-model) or claude_sdk (Claude only)',
+    )
+    # >>> END CUSTOM <<<
+
     # >>> CUSTOM: HiClaw — remote worker support <<<
     remote_agent_url: str | None = Field(
         default=None,

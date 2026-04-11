@@ -11,6 +11,7 @@ import { DEFAULT_SETTINGS } from "#/services/settings";
 import { useSelectedOrganizationId } from "#/context/use-selected-organization";
 // >>> CUSTOM: HiClaw <<<
 import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
+import { useAgentEngineStore } from "#/stores/agent-engine-store";
 // >>> END CUSTOM <<<
 
 interface CreateConversationVariables {
@@ -25,6 +26,9 @@ interface CreateConversationVariables {
   createMicroagent?: CreateMicroagent;
   parentConversationId?: string;
   agentType?: "default" | "plan";
+  // >>> CUSTOM: HiClaw <<<
+  agentEngine?: "openhands_sdk" | "claude_sdk";
+  // >>> END CUSTOM <<<
   plugins?: PluginSpec[];
 }
 
@@ -46,6 +50,7 @@ export const useCreateConversation = () => {
   const remoteEnabled = useRemoteWorkerStore((s) => s.enabled);
   const proxyUrl = useRemoteWorkerStore((s) => s.proxyUrl);
   const remoteWorkspace = useRemoteWorkerStore((s) => s.config.workspace);
+  const storeAgentEngine = useAgentEngineStore((s) => s.engine);
   // >>> END CUSTOM <<<
 
   return useMutation({
@@ -61,6 +66,9 @@ export const useCreateConversation = () => {
         createMicroagent,
         parentConversationId,
         agentType,
+        // >>> CUSTOM: HiClaw <<<
+        agentEngine,
+        // >>> END CUSTOM <<<
         plugins,
       } = variables;
 
@@ -95,6 +103,9 @@ export const useCreateConversation = () => {
           undefined,
           parentConversationId,
           agentType,
+          // >>> CUSTOM: HiClaw — agent engine <<<
+          (agentEngine || storeAgentEngine) as "openhands_sdk" | "claude_sdk",
+          // >>> END CUSTOM <<<
           // >>> CUSTOM: HiClaw <<<
           remoteAgentUrl,
           undefined, // remote_session_api_key

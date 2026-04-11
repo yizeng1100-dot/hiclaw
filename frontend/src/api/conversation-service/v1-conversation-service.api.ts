@@ -69,6 +69,9 @@ class V1ConversationService {
     trigger?: ConversationTrigger,
     parent_conversation_id?: string,
     agent_type?: "default" | "plan",
+    // >>> CUSTOM: HiClaw — agent engine <<<
+    agent_engine?: "openhands_sdk" | "claude_sdk",
+    // >>> END CUSTOM <<<
     // >>> CUSTOM: HiClaw <<<
     remote_agent_url?: string,
     remote_session_api_key?: string,
@@ -87,6 +90,9 @@ class V1ConversationService {
       trigger,
       parent_conversation_id: parent_conversation_id || null,
       agent_type,
+      // >>> CUSTOM: HiClaw — agent engine <<<
+      agent_engine: agent_engine || "openhands_sdk",
+      // >>> END CUSTOM <<<
       // >>> CUSTOM: HiClaw <<<
       remote_agent_url: remote_agent_url || null,
       remote_session_api_key: remote_session_api_key || null,

@@ -1336,6 +1336,29 @@ files = [
 ]
 
 [[package]]
+name = "claude-agent-sdk"
+version = "0.1.58"
+description = "Python SDK for Claude Code"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "claude_agent_sdk-0.1.58-py3-none-macosx_11_0_arm64.whl", hash = "sha256:69197950809754c4f06bba8261f2d99c3f9605b6cc1c13d3409d0eb82fb4ee64"},
+    {file = "claude_agent_sdk-0.1.58-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:75d60883fc5e2070bccd8d9b19505fe16af8e049120c03821e9dc8c826cca434"},
+    {file = "claude_agent_sdk-0.1.58-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:7bf4eb0f00ec944a7b63eb94788f120dfb0460c348a525235c7d6641805acc1d"},
+    {file = "claude_agent_sdk-0.1.58-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:650d298a3d3c0dcdde4b5f1dbf52f472ff0b0ec82987b27ffa2a4e0e72928408"},
+    {file = "claude_agent_sdk-0.1.58-py3-none-win_amd64.whl", hash = "sha256:2c2130a7ffe06ed4f88d56b217a5091c91c9bcb1a69cfd94d5dcf0d2946d8c55"},
+    {file = "claude_agent_sdk-0.1.58.tar.gz", hash = "sha256:77bee8fd60be033cb870def46c2ab1625a512fa8a3de4ff8d766664ffb16d6a6"},
+]
+
+[package.dependencies]
+anyio = ">=4.0.0"
+mcp = ">=0.1.0"
+
+[package.extras]
+dev = ["anyio[trio] (>=4.0.0)", "mypy (>=1.0.0)", "pytest (>=7.0.0)", "pytest-asyncio (>=0.20.0)", "pytest-cov (>=4.0.0)", "ruff (>=0.1.0)"]
+
+[[package]]
 name = "cleo"
 version = "2.1.0"
 description = "Cleo allows you to create beautiful and testable command-line interfaces."
@@ -6584,14 +6607,13 @@ description = "OpenHands Agent Server - REST/WebSocket interface for OpenHands A
 optional = false
 python-versions = ">=3.12"
 groups = ["main"]
-files = [
-    {file = "openhands_agent_server-1.16.1-py3-none-any.whl", hash = "sha256:015983b300510c9c329c8eace49fbd4117d31d0895a125e419c31a9964be4155"},
-    {file = "openhands_agent_server-1.16.1.tar.gz", hash = "sha256:489151d35250a424dede8646396bef7b7095adb25e5c973ca8bc6dcbd19cdf07"},
-]
+files = []
+develop = true
 
 [package.dependencies]
 aiosqlite = ">=0.19"
 alembic = ">=1.13"
+claude-agent-sdk = ">=0.1.50"
 docker = ">=7.1,<8"
 fastapi = ">=0.104"
 openhands-sdk = "*"
@@ -6600,6 +6622,10 @@ sqlalchemy = ">=2"
 uvicorn = ">=0.31.1"
 websockets = ">=12"
 wsproto = ">=1.2.0"
+
+[package.source]
+type = "directory"
+url = "packages/agent-server"
 
 [[package]]
 name = "openhands-sdk"
@@ -15030,4 +15056,4 @@ third-party-runtimes = ["daytona", "e2b-code-interpreter", "modal", "runloop-api
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12,<3.14"
-content-hash = "395032da8a23e8eff4246322f329f8f972823f1d5edd77cb6ce3094f48088893"
+content-hash = "17be0f9d3756a86f6755ae373752f950b5b38224527afe817459ff6ba40cfe3e"

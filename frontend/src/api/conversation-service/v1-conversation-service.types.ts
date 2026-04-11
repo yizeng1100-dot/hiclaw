@@ -62,6 +62,9 @@ export interface V1AppConversationStartRequest {
   pr_number?: number[];
   parent_conversation_id?: string | null;
   agent_type?: "default" | "plan";
+  // >>> CUSTOM: HiClaw — agent engine <<<
+  agent_engine?: "openhands_sdk" | "claude_sdk";
+  // >>> END CUSTOM <<<
   // >>> CUSTOM: HiClaw — remote worker <<<
   remote_agent_url?: string | null;
   remote_session_api_key?: string | null;
