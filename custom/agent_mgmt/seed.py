@@ -20,36 +20,68 @@ _logger = logging.getLogger(__name__)
 async def _link_skills_by_name(
     db: AsyncSession, agent_id: object, skill_names: list[str]
 ) -> None:
-    """Link skills from managed_skill table to an agent by skill name.
+    """Reconcile an agent's skill list: link exactly `skill_names`.
+
+    - Removes any existing link whose skill name is NOT in `skill_names`
+      (so when a seed definition is trimmed down — e.g. render agent
+      moving from 8 split skills to a single unified workflow — stale
+      links from earlier seeds are cleaned up on next startup).
+    - Inserts any link that's declared but missing.
+    - Preserves links already present (no-op per existing skill).
 
     Uses raw SQL to avoid UUID type mismatches between tables.
     """
     # Normalize agent_id to hex string (no hyphens)
     aid = str(agent_id).replace('-', '')
-    for i, name in enumerate(skill_names):
-        result = await db.execute(
-            sql_text("SELECT id FROM managed_skill WHERE name = :name"),
-            {'name': name},
-        )
-        row = result.fetchone()
+
+    # Step 1: resolve the desired skill names to IDs, drop unknown.
+    desired_ids: dict[str, str] = {}
+    for name in skill_names:
+        row = (
+            await db.execute(
+                sql_text('SELECT id FROM managed_skill WHERE name = :name'),
+                {'name': name},
+            )
+        ).fetchone()
         if not row:
             _logger.debug(f'Skill not found for linking: {name}')
             continue
-        sid = str(row[0]).replace('-', '')
-        # Check if link already exists
-        existing = await db.execute(
+        desired_ids[name] = str(row[0]).replace('-', '')
+
+    desired_sid_set = set(desired_ids.values())
+
+    # Step 2: delete any existing agent_skill rows for this agent whose
+    # skill isn't in the desired set.
+    existing_rows = (
+        await db.execute(
             sql_text(
-                "SELECT id FROM agent_skill WHERE agent_id = :aid AND skill_id = :sid"
+                'SELECT s.id, s.skill_id, m.name FROM agent_skill s '
+                'JOIN managed_skill m ON m.id = s.skill_id '
+                'WHERE s.agent_id = :aid'
             ),
-            {'aid': aid, 'sid': sid},
+            {'aid': aid},
         )
-        if existing.fetchone():
+    ).fetchall()
+    existing_by_sid: dict[str, str] = {}
+    for row_id, sid, name in existing_rows:
+        sid_hex = str(sid).replace('-', '')
+        existing_by_sid[sid_hex] = str(row_id)
+        if sid_hex not in desired_sid_set:
+            await db.execute(
+                sql_text('DELETE FROM agent_skill WHERE id = :id'),
+                {'id': str(row_id)},
+            )
+            _logger.info(f'Unlinked stale skill {name} from agent {aid[:12]}...')
+
+    # Step 3: insert any desired skill that isn't already linked.
+    for i, (name, sid) in enumerate(desired_ids.items()):
+        if sid in existing_by_sid:
             continue
         link_id = uuid4().hex
         await db.execute(
             sql_text(
-                "INSERT INTO agent_skill (id, agent_id, skill_id, sort_order) "
-                "VALUES (:id, :aid, :sid, :sort)"
+                'INSERT INTO agent_skill (id, agent_id, skill_id, sort_order) '
+                'VALUES (:id, :aid, :sid, :sort)'
             ),
             {'id': link_id, 'aid': aid, 'sid': sid, 'sort': i},
         )
@@ -230,15 +262,15 @@ async def seed_perf_agent(db: AsyncSession) -> None:
 
 RENDER_AGENT_NAME = '渲染性能分析 Agent'
 
+# The render workflow is intentionally self-contained — a single skill
+# that drives a unified 3-script pipeline (analyze_jank →
+# capture_screenshots → render_report_generator). Linking extra
+# knowledge skills used to inject stale 10-phase instructions into the
+# LLM's context, which then ran the old split scripts *after* the new
+# analyze_jank had already produced correct output and clobbered it.
+# Keeping the list to exactly one entry avoids that class of conflict.
 RENDER_AGENT_SKILL_NAMES = [
     'render-performance-workflow',
-    'setup-env',
-    'init-render-jank-metric',
-    'analyze-jank-types',
-    'analyze-app-jank',
-    'analyze-sf-jank',
-    'capture-trace-screenshot',
-    'generate-report',
 ]
 
 RENDER_AGENT_DESCRIPTION = (
@@ -254,18 +286,12 @@ RENDER_AGENT_USAGE = """\
 3. 选择分析重点（完整分析 / App Jank / SF Jank / 帧率统计）
 4. 点击「Analyze」开始分析
 
-## 分析流程（10 阶段）
+## 分析流程（4 阶段）
 
-1. 环境初始化（安装依赖）
-2. 加载 Trace
-3. 查找前台进程
-4. Jank 指标初始化
-5. Jank 类型识别
-6. 应用层 Jank 分析
-7. SurfaceFlinger Jank 分析
-8. Perfetto UI 截图（可选）
-9. 清理 Trace Processor
-10. 生成 HTML 渲染报告
+1. 环境初始化（安装 perfetto / playwright / chromium）
+2. Jank 分析（一次 SQL 扫描：目标进程 + jank 帧 + 线程映射）
+3. Perfetto UI 截图（Top N 问题，全局图 + 细节图）
+4. 生成 HTML 渲染报告（内嵌截图 + Framework 根因分析）
 
 ## 输出
 
