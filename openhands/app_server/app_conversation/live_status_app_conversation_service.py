@@ -1774,6 +1774,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         selected_repository: str | None,
         working_dir: str,
         plugins: list[PluginSpec] | None = None,
+        agent_engine: str | None = None,
     ) -> StartConversationRequest:
         """Finalize the conversation request with skills and metadata.
 
@@ -2073,6 +2074,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             selected_repository,
             project_dir,
             plugins=plugins,
+            agent_engine=agent_engine,
         )
 
     async def _process_pending_messages(

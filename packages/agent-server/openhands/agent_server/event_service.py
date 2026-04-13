@@ -27,6 +27,38 @@ from openhands.sdk.utils.async_utils import AsyncCallbackWrapper
 from openhands.sdk.utils.cipher import Cipher
 from openhands.sdk.workspace import LocalWorkspace
 
+# >>> CUSTOM: HiClaw <<<
+def load_workspace_hiclaw_skills(workspace_dir: str) -> list:
+    """Scan {workspace}/.hiclaw/skills/<name>/SKILL.md and load them as Skill objects.
+
+    Shared by both OpenHands mode and Claude mode so both can use the exact same
+    source of truth for workspace-level custom skills.
+    """
+    from openhands.sdk.context.skills.skill import Skill
+
+    skills: list = []
+    if not workspace_dir:
+        return skills
+
+    root = Path(workspace_dir) / '.hiclaw' / 'skills'
+    if not root.is_dir():
+        return skills
+
+    _logger_local = get_logger(__name__)
+    for skill_md in sorted(root.glob('*/SKILL.md')):
+        try:
+            skill = Skill.load(skill_md)
+            skills.append(skill)
+        except Exception as e:
+            _logger_local.warning(f'Failed to load hiclaw skill {skill_md}: {e}')
+
+    _logger_local.info(
+        f'Loaded {len(skills)} HiClaw skills from {root}: '
+        f'{[s.name for s in skills]}'
+    )
+    return skills
+# >>> END CUSTOM <<<
+
 
 logger = get_logger(__name__)
 
@@ -457,6 +489,35 @@ class EventService:
             )
         # >>> END CUSTOM <<<
 
+        # >>> CUSTOM: HiClaw — inject workspace .hiclaw/skills into OpenHands agent context <<<
+        # Both modes now read skills from {workspace}/.hiclaw/skills/<name>/SKILL.md
+        # so they share the exact same source of truth.
+        _inject_workspace_dir = ''
+        if workspace and hasattr(workspace, 'working_dir'):
+            _inject_workspace_dir = workspace.working_dir or ''
+        _workspace_skills_for_inject = load_workspace_hiclaw_skills(_inject_workspace_dir)
+        if agent is not None and _workspace_skills_for_inject:
+            try:
+                existing_skills = []
+                if getattr(agent, 'agent_context', None) and hasattr(agent.agent_context, 'skills'):
+                    existing_skills = list(agent.agent_context.skills or [])
+                existing_names = {s.name for s in existing_skills}
+                new_skills = [
+                    s for s in _workspace_skills_for_inject if s.name not in existing_names
+                ]
+                if new_skills and agent.agent_context is not None:
+                    merged = existing_skills + new_skills
+                    agent.agent_context = agent.agent_context.model_copy(
+                        update={'skills': merged}
+                    )
+                    logger.info(
+                        f'Injected {len(new_skills)} workspace HiClaw skills into agent_context: '
+                        f'{[s.name for s in new_skills]}'
+                    )
+            except Exception as e:
+                logger.warning(f'Failed to inject workspace HiClaw skills: {e}', exc_info=True)
+        # >>> END CUSTOM <<<
+
         # Create LocalConversation with plugins and hook_config.
         # Plugins are loaded lazily on first run()/send_message() call.
         # Hook execution semantics: OpenHands runs hooks sequentially with early-exit
@@ -467,6 +528,9 @@ class EventService:
             self._pub_sub, loop=asyncio.get_running_loop()
         )
 
+        # Reuse the same workspace skills loaded above for Claude mode
+        workspace_skills = _workspace_skills_for_inject
+
         # >>> CUSTOM: HiClaw — select conversation implementation based on agent_engine <<<
         agent_engine = getattr(self.stored, 'agent_engine', 'openhands_sdk')
         if hasattr(agent_engine, 'value'):
@@ -475,30 +539,77 @@ class EventService:
         if agent_engine == 'claude_sdk':
             from openhands.agent_server.claude_conversation import ClaudeConversation
 
-            # Extract API key from agent LLM config
+            # >>> CUSTOM: HiClaw — extract full LLM config (key + base_url + model) for Claude CLI <<<
+            # Claude CLI can talk to Anthropic-compatible gateways (qianfan, aliyun, LiteLLM proxy)
+            # when ANTHROPIC_BASE_URL and the matching auth token are set. We forward everything
+            # from the UI LLM config so the user doesn't have to configure it twice.
             api_key = ''
+            llm_base_url = ''
+            llm_model = ''
             if hasattr(self.stored, 'agent') and hasattr(self.stored.agent, 'llm'):
-                api_key = self.stored.agent.llm.api_key.get_secret_value() if self.stored.agent.llm.api_key else ''
+                _llm = self.stored.agent.llm
+                api_key = _llm.api_key.get_secret_value() if _llm.api_key else ''
+                llm_base_url = getattr(_llm, 'base_url', '') or ''
+                # Strip provider prefix (e.g. "openai/glm-4.7" -> "glm-4.7")
+                _raw_model = getattr(_llm, 'model', '') or ''
+                llm_model = _raw_model.split('/', 1)[-1] if '/' in _raw_model else _raw_model
+            # >>> END CUSTOM <<<
 
-            # Build skills content from agent context
+            # >>> CUSTOM: HiClaw — build well-framed skills section for Claude <<<
+            # Use the shared workspace_skills list loaded above, so Claude sees
+            # exactly the same skills as OpenHands mode.
+            hiclaw_skills_list = []
+            hiclaw_skills_full = []
+            for skill in workspace_skills:
+                _name = skill.name
+                _desc = (getattr(skill, 'description', '') or '').strip()
+                if not _desc:
+                    for line in (skill.content or '').split('\n'):
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            _desc = line[:200]
+                            break
+                hiclaw_skills_list.append(f'- **{_name}**: {_desc}')
+                hiclaw_skills_full.append(
+                    f'\n\n---\n### Skill: {_name}\n{skill.content}'
+                )
+
             skills_content = ''
-            if hasattr(self.stored, 'agent') and hasattr(self.stored.agent, 'agent_context'):
-                ctx = self.stored.agent.agent_context
-                if ctx and hasattr(ctx, 'skills'):
-                    for skill in (ctx.skills or []):
-                        skills_content += f'\n\n---\n### Skill: {skill.name}\n{skill.content}'
+            if hiclaw_skills_list:
+                skills_content = (
+                    '\n\n<hiclaw_skills>\n'
+                    'The user has access to the following custom HiClaw skills. '
+                    'When the user asks "what skills are available" or '
+                    '"当前上下文中有哪些 skill", list exactly these names. '
+                    'When the user invokes a skill (by name, trigger, or slash command), '
+                    'follow the instructions in its content below.\n\n'
+                    + '\n'.join(hiclaw_skills_list)
+                    + '\n</hiclaw_skills>'
+                    + ''.join(hiclaw_skills_full)
+                )
+            # >>> END CUSTOM <<<
 
             conversation = ClaudeConversation(
                 api_key=api_key,
                 workspace=workspace,
-                system_prompt='You are an AI software development agent.',
+                system_prompt=(
+                    'You are HiClaw, an AI software development agent running inside '
+                    'a sandbox with access to a terminal, file editor, and any custom '
+                    'skills provided below. Always use real tool calls to inspect the '
+                    'filesystem or run commands — do not guess answers to questions '
+                    'about the workspace.'
+                ),
                 persistence_dir=str(self.conversations_dir),
                 conversation_id=self.stored.id,
                 callbacks=[self._callback_wrapper],
                 max_iterations=self.stored.max_iterations,
                 skills_content=skills_content,
+                # >>> CUSTOM: HiClaw <<<
+                llm_base_url=llm_base_url,
+                llm_model=llm_model,
+                # >>> END CUSTOM <<<
             )
-            _logger.info(f'Created ClaudeConversation for {self.stored.id}')
+            logger.info(f'Created ClaudeConversation for {self.stored.id}')
         else:
             # Default: OpenHands SDK agent loop (unchanged)
             conversation = LocalConversation(

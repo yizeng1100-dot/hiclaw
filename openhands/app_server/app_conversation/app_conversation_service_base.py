@@ -118,7 +118,7 @@ class AppConversationServiceBase(AppConversationService, ABC):
 
     async def load_and_merge_all_skills(
         self,
-        sandbox: SandboxInfo,
+        sandbox: SandboxInfo | None,
         selected_repository: str | None,
         project_dir: str,
         agent_server_url: str,
@@ -155,10 +155,14 @@ class AppConversationServiceBase(AppConversationService, ABC):
             # Build sandbox config (exposed URLs)
             sandbox_config = build_sandbox_config(sandbox)
 
+            # >>> CUSTOM: HiClaw — remote sandboxes have no SandboxInfo <<<
+            session_api_key = sandbox.session_api_key if sandbox else None
+            # >>> END CUSTOM <<<
+
             # Single API call to agent-server for ALL skills
             all_skills = await load_skills_from_agent_server(
                 agent_server_url=agent_server_url,
-                session_api_key=sandbox.session_api_key,
+                session_api_key=session_api_key,
                 project_dir=project_dir,
                 org_config=org_config,
                 sandbox_config=sandbox_config,
@@ -248,7 +252,7 @@ class AppConversationServiceBase(AppConversationService, ABC):
 
     async def _load_skills_and_update_agent(
         self,
-        sandbox: SandboxInfo,
+        sandbox: SandboxInfo | None,
         agent: Agent,
         remote_workspace: AsyncRemoteWorkspace,
         selected_repository: str | None,

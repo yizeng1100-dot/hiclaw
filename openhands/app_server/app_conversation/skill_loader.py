@@ -242,17 +242,19 @@ async def build_org_config(
         return None
 
 
-def build_sandbox_config(sandbox: SandboxInfo) -> SandboxConfig | None:
+def build_sandbox_config(sandbox: SandboxInfo | None) -> SandboxConfig | None:
     """Build sandbox config for agent-server API request.
 
     Args:
-        sandbox: SandboxInfo containing exposed URLs
+        sandbox: SandboxInfo containing exposed URLs (may be None for remote sandboxes)
 
     Returns:
         sandbox_config dict if there are exposed URLs, None otherwise
     """
-    if not sandbox.exposed_urls:
+    # >>> CUSTOM: HiClaw — remote sandboxes have no SandboxInfo; skip <<<
+    if sandbox is None or not sandbox.exposed_urls:
         return None
+    # >>> END CUSTOM <<<
 
     exposed_urls = [
         ExposedUrlConfig(name=url.name, url=url.url, port=url.port)

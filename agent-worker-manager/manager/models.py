@@ -32,6 +32,7 @@ class ProvisionStep(str, Enum):
     CHECK_CODE_SERVER = "check_code_server"
     INSTALL_CODE_SERVER = "install_code_server"
     SCP_DEPENDENCIES = "scp_dependencies"
+    INSTALL_CLAUDE_CLI = "install_claude_cli"
     CLONE_SKILLS = "clone_skills"
     START_AGENT_SERVER = "start_agent_server"
     HEALTH_CHECK = "health_check"

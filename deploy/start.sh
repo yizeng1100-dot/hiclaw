@@ -68,8 +68,13 @@ if [ "${1:-}" = "restart" ]; then
         echo "  Stopping Worker Manager..."
         pkill -f "python.*run.py" 2>/dev/null || true
         sleep 1
+        # Always use hiclaw-python for manager (needs asyncssh etc from runtime/packages)
+        local MGR_PY="$PYTHON"
+        if [ -f "$RUNTIME_DIR/hiclaw-python" ]; then
+            MGR_PY="$RUNTIME_DIR/hiclaw-python"
+        fi
         echo "  Starting Worker Manager (port $MANAGER_PORT)..."
-        cd "$MANAGER_DIR" && $PYTHON run.py > "$LOG_DIR/manager.log" 2>&1 &
+        cd "$MANAGER_DIR" && $MGR_PY run.py > "$LOG_DIR/manager.log" 2>&1 &
         disown
         cd "$PROJECT_DIR"
     }
@@ -377,9 +382,14 @@ if ss -tlnp | grep -q ":$GITEA_PORT "; then
 fi
 
 # ─── 2. Worker Manager ───
+# Always use hiclaw-python for manager (needs asyncssh etc from runtime/packages)
+MANAGER_PYTHON="$PYTHON"
+if [ -f "$RUNTIME_DIR/hiclaw-python" ]; then
+    MANAGER_PYTHON="$RUNTIME_DIR/hiclaw-python"
+fi
 if ! ss -tlnp | grep -q ":$MANAGER_PORT "; then
     echo "[2/3] Starting Worker Manager (port $MANAGER_PORT)..."
-    cd "$MANAGER_DIR" && $PYTHON run.py > "$LOG_DIR/manager.log" 2>&1 &
+    cd "$MANAGER_DIR" && $MANAGER_PYTHON run.py > "$LOG_DIR/manager.log" 2>&1 &
     disown
     cd "$PROJECT_DIR"
     sleep 2

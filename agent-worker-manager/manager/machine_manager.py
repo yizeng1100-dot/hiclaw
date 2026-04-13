@@ -401,10 +401,18 @@ class MachineManager:
                     ssh, template=req.template,
                     broadcast_fn=lambda evt, mid=machine_id: self._broadcast_event(mid, evt),
                 )
+                # >>> CUSTOM: HiClaw — track if SDK was reinstalled to force agent-server restart <<<
+                sdk_was_reinstalled = False
+                # >>> END CUSTOM <<<
                 async for evt in provisioner.provision():
                     self._broadcast_event(machine_id, evt)
                     if evt.status == "failed":
                         raise RuntimeError(f"Provisioning failed at {evt.step}: {evt.detail}")
+                    # >>> CUSTOM: HiClaw <<<
+                    if evt.step == ProvisionStep.INSTALL_AGENT_SDK and evt.status == "completed" and "Already installed" not in evt.detail:
+                        sdk_was_reinstalled = True
+                        logger.info(f"[{machine.host}] SDK was reinstalled, will force restart agent-server")
+                    # >>> END CUSTOM <<<
 
                 # Step 3: Clone skills repo
                 evt = ProvisionEvent(step=ProvisionStep.CLONE_SKILLS, status="started")
@@ -458,6 +466,13 @@ class MachineManager:
                             logger.info(f"[{machine.host}] Agent-server on port {port} has wrong workspace, will restart")
                 except Exception:
                     pass
+
+                # >>> CUSTOM: HiClaw — force restart if SDK was reinstalled <<<
+                if already_healthy and sdk_was_reinstalled:
+                    logger.info(f"[{machine.host}] SDK updated, killing old agent-server for restart")
+                    await ssh.run(f"pkill -9 -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5)
+                    already_healthy = False
+                # >>> END CUSTOM <<<
 
                 if already_healthy:
                     evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed",
@@ -715,6 +730,11 @@ class MachineManager:
         # Enable detailed litellm logging so LLM errors show full response body
         env_vars += "LITELLM_LOG=DEBUG "
         env_vars += "SET_VERBOSE=True "
+        # >>> CUSTOM: HiClaw — let Claude Code CLI run as root (machines are ephemeral sandboxes) <<<
+        # Claude CLI refuses --dangerously-skip-permissions when uid=0 unless
+        # IS_SANDBOX=1 or CLAUDE_CODE_BUBBLEWRAP is set. Remote machines ARE sandboxes.
+        env_vars += "IS_SANDBOX=1 "
+        # >>> END CUSTOM <<<
         # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):
             env_vars += "HICLAW_LLM_DEBUG=1 "

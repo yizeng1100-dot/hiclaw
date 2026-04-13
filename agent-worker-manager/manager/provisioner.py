@@ -27,7 +27,7 @@ REMOTE_PYTHON_INSTALL_PATH = os.environ.get('HICLAW_REMOTE_PYTHON_PATH', '$HOME/
 TEMPLATES = {
     "openhands": {
         "venv_path": REMOTE_VENV_PATH,
-        "pip_package": "openhands-agent-server==1.16.1 openhands-sdk==1.16.1 openhands-tools==1.16.1",
+        "pip_package": "openhands-agent-server==1.16.1.post4 openhands-sdk==1.16.1 openhands-tools==1.16.1",
         "binary": f"{REMOTE_VENV_PATH}/bin/agent-server",
         "health_check": "/health",
     },
@@ -125,6 +125,9 @@ class Provisioner:
             f"# Append to no_proxy (don't overwrite — keep system proxy for LLM)\n"
             f"export no_proxy=\"${{no_proxy:+$no_proxy,}}localhost,127.0.0.1\"\n"
             f"export NO_PROXY=\"${{NO_PROXY:+$NO_PROXY,}}localhost,127.0.0.1\"\n"
+            f"# >>> CUSTOM: HiClaw — Claude CLI in PATH for Claude engine mode <<<\n"
+            f"export PATH=\"$HOME/.local/bin:$PATH\"\n"
+            f"# >>> END CUSTOM <<<\n"
             f"exec {remote_python} {venv}/bin/_launcher.py \"$@\"\n"
             f"WRAPPER_EOF\n"
             f"chmod +x {venv}/bin/agent-server", timeout=10)
@@ -243,48 +246,77 @@ class Provisioner:
         # >>> CUSTOM: HiClaw — track whether to force re-upload wheels <<<
         force_reupload_wheels = False
         # >>> END CUSTOM <<<
-        # >>> CUSTOM: HiClaw — extract expected version from pip_package for comparison <<<
-        # pip_package example: "openhands-agent-server==1.16.1 openhands-sdk==1.16.1 ..."
+        # >>> CUSTOM: HiClaw — extract expected versions from pip_package for comparison <<<
+        # pip_package example:
+        #   "openhands-agent-server==1.16.1.post2 openhands-sdk==1.16.1 openhands-tools==1.16.1"
+        # We check BOTH openhands-sdk AND openhands-agent-server because most
+        # of our fork edits live in agent-server; bumping just the SDK version
+        # would miss agent-server-only changes.
         import re as _re
-        _m = _re.search(r"openhands-sdk==(\S+)", self.tmpl.get("pip_package", ""))
-        expected_sdk_version = _m.group(1) if _m else None
+        _pkg_str = self.tmpl.get("pip_package", "")
+        _m_sdk = _re.search(r"openhands-sdk==(\S+)", _pkg_str)
+        _m_srv = _re.search(r"openhands-agent-server==(\S+)", _pkg_str)
+        expected_sdk_version = _m_sdk.group(1) if _m_sdk else None
+        expected_server_version = _m_srv.group(1) if _m_srv else None
         # >>> END CUSTOM <<<
         if has_sdk:
-            # >>> CUSTOM: HiClaw — verify ALL critical imports work AND version matches <<<
+            # >>> CUSTOM: HiClaw — verify ALL critical imports work AND BOTH versions match <<<
             # Must check openhands.tools AND a sample dependency (binaryornot) too,
             # otherwise broken installs (missing tools or deps) will be reused.
+            # Print both sdk and agent-server versions so we can compare each.
             verify_out, _, verify_ec = await self.ssh.run(
                 f"PYTHONPATH={venv}/lib {remote_python} -c '"
                 "import openhands.agent_server; "
                 "import openhands.sdk; "
                 "import openhands.tools; "
                 "import binaryornot; "
-                "import importlib.metadata; "
-                "print(\"VERIFY_OK\", importlib.metadata.version(\"openhands-sdk\"))"
+                "import importlib.metadata as _m; "
+                "print(\"VERIFY_OK\", "
+                "_m.version(\"openhands-sdk\"), "
+                "_m.version(\"openhands-agent-server\"))"
                 "' 2>&1", timeout=60)
-            installed_version = None
+            installed_sdk_version = None
+            installed_server_version = None
             if "VERIFY_OK" in verify_out:
                 try:
-                    installed_version = verify_out.split("VERIFY_OK", 1)[1].strip().split()[0]
+                    _parts = verify_out.split("VERIFY_OK", 1)[1].strip().split()
+                    installed_sdk_version = _parts[0] if len(_parts) > 0 else None
+                    installed_server_version = _parts[1] if len(_parts) > 1 else None
                 except Exception:
-                    installed_version = None
-            version_matches = (
+                    installed_sdk_version = None
+                    installed_server_version = None
+            sdk_version_matches = (
                 expected_sdk_version is not None
-                and installed_version == expected_sdk_version
+                and installed_sdk_version == expected_sdk_version
             )
+            server_version_matches = (
+                expected_server_version is not None
+                and installed_server_version == expected_server_version
+            )
+            version_matches = sdk_version_matches and server_version_matches
+            installed_version_str = f"sdk={installed_sdk_version}, server={installed_server_version}"
             if "VERIFY_OK" in verify_out and version_matches:
                 sdk_healthy = True
                 yield _evt(ProvisionStep.SCP_DEPENDENCIES, "skipped",
-                           detail=f"Already installed v{installed_version}")
+                           detail=f"Already installed ({installed_version_str})")
                 # Always regenerate wrapper scripts (ensure monkey-patch is up to date)
                 await self._write_wrapper_scripts(venv, remote_python)
                 yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed",
-                           detail=f"Already installed v{installed_version} & verified")
-                logger.info(f"[{self._host}] SDK: v{installed_version} already installed, wrapper regenerated")
+                           detail=f"Already installed ({installed_version_str}) & verified")
+                logger.info(f"[{self._host}] SDK: {installed_version_str} already installed, wrapper regenerated")
             else:
                 # Binary exists but broken OR outdated — clean up everything and reinstall
                 if "VERIFY_OK" in verify_out and not version_matches:
-                    reason = f"version mismatch: installed={installed_version}, expected={expected_sdk_version}"
+                    _mismatched = []
+                    if not sdk_version_matches:
+                        _mismatched.append(
+                            f"sdk: installed={installed_sdk_version}, expected={expected_sdk_version}"
+                        )
+                    if not server_version_matches:
+                        _mismatched.append(
+                            f"server: installed={installed_server_version}, expected={expected_server_version}"
+                        )
+                    reason = "version mismatch — " + "; ".join(_mismatched)
                     logger.warning(f"[{self._host}] SDK {reason}, upgrading")
                     yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started",
                                detail=f"Upgrading: {reason}")
@@ -470,6 +502,56 @@ class Provisioner:
             # >>> END CUSTOM <<<
 
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "completed")
+
+        # ── Step 2.3: Claude CLI (optional) ──
+        # >>> CUSTOM: HiClaw — deploy Claude CLI for Claude engine mode <<<
+        claude_bundle = os.path.join(DEPS_DIR, "claude-cli-bundle.tar.gz")
+        if os.path.exists(claude_bundle):
+            has_claude = await self._check_remote(
+                f"test -f {remote_home}/.local/bin/claude"
+            )
+            if has_claude:
+                yield _evt(ProvisionStep.INSTALL_CLAUDE_CLI, "skipped", detail="Already installed")
+                logger.info(f"[{self._host}] Claude CLI already installed, skipping")
+            else:
+                bundle_size_mb = os.path.getsize(claude_bundle) // 1024 // 1024
+                yield _evt(ProvisionStep.INSTALL_CLAUDE_CLI, "started",
+                           detail=f"Uploading Claude CLI ({bundle_size_mb}MB)")
+                logger.info(f"[{self._host}] Uploading Claude CLI bundle ({bundle_size_mb}MB)")
+                last_mb = [0]
+                def _on_claude_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(_evt(ProvisionStep.INSTALL_CLAUDE_CLI, "started",
+                                             detail=f"Uploading {sent_mb}/{bundle_size_mb}MB ({pct}%)"))
+                await self.ssh.upload_file(
+                    claude_bundle, f"{remote_tmp}/claude-cli-bundle.tar.gz",
+                    progress_callback=_on_claude_progress,
+                )
+                await self.ssh.run(
+                    f"mkdir -p {remote_home}/.local && "
+                    f"tar xzf {remote_tmp}/claude-cli-bundle.tar.gz -C {remote_home}/.local/ && "
+                    f"rm -f {remote_tmp}/claude-cli-bundle.tar.gz && "
+                    f"chmod +x {remote_home}/.local/share/claude/versions/* && "
+                    f"{remote_home}/.local/bin/claude --version 2>&1 || true",
+                    timeout=60,
+                )
+                installed = await self._check_remote(
+                    f"test -f {remote_home}/.local/bin/claude"
+                )
+                if installed:
+                    yield _evt(ProvisionStep.INSTALL_CLAUDE_CLI, "completed",
+                               detail="Claude CLI installed")
+                    logger.info(f"[{self._host}] Claude CLI installed successfully")
+                else:
+                    yield _evt(ProvisionStep.INSTALL_CLAUDE_CLI, "failed",
+                               detail="Install verification failed")
+                    logger.warning(f"[{self._host}] Claude CLI install verification failed")
+        else:
+            logger.debug(f"[{self._host}] No claude-cli-bundle.tar.gz, skipping Claude CLI")
+        # >>> END CUSTOM <<<
 
         # ── Step 2.5: Deploy public skills to user skills dir ──
         # >>> CUSTOM: HiClaw — transfer extensions via SSH to ~/.openhands/skills/ <<<

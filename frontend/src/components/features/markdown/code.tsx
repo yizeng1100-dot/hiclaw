@@ -18,6 +18,39 @@ export function code({
   const match = /language-(\w+)/.exec(className || ""); // get the language
   const codeString = String(children).replace(/\n$/, "");
 
+  // >>> CUSTOM: HiClaw — render ```thinking blocks as collapsible <details> <<<
+  if (match && match[1] === "thinking") {
+    // First non-empty line, trimmed and truncated, used as a hint of what
+    // the model is thinking about so the user can decide whether to expand.
+    const firstLine =
+      codeString
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l.length > 0) || "";
+    const preview =
+      firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine;
+    return (
+      <details
+        className="my-2 rounded border border-neutral-700 bg-[#1b1e24] text-sm"
+        data-testid="thinking-block"
+      >
+        <summary className="cursor-pointer select-none px-3 py-1.5 text-xs text-neutral-400 hover:text-neutral-200 flex items-center gap-2">
+          {/* eslint-disable-next-line i18next/no-literal-string */}
+          <span className="shrink-0">💭 Thinking</span>
+          {preview && (
+            <span className="truncate text-neutral-500 italic font-normal">
+              {preview}
+            </span>
+          )}
+        </summary>
+        <div className="whitespace-pre-wrap px-3 pb-3 pt-1 text-xs leading-relaxed text-neutral-400">
+          {codeString}
+        </div>
+      </details>
+    );
+  }
+  // >>> END CUSTOM <<<
+
   if (!match) {
     const isMultiline = String(children).includes("\n");
 
