@@ -262,15 +262,22 @@ async def seed_perf_agent(db: AsyncSession) -> None:
 
 RENDER_AGENT_NAME = '渲染性能分析 Agent'
 
-# The render workflow is intentionally self-contained — a single skill
-# that drives a unified 3-script pipeline (analyze_jank →
-# capture_screenshots → render_report_generator). Linking extra
-# knowledge skills used to inject stale 10-phase instructions into the
-# LLM's context, which then ran the old split scripts *after* the new
-# analyze_jank had already produced correct output and clobbered it.
-# Keeping the list to exactly one entry avoids that class of conflict.
+# Render agent skill set — the main workflow rule + one knowledge skill
+# per phase script. Matches the 4-phase pipeline:
+#   setup_env -> analyze_jank -> capture_screenshots -> render_report_generator
+# Each knowledge skill md documents its phase script's CLI, inputs, and
+# outputs so the LLM has precise per-phase guidance beyond the workflow
+# rule's high-level table. The OLD 10-phase knowledge skills (init-
+# render-jank-metric, analyze-jank-types, analyze-app-jank, analyze-
+# sf-jank, capture-trace-screenshot, the old generate-report) were
+# retired in commit d764e6eea — they documented scripts that no longer
+# exist.
 RENDER_AGENT_SKILL_NAMES = [
     'render-performance-workflow',
+    'setup-env',
+    'analyze-jank',
+    'capture-screenshots',
+    'render-report-generator',
 ]
 
 RENDER_AGENT_DESCRIPTION = (
