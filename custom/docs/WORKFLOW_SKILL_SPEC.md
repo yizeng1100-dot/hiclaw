@@ -271,13 +271,157 @@ triggers:
 - `details`: 具体指标
 ```
 
+## 动态输入表单（v1.2.0+）
+
+### 为什么要用
+
+早期 agent 的 trace 上传面板写死在前端里（`PerfAnalysisInlinePanel.tsx`），每加一个 agent 都要改前端代码。平台现在支持"**skill frontmatter 声明表单，前端自动渲染**"——加新 agent **零前端代码改动**，只写一个 `.md` 文件即可。
+
+具体做法：在 workflow skill 的 frontmatter 里加两个字段：
+
+- `input_form:` 列出要渲染的表单字段
+- `submit_message:` 用户提交后，模板变量替换后作为 initial message 发给 agent
+
+前端 `DynamicFormPanel` 组件读 `input_form` 渲染 UI，提交时按 `submit_message` 模板替换用户填的值，新建 conversation 并把替换后的消息发过去。
+
+### 完整字段
+
+```yaml
+---
+name: my-workflow
+type: repo
+
+# 动态输入表单 —— 前端 DynamicFormPanel 自动渲染
+input_form:
+  - key: trace_path          # 必填，变量名，用于 submit_message 模板替换
+    type: file               # 必填，字段类型（见下表）
+    label: Trace 文件         # 必填，UI 上显示的字段名
+    placeholder: /workspace/trace.perfetto-trace   # 可选
+    accept: .perfetto-trace,.pb,.pftrace            # 仅 file 类型，限制扩展名
+    required: true           # 可选，默认 false
+  - key: focus
+    type: select
+    label: 分析重点
+    default: full            # 可选，预选的 value
+    options:                 # select 必填
+      - label: 完整分析       # 下拉项显示文本
+        value: full          # 提交时传的值
+        desc: 全部 10 阶段    # 可选，hover 提示
+      - label: 快速分析
+        value: fast
+  - key: top_n
+    type: number
+    label: Top N 问题数
+    default: 5
+    min: 1                   # 可选，number 类型的下限
+    max: 20                  # 可选，number 类型的上限
+    placeholder: 最严重问题数量
+  - key: extra
+    type: text               # 普通单行文本输入
+    label: 补充说明
+    placeholder: 可选，如关注某场景...
+    required: false
+  - key: notes
+    type: textarea           # 多行文本
+    label: 详细备注
+
+# 提交模板 —— {{key}} 占位符会用用户填的值替换
+submit_message: |
+  Execute skill: my-workflow. Follow the skill instructions.
+
+  **Trace file path**: {{trace_path}}
+  **Focus**: {{focus}}
+  **Top N**: {{top_n}}
+  {{extra}}
+
+  Please execute the workflow:
+  1. ...
+---
+```
+
+### `type` 字段说明
+
+| 类型 | 渲染组件 | 值类型 | 说明 |
+|---|---|---|---|
+| `file` | 文件选择器 | string（sandbox 绝对路径）| 用户选文件后，前端通过 `POST /api/v1/uploads` 把文件上传到 `~/.openhands/sandbox-data/.uploads/<upload_id>/<filename>`，返回 sandbox 可见路径 `/workspace/conversations/.uploads/<upload_id>/<filename>` 作为 `{{key}}` 的值 |
+| `select` | 下拉单选 | string | `options:` 必填；`default:` 可预选某个 value |
+| `number` | 数字输入 | number | `min` / `max` / `default` 可选 |
+| `text` | 单行文本 | string | |
+| `textarea` | 多行文本 | string | 用于长输入（如详细备注）|
+
+**注意**：`key` 只能用 `[a-zA-Z_][a-zA-Z0-9_]*`，避免和模板变量替换冲突。
+
+### `submit_message` 模板替换规则
+
+- `{{key}}` 会被替换为用户输入的对应值（所有类型统一用 `String(value)`）
+- 未填写的 required=false 字段：
+  - 如果没填 → `{{key}}` 保留原样进模板
+  - 模板最后会清除所有未替换的 `{{...}}` 占位符（防止留一堆空标签）
+- file 字段的值是 sandbox 内的绝对路径，可以直接在 bash 命令里用
+- 多行模板（`|` 或 `>-`）会保留换行，适合写一段详细指令
+
+### 提交后做了什么
+
+```
+用户点 "提交"
+ → DynamicFormPanel.handleSubmit():
+   1. 遍历所有 type=file 字段，调用 FileUploadService.upload(file) 拿到 sandbox 路径
+   2. 把所有值塞进 values 对象
+   3. 按 submit_message 模板逐个替换 {{key}} → values[key]
+   4. 清除未替换的 {{...}} 占位符
+   5. 调用 onSubmit(finalMessage)
+ → 上游 handleFormSubmit() 做 agent 启动三件套：
+   1. TaskService.createTask({agent_id})       ← 创建 agent_task 记录
+   2. createConversation({query: finalMessage}) ← 创建新 conv 并把消息作为 initial message 发给 agent
+   3. TaskService.startTask(task_id, conv_id)   ← 把 task 关联到 conv
+   4. navigate(`/conversations/<new_conv_id>`)  ← 跳到新 conv 页面
+```
+
+**每次提交都会新建一个独立 conversation**，跟 perf/render 其它 agent 行为一致。想在已有 conv 里复用这个 agent？目前不支持，workflow 运行是"一次性"的，独立 conv 更便于任务中心追溯。
+
+### 下载报告：`reports:` 字段
+
+如果 workflow 的 report phase 会输出多个 `.html` 文件（比如 perf agent 一次生成 `full_report.html` + `issue_report.html`），把它们显式声明到 `reports:` 字段，前端会自动为每个条目渲染一个下载按钮：
+
+```yaml
+reports:
+  - label: 完整报告                                       # 下载按钮上显示的名字
+    file: perf_analysis_output/full_report.html            # 相对 conv 工作目录的路径
+  - label: 问题报告
+    file: perf_analysis_output/issue_report.html
+```
+
+规则：
+- `file` 和 workflow phase 的 `output` 同样的路径约定（相对 = per-conv 隔离；绝对 = 原样透传）
+- 条目可以和某个 phase 的 `output` 重复（如 `full_report.html` 同时是 phase output 和 report）
+- **完全不声明也能 fallback**：如果 skill 没写 `reports:`，下载按钮会扫 `phases:` 里任何 `output` 以 `.html` 结尾的 phase，自动生成按钮
+- 显式声明的好处：能自定义 label（"完整报告"比 `full_report.html` 好看多了）和顺序
+
+### 前端渲染条件
+
+Agent 的 `config_json.input_form` 字段存在 → `agent-detail-page.tsx` 展示"开始分析"按钮 + 弹 DynamicFormPanel；否则只展示"启动 Agent"按钮（直接用 system_prompt 启动 agent，无表单）。
+
+后端 `/api/v1/agents/{id}` 的 overlay 会在**每次请求**自动从 skill frontmatter 同步 `input_form` / `workflow_phases` / `reports` 三个字段到 `config_json`（详情见 `custom/agent_mgmt/router.py:get_agent` + `custom/skill_mgmt/bridge.py`），所以改完 `.md` 不用 restart 后端 —— bridge 缓存 miss 时会重扫磁盘。
+
+### 排错
+
+| 现象 | 根因 |
+|---|---|
+| 前端启动 agent 没弹表单，直接用 system_prompt 跑 | skill frontmatter 没写 `input_form:` 字段 |
+| 表单渲染但某个字段没响应 | `key` 包含了非法字符（只能用 `[a-zA-Z_][a-zA-Z0-9_]*`） |
+| 提交后 message 里 `{{trace_path}}` 没被替换 | 字段 `key` 和模板 `{{key}}` 名字对不上 |
+| file 字段上传后 agent 找不到文件 | 确认 sandbox `SANDBOX_VOLUMES` 有 `~/.openhands/sandbox-data:/workspace/conversations` 这条 bind-mount（见 `start_dev.sh`） |
+| 下载按钮不出现 | `reports:` 里的 file 路径是相对 vs 绝对要和 phase output 一致；不声明 `reports:` 时只有 `.html` 后缀的 phase output 才会生成按钮 |
+
+---
+
 ## Agent 配置说明
 
-创建 Agent 时，关联一个 workflow skill 即可。平台会自动从 workflow 的 frontmatter 中读取 `phases`，无需在 agent 的 `config_json` 中重复配置。
+创建 Agent 时，关联一个 workflow skill 即可。平台会自动从 workflow 的 frontmatter 中读取 `phases` / `input_form` / `reports`，无需在 agent 的 `config_json` 中重复配置。
 
-如果 agent 的 `config_json` 中已手动定义了 `workflow_phases`，则以 `config_json` 中的为准（向后兼容）。
+如果 agent 的 `config_json` 中已手动定义了 `workflow_phases` / `input_form` / `reports`，则以 `config_json` 中的为准（向后兼容）。
 
-优先级：`config_json.workflow_phases` > workflow skill frontmatter `phases`
+优先级：`config_json.<field>` > workflow skill frontmatter `<field>`
 
 ## 文件目录约定
 
@@ -304,3 +448,4 @@ custom/
 |------|------|------|
 | 1.0.0 | 2026-03-30 | 初始版本，定义 phases frontmatter 规范 |
 | 1.1.0 | 2026-04-09 | output 路径平台约定改为相对路径 + 自动 per-conversation 隔离；绝对路径作为向后兼容保留。详情见 `output 路径约定` 一节。 |
+| 1.2.0 | 2026-04-13 | 新增 `input_form` / `submit_message` / `reports` 三个 frontmatter 字段，让 agent 的输入表单 + 下载按钮完全由 skill 驱动，前端零代码改动即可加新 agent。`PerfAnalysisInlinePanel` 硬编码面板已退役。详情见「动态输入表单」一节。 |

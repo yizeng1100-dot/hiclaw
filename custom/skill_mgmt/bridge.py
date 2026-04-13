@@ -188,3 +188,85 @@ def get_workflow_phases(skill_name: str) -> list[dict] | None:
                 pass
 
     return _workflow_phases_cache.get(skill_name)
+
+
+# Cache for downloadable report artifacts declared in a skill's frontmatter
+_reports_cache: dict[str, list[dict]] = {}
+
+
+def get_reports(skill_name: str) -> list[dict] | None:
+    """Get downloadable reports declared in a skill's frontmatter.
+
+    Reports are decoupled from workflow phases so a single `generate_report`
+    step can publish multiple html (or other) artifacts without bloating
+    the progress bar. Each entry is normalized to
+        {"label": str, "file": str}
+    so the frontend can render one download button per entry.
+    """
+    if skill_name in _reports_cache:
+        return _reports_cache[skill_name]
+
+    import frontmatter
+
+    for skill_dir in _iter_skill_dirs():
+        for md_file in sorted(skill_dir.glob('*.md')):
+            try:
+                post = frontmatter.load(str(md_file))
+                meta = post.metadata or {}
+                name = meta.get('name', md_file.stem)
+                reports = meta.get('reports')
+                if reports:
+                    normalized = []
+                    for r in reports:
+                        file_path = r.get('file') or r.get('output') or r.get('path')
+                        if not file_path:
+                            continue
+                        normalized.append(
+                            {
+                                'label': r.get('label') or str(file_path).rsplit('/', 1)[-1],
+                                'file': file_path,
+                            }
+                        )
+                    if normalized:
+                        _reports_cache[name] = normalized
+            except Exception:
+                pass
+
+    return _reports_cache.get(skill_name)
+
+
+# Cache for parsed input_form + submit_message from skill files
+_input_form_cache: dict[str, dict] = {}
+
+
+def get_input_form(skill_name: str) -> dict | None:
+    """Get input_form and submit_message defined in a skill's frontmatter.
+
+    Returns a dict like:
+        {
+            "fields": [{"key": "trace_path", "type": "file", "label": "...", ...}, ...],
+            "submit_message": "Execute skill: ... {{trace_path}} ..."
+        }
+    Or None if the skill has no input_form defined.
+    """
+    if skill_name in _input_form_cache:
+        return _input_form_cache[skill_name]
+
+    import frontmatter
+
+    for skill_dir in _iter_skill_dirs():
+        for md_file in sorted(skill_dir.glob('*.md')):
+            try:
+                post = frontmatter.load(str(md_file))
+                meta = post.metadata or {}
+                name = meta.get('name', md_file.stem)
+                input_form = meta.get('input_form')
+                if input_form:
+                    _input_form_cache[name] = {
+                        'fields': input_form,
+                        'submit_message': meta.get('submit_message', ''),
+                    }
+            except Exception:
+                pass
+
+    return _input_form_cache.get(skill_name)

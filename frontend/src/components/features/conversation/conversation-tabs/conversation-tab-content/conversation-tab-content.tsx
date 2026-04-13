@@ -1,4 +1,4 @@
-import { lazy, useMemo, Suspense } from "react";
+import React, { lazy, useMemo, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { ConversationLoading } from "../../conversation-loading";
 import { I18nKey } from "#/i18n/declaration";
@@ -7,7 +7,10 @@ import { TabContainer } from "./tab-container";
 import { TabContentArea } from "./tab-content-area";
 import { ConversationTabTitle } from "../conversation-tab-title";
 import Terminal from "#/components/features/terminal/terminal";
-import { useConversationStore } from "#/stores/conversation-store";
+import {
+  useConversationStore,
+  type ConversationTab,
+} from "#/stores/conversation-store";
 import { useConversationId } from "#/hooks/use-conversation-id";
 
 // Lazy load all tab components
@@ -17,8 +20,12 @@ const ServedTab = lazy(() => import("#/routes/served-tab"));
 const VSCodeTab = lazy(() => import("#/routes/vscode-tab"));
 const PlannerTab = lazy(() => import("#/routes/planner-tab"));
 const TaskListTab = lazy(() => import("#/routes/task-list-tab"));
+const PhaseProgressTab = lazy(() => import("#/routes/phase-progress-tab"));
 
-const TAB_CONFIG = {
+const TAB_CONFIG: Record<
+  ConversationTab,
+  { component: React.ComponentType; titleKey: I18nKey }
+> = {
   tasklist: {
     component: TaskListTab,
     titleKey: I18nKey.COMMON$TASK_LIST,
@@ -46,6 +53,10 @@ const TAB_CONFIG = {
   planner: {
     component: PlannerTab,
     titleKey: I18nKey.COMMON$PLANNER,
+  },
+  progress: {
+    component: PhaseProgressTab,
+    titleKey: I18nKey.COMMON$TASK_LIST,
   },
 };
 

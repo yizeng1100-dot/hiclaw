@@ -117,8 +117,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     GITEA_URL,
                 )
 
-                # Check if repo already exists in Gitea
-                _check = _httpx.get(
+                # Check if repo already exists in Gitea.
+                # Intentionally blocking during lifespan startup — the
+                # server hasn't started accepting requests yet, so a sync
+                # httpx call is fine here and keeps this one-shot import
+                # readable. noqa: ASYNC210.
+                _check = _httpx.get(  # noqa: ASYNC210
                     f'{GITEA_URL}/api/v1/repos/{GITEA_ADMIN_USER}/extensions',
                     auth=(GITEA_ADMIN_USER, GITEA_ADMIN_PASSWORD),
                     timeout=5,
@@ -128,7 +132,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                         'Importing OpenHands extensions to Gitea...'
                     )
                     # Create repo
-                    _httpx.post(
+                    _httpx.post(  # noqa: ASYNC210
                         f'{GITEA_URL}/api/v1/user/repos',
                         json={'name': 'extensions', 'private': False},
                         auth=(GITEA_ADMIN_USER, GITEA_ADMIN_PASSWORD),
@@ -242,9 +246,11 @@ app.include_router(_hiclaw_skills.router)
 try:
     from custom.agent_mgmt.router import router as _agent_router
     from custom.agent_mgmt.task_router import router as _task_router
+    from custom.file_uploads.router import router as _file_uploads_router
 
     app.include_router(_agent_router, prefix='/api/v1')
     app.include_router(_task_router, prefix='/api/v1')
+    app.include_router(_file_uploads_router, prefix='/api/v1')
 except ImportError:
     pass
 # >>> END CUSTOM <<<

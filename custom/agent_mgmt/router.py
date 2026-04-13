@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
@@ -58,7 +60,7 @@ async def import_from_git(data: GitImportRequest):
 
 @router.post('/import-from-files')
 async def import_from_files(
-    files: list[UploadFile] = File(...),
+    files: Annotated[list[UploadFile], File(...)],
     agent_name: str | None = Query(None),
     agent_description: str | None = Query(None),
     agent_category: str | None = Query(None),
@@ -129,11 +131,19 @@ async def list_agents(
     try:
         svc = AgentService(db)
         agents = await svc.list_agents(
-            search=search, category=category, tag=tag, is_enabled=is_enabled,
-            created_by=created_by, sort_by=sort_by, sort_order=sort_order,
-            limit=limit, offset=offset,
+            search=search,
+            category=category,
+            tag=tag,
+            is_enabled=is_enabled,
+            created_by=created_by,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset,
         )
-        total = await svc.count_agents(search=search, category=category, is_enabled=is_enabled)
+        total = await svc.count_agents(
+            search=search, category=category, is_enabled=is_enabled
+        )
         return {'agents': [a.model_dump() for a in agents], 'total': total}
     finally:
         await db.close()
@@ -191,18 +201,46 @@ async def get_agent(agent_id: str, user_id: str = Query('default')):
             raise HTTPException(status_code=404, detail='Agent not found')
         result = agent.model_dump()
 
-        # Auto-populate workflow_phases from linked workflow skill's frontmatter
-        if agent.skills and not _has_config_phases(result.get('config_json')):
-            from custom.skill_mgmt.bridge import get_workflow_phases
+        # Auto-populate workflow_phases / input_form / reports from the
+        # linked workflow skill's frontmatter. We check each linked skill
+        # in order and take the first hit per field, so an agent whose
+        # primary workflow skill lives first wins.
+        if agent.skills:
+            import json
+
+            from custom.skill_mgmt.bridge import (
+                get_input_form,
+                get_reports,
+                get_workflow_phases,
+            )
+
+            config = json.loads(result.get('config_json') or '{}')
+            changed = False
+
             for skill in agent.skills:
-                phases = get_workflow_phases(skill.name)
-                if phases:
-                    # Merge phases into config_json so frontend gets them automatically
-                    import json
-                    config = json.loads(result.get('config_json') or '{}')
-                    config['workflow_phases'] = phases
-                    result['config_json'] = json.dumps(config)
-                    break  # Use first workflow skill's phases
+                # Populate workflow_phases
+                if not config.get('workflow_phases'):
+                    phases = get_workflow_phases(skill.name)
+                    if phases:
+                        config['workflow_phases'] = phases
+                        changed = True
+
+                # Populate input_form
+                if not config.get('input_form'):
+                    form = get_input_form(skill.name)
+                    if form:
+                        config['input_form'] = form
+                        changed = True
+
+                # Populate reports (downloadable deliverables)
+                if not config.get('reports'):
+                    reports = get_reports(skill.name)
+                    if reports:
+                        config['reports'] = reports
+                        changed = True
+
+            if changed:
+                result['config_json'] = json.dumps(config)
 
         return result
     finally:
@@ -215,6 +253,7 @@ def _has_config_phases(config_json: str | None) -> bool:
         return False
     try:
         import json
+
         config = json.loads(config_json)
         return bool(config.get('workflow_phases'))
     except Exception:
