@@ -1146,14 +1146,33 @@ def _convert_result_message(message: Any) -> list[Event]:
         except Exception:
             return []
 
-    # Success path — emit a system message summary.
+    # Success path — emit a system message summary. Show tokens (what the
+    # user wants to see) instead of USD cost (which is meaningless when
+    # running against internal gateways like qianfan that don't bill in USD).
+    usage = getattr(message, 'usage', None) or {}
+    input_tokens = 0
+    output_tokens = 0
+    if isinstance(usage, dict):
+        input_tokens = int(usage.get('input_tokens') or 0)
+        output_tokens = int(usage.get('output_tokens') or 0)
+    total_tokens = input_tokens + output_tokens
+
+    def _fmt_tokens(n: int) -> str:
+        if n >= 1_000_000:
+            return f'{n / 1_000_000:.1f}M'
+        if n >= 1_000:
+            return f'{n / 1_000:.1f}k'
+        return str(n)
+
     _logger.info(
         f'Claude task finished: subtype={subtype}, turns={num_turns}, '
-        f'duration={duration_ms}ms, cost=${cost:.4f}'
+        f'duration={duration_ms}ms, tokens={total_tokens}, cost=${cost:.4f}'
     )
     duration_s = (duration_ms or 0) / 1000.0
     summary_line = (
-        f'✓ Done in {duration_s:.1f}s · {num_turns} turns · ${cost:.4f}'
+        f'✓ Done in {duration_s:.1f}s · {num_turns} turns · '
+        f'{_fmt_tokens(total_tokens)} tokens '
+        f'(in {_fmt_tokens(input_tokens)} / out {_fmt_tokens(output_tokens)})'
     )
     if stop_reason:
         summary_line += f' · stop={stop_reason}'
