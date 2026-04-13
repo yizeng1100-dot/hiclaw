@@ -1,6 +1,16 @@
-// >>> CUSTOM: HiClaw — Performance report download <<<
+// >>> CUSTOM: HiClaw — Agent report download <<<
+// Platform-generic report download bar. Used to be hard-wired to the perf
+// agent's two html files; now it discovers reports dynamically from the
+// agent's workflow_phases so any new agent whose skill frontmatter declares
+// an `output` path ending in `.html` automatically gets a download button.
+//
+// The component name is kept as PerfReportDownload for backwards
+// compatibility with existing mount points, but it is no longer
+// perf-specific.
 import React from "react";
 import V1ConversationService from "#/api/conversation-service/v1-conversation-service.api";
+import { AgentService } from "#/api/custom-skill-service/agent-service.api";
+import { TaskService } from "#/api/custom-skill-service/task-service.api";
 import { downloadBlob } from "#/utils/utils";
 
 interface ReportFile {
@@ -9,34 +19,92 @@ interface ReportFile {
   filename: string;
 }
 
-// Paths are *relative* to the conversation's working_dir. The backend
-// `read_conversation_file` endpoint resolves relative paths against the
-// per-conv working_dir (see app_conversation_router.py), so each task's
-// reports are read from its own isolated directory rather than a shared
-// `/workspace/perf_analysis_output` that multiple tasks could clobber.
-const REPORT_FILES: ReportFile[] = [
-  {
-    label: "完整报告 (Full Report)",
-    path: "perf_analysis_output/full_report.html",
-    filename: "full_report.html",
-  },
-  {
-    label: "问题报告 (Issue Report)",
-    path: "perf_analysis_output/issue_report.html",
-    filename: "issue_report.html",
-  },
-];
+interface WorkflowPhase {
+  key?: string;
+  label?: string;
+  desc?: string;
+  file?: string | null;
+  output?: string | null;
+  optional?: boolean;
+}
+
+interface AgentReportDecl {
+  label?: string;
+  file?: string;
+}
+
+// Keep absolute `/workspace/...` paths as-is — readConversationFile
+// passes absolute paths straight through to the remote workspace, which
+// matches how phase outputs actually live in the sandbox (e.g.
+// /workspace/render_output/render_report.html). Relative paths get
+// resolved against /workspace/project/<convHex>/ which is NOT where
+// most skill outputs land, so stripping the prefix here would lead to
+// false negatives (probe 404s the file and the download button never
+// shows, even when the report exists).
+function normalizeReportPath(raw: string): string {
+  const p = raw.trim();
+  if (p.startsWith("/")) return p;
+  return p.replace(/^\.?\//, "");
+}
+
+function basename(p: string): string {
+  const idx = p.lastIndexOf("/");
+  return idx >= 0 ? p.slice(idx + 1) : p;
+}
+
+function collectReportFiles(
+  reports: AgentReportDecl[] | undefined,
+  phases: WorkflowPhase[],
+): ReportFile[] {
+  const seen = new Set<string>();
+  const out: ReportFile[] = [];
+
+  const pushIfNew = (path: string, label: string) => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    out.push({ label, path, filename: basename(path) });
+  };
+
+  // 1. Prefer the explicit `reports:` frontmatter list — one button
+  //    per entry, order preserved. This is the skill's declared
+  //    contract for downloadable deliverables.
+  if (reports && reports.length > 0) {
+    reports.forEach((r) => {
+      const raw = r.file;
+      if (!raw || typeof raw !== "string") return;
+      const path = normalizeReportPath(raw);
+      pushIfNew(path, r.label || basename(path));
+    });
+    if (out.length > 0) return out;
+  }
+
+  // 2. Fallback for skills that haven't declared `reports:` yet: scan
+  //    workflow_phases for any phase whose `output`/`file` ends in
+  //    `.html`. Gives every workflow-aware agent at least one button.
+  phases.forEach((phase) => {
+    const raw = phase.output ?? phase.file;
+    if (!raw || typeof raw !== "string") return;
+    if (!/\.html?$/i.test(raw)) return;
+    const path = normalizeReportPath(raw);
+    pushIfNew(path, phase.label ? `${phase.label}` : basename(path));
+  });
+  return out;
+}
 
 interface PerfReportDownloadProps {
   conversationId: string;
+  /** Agent id whose workflow_phases declare the reports. */
+  agentId?: string | null;
 }
 
 /**
- * Report download component — renders only when reports exist.
- * Used in chat box (after agent finishes) and task center/detail pages.
+ * Report download component — renders only when at least one `.html`
+ * output declared by the agent's workflow_phases actually exists in the
+ * conversation's working_dir.
  */
 export function PerfReportDownload({
   conversationId,
+  agentId,
 }: PerfReportDownloadProps) {
   const [availableReports, setAvailableReports] = React.useState<ReportFile[]>(
     [],
@@ -44,12 +112,69 @@ export function PerfReportDownload({
   const [downloading, setDownloading] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
-  // Check once on mount which reports exist
-  React.useEffect(() => {
-    let cancelled = false;
+  // Resolve the effective agent id: (1) prop from parent (2) sessionStorage
+  // (set by handleSelectAgent at launch) (3) reverse-lookup by convId via
+  // the task-by-conversation endpoint. Without an id we cannot know which
+  // reports to probe for, so the component renders nothing.
+  const [resolvedAgentId, setResolvedAgentId] = React.useState<string | null>(
+    () => agentId ?? sessionStorage.getItem("hiclaw_perf_agent_id"),
+  );
 
+  React.useEffect(() => {
+    setResolvedAgentId(
+      agentId ?? sessionStorage.getItem("hiclaw_perf_agent_id"),
+    );
+  }, [agentId, conversationId]);
+
+  React.useEffect(() => {
+    if (resolvedAgentId || !conversationId) return undefined;
+    let cancelled = false;
     (async () => {
-      const checks = REPORT_FILES.map(async (report) => {
+      const task = await TaskService.getByConversation(conversationId);
+      if (cancelled || !task?.agent_id) return;
+      setResolvedAgentId(task.agent_id);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedAgentId, conversationId]);
+
+  const effectiveAgentId = resolvedAgentId;
+
+  React.useEffect(() => {
+    if (!effectiveAgentId || !conversationId) {
+      setAvailableReports([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      // 1. Pull the agent's config_json. The backend overlays two
+      //    relevant fields from the linked workflow skill frontmatter:
+      //      - workflow_phases → phase progress
+      //      - reports         → downloadable artifacts (this component)
+      //    see agent_mgmt/router.get_agent + skill_mgmt/bridge.
+      let phases: WorkflowPhase[] = [];
+      let declaredReports: AgentReportDecl[] | undefined;
+      try {
+        const agent = await AgentService.getAgent(effectiveAgentId);
+        const cfg =
+          typeof agent.config_json === "string"
+            ? JSON.parse(agent.config_json || "{}")
+            : agent.config_json || {};
+        phases = cfg?.workflow_phases ?? [];
+        declaredReports = cfg?.reports;
+      } catch {
+        return;
+      }
+
+      const reports = collectReportFiles(declaredReports, phases);
+      if (reports.length === 0) return;
+
+      // 2. Probe the conversation's working_dir once per report. Reports
+      //    that don't exist yet (agent still running, or phase skipped)
+      //    just don't get a button.
+      const checks = reports.map(async (report) => {
         try {
           const content = await V1ConversationService.readConversationFile(
             conversationId,
@@ -61,14 +186,14 @@ export function PerfReportDownload({
         }
       });
       const results = await Promise.all(checks);
-      const found = results.filter((r): r is ReportFile => r !== null);
-      if (!cancelled) setAvailableReports(found);
+      if (cancelled) return;
+      setAvailableReports(results.filter((r): r is ReportFile => r !== null));
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [conversationId]);
+  }, [conversationId, effectiveAgentId]);
 
   const handleDownload = React.useCallback(
     async (report: ReportFile) => {
@@ -112,7 +237,7 @@ export function PerfReportDownload({
         </svg>
         {/* eslint-disable-next-line i18next/no-literal-string */}
         <span className="text-xs text-[#4ECDC4] font-medium">
-          性能分析报告已生成
+          分析报告已生成
         </span>
       </div>
 

@@ -1,8 +1,69 @@
 ---
 name: perf-analysis-workflow
 type: repo
-version: 3.2.0
+version: 3.3.0
 agent: CodeActAgent
+
+# Dynamic input form — renders via DynamicFormPanel on agent launch.
+# Same shape as render-performance-workflow, so adding a new agent is
+# purely a matter of writing one of these.
+input_form:
+  - key: trace_path
+    type: file
+    label: Trace 文件
+    placeholder: /workspace/trace.perfetto-trace
+    accept: .perfetto-trace,.pb,.pftrace,.html,.txt,.json,.systrace,.ftrace
+    required: true
+  - key: direction
+    type: select
+    label: 分析方向
+    default: full
+    options:
+      - label: 完整分析
+        value: full
+        desc: 9 阶段完整流水线
+      - label: 启动性能
+        value: startup
+        desc: 启动耗时分析
+      - label: CPU
+        value: cpu
+        desc: Running / 大小核 / 频率
+      - label: 调度
+        value: scheduling
+        desc: Runnable / 优先级
+      - label: IO
+        value: io
+        desc: IO / Non-IO 阻塞
+      - label: 内存
+        value: memory
+        desc: OOM / GC / 分配
+      - label: 渲染
+        value: rendering
+        desc: Jank / VSYNC
+  - key: extra
+    type: text
+    label: 补充说明
+    placeholder: 可选，关注的具体场景 / 进程 / 时间段...
+    required: false
+
+submit_message: |
+  Execute skill: perf-analysis-workflow (trigger: /perf-analyze). Follow the skill instructions to complete the task.
+
+  **Trace file path**: {{trace_path}}
+  **Analysis direction**: {{direction}}
+  {{extra}}
+
+  Please execute the performance analysis workflow:
+  1. Initialize trace_processor with the trace file
+  2. Find foreground process
+  3. Determine launch time range
+  4. Analyze main thread state distribution
+  5. Run branch analysis based on state results
+  6. Analyze memory
+  7. Analyze rendering
+  8. Cleanup trace_processor
+  9. Generate HTML report (full_report.html + issue_report.html)
+
 phases:
   - key: init
     label: 初始化
@@ -45,6 +106,16 @@ phases:
     label: 生成报告
     desc: HTML 报告（含截图）
     output: perf_analysis_output/full_report.html
+
+# Downloadable deliverables — listed separately from phases so a single
+# `generate_report.py` step can publish multiple html artifacts without
+# bloating the progress bar. The download component renders one button
+# per entry (in order).
+reports:
+  - label: 完整报告
+    file: perf_analysis_output/full_report.html
+  - label: 问题报告
+    file: perf_analysis_output/issue_report.html
 ---
 
 # 性能分析工作流

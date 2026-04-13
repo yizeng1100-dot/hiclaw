@@ -16,10 +16,7 @@ import { isTaskPolling } from "#/utils/utils";
 import type { AgentInfo } from "#/api/custom-skill-service/agent-service.api";
 import { TaskService } from "#/api/custom-skill-service/task-service.api";
 import { useCreateConversation } from "#/hooks/mutation/use-create-conversation";
-import { PerfAnalysisInlinePanel } from "#/components/features/custom/skill-management/perf-analysis-inline-panel";
 import { PerfReportDownload } from "#/components/features/custom/skill-management/perf-report-download";
-import { ConvPhaseProgress } from "#/components/features/custom/skill-management/conv-phase-progress";
-import { useConversationId } from "#/hooks/use-conversation-id";
 // >>> END CUSTOM <<<
 
 interface InteractiveChatBoxProps {
@@ -45,19 +42,16 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
   const { curAgentState } = useAgentState();
   const { data: conversation } = useActiveConversation();
 
-  const { conversationId: currentConvId } = useConversationId();
-
   // >>> CUSTOM: HiClaw — Agent selection <<<
   const [activeAgentName, setActiveAgentName] = React.useState<string | null>(
     null,
   );
   const [agentStarting, setAgentStarting] = React.useState(false);
-  const [showPerfPanel, setShowPerfPanel] = React.useState(false);
-  const [perfAgentId, _setPerfAgentId] = React.useState<string | null>(
-    () => sessionStorage.getItem("hiclaw_perf_agent_id"),
+  const [perfAgentId, setPerfAgentIdState] = React.useState<string | null>(() =>
+    sessionStorage.getItem("hiclaw_perf_agent_id"),
   );
   const setPerfAgentId = (id: string | null) => {
-    _setPerfAgentId(id);
+    setPerfAgentIdState(id);
     if (id) sessionStorage.setItem("hiclaw_perf_agent_id", id);
     else sessionStorage.removeItem("hiclaw_perf_agent_id");
   };
@@ -65,23 +59,15 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
 
   const handleSelectAgent = React.useCallback(
     async (agent: AgentInfo) => {
-      // Check agent type from config_json
-      let agentType: string | null = null;
-      try {
-        agentType = JSON.parse(agent.config_json || "{}").agent_type;
-      } catch {
-        /* ignore */
-      }
-
-      // Perf-analysis agent: show inline panel in chat box
-      if (agentType === "perf-analysis") {
-        setPerfAgentId(agent.id);
-        setShowPerfPanel(true);
-        setShouldHideSuggestions(true);
-        return;
-      }
-
-      // Generic agent: create task + conversation + navigate
+      // Every agent goes through the same create-task + create-conv +
+      // navigate flow. Perf-analysis used to have a special in-place
+      // branch rendering PerfAnalysisInlinePanel inside the current
+      // conv's chat box; it's been retired in favour of the skill-
+      // driven DynamicFormPanel (perf-analysis-workflow.md now declares
+      // its own input_form + submit_message frontmatter). This removes
+      // ~200 lines of hardcoded UI and means new agents need zero
+      // frontend code — just a skill .md.
+      setPerfAgentId(agent.id);
       setActiveAgentName(agent.name);
       setAgentStarting(true);
       try {
@@ -97,6 +83,7 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
         ).catch(() => {});
         navigate(`/conversations/${convData.conversation_id}`);
       } catch (e) {
+        // eslint-disable-next-line no-console
         console.error("Failed to start agent:", e);
         displayErrorToast("Failed to start agent");
       } finally {
@@ -107,43 +94,6 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
     [navigate, createConversation, setShouldHideSuggestions],
   );
 
-  // Track the HiClaw task ID for status updates
-  const [hicTaskId, setHicTaskId] = React.useState<string | null>(null);
-
-  // Perf panel: submit analysis in current conversation
-  const handlePerfPanelSubmit = React.useCallback(
-    async (_tracePath: string, message: string) => {
-      // Track HiClaw task and link to conversation
-      if (perfAgentId) {
-        try {
-          const taskResult = await TaskService.createTask({ agent_id: perfAgentId });
-          setHicTaskId(taskResult.task_id);
-          // Link task to current conversation
-          if (currentConvId && !currentConvId.startsWith("task-")) {
-            TaskService.startTask(taskResult.task_id, currentConvId).catch(() => {});
-          }
-        } catch { /* non-blocking */ }
-      }
-      // Submit message to current conversation
-      onSubmit(message, [], []);
-      setShowPerfPanel(false);
-      setPerfAgentId(null);
-      setShouldHideSuggestions(false);
-    },
-    [perfAgentId, onSubmit, setShouldHideSuggestions, currentConvId],
-  );
-
-  // Auto-update task status when agent finishes
-  React.useEffect(() => {
-    if (!hicTaskId) return;
-    if (curAgentState === AgentState.STOPPED || curAgentState === AgentState.FINISHED) {
-      TaskService.updateTask(hicTaskId, { status: "completed" }).catch(() => {});
-      setHicTaskId(null);
-    } else if (curAgentState === AgentState.ERROR) {
-      TaskService.updateTask(hicTaskId, { status: "failed" }).catch(() => {});
-      setHicTaskId(null);
-    }
-  }, [curAgentState, hicTaskId]);
   // >>> END CUSTOM <<<
 
   // Poll sub-conversation task to check if it's loading
@@ -268,25 +218,19 @@ export function InteractiveChatBox({ onSubmit }: InteractiveChatBoxProps) {
     <div data-testid="interactive-chat-box">
       {/* >>> CUSTOM: HiClaw — Phase progress moved to right-side tab (phase-progress-tab.tsx) <<< */}
       {/* >>> END CUSTOM <<< */}
-      {/* >>> CUSTOM: HiClaw — Performance report download (only after agent finishes) <<< */}
-      {(curAgentState === AgentState.STOPPED || curAgentState === AgentState.FINISHED) &&
+      {/* >>> CUSTOM: HiClaw — Agent report download (only after agent finishes) <<< */}
+      {(curAgentState === AgentState.STOPPED ||
+        curAgentState === AgentState.FINISHED) &&
         conversation?.conversation_id && (
-        <PerfReportDownload conversationId={conversation.conversation_id} />
-      )}
+          <PerfReportDownload
+            conversationId={conversation.conversation_id}
+            agentId={perfAgentId}
+          />
+        )}
       {/* >>> END CUSTOM <<< */}
-      {/* >>> CUSTOM: HiClaw — Perf analysis inline panel <<< */}
-      {showPerfPanel && (
-        <PerfAnalysisInlinePanel
-          onSubmit={handlePerfPanelSubmit}
-          onDismiss={() => {
-            setShowPerfPanel(false);
-            setPerfAgentId(null);
-            setShouldHideSuggestions(false);
-          }}
-          disabled={agentStarting}
-        />
-      )}
-      {/* >>> END CUSTOM <<< */}
+      {/* HiClaw: perf analysis inline panel retired — perf agent now
+          uses the shared DynamicFormPanel driven by
+          perf-analysis-workflow.md's input_form frontmatter. */}
       {/* >>> CUSTOM: HiClaw — Agent starting indicator <<< */}
       {activeAgentName && (
         <div className="mb-2 px-3 py-1.5 bg-[#4ECDC4]/10 border border-[#4ECDC4]/30 rounded-lg">

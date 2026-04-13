@@ -8,16 +8,17 @@ import {
 import { TaskService } from "#/api/custom-skill-service/task-service.api";
 import { useCreateConversation } from "#/hooks/mutation/use-create-conversation";
 import { cn } from "#/utils/utils";
-import { PerfAnalysisInlinePanel } from "../skill-management/perf-analysis-inline-panel";
-// KernelDiffInlinePanel only available on merge branch
-// import { KernelDiffInlinePanel } from "../skill-management/kernel-diff-inline-panel";
+import {
+  DynamicFormPanel,
+  type InputFormConfig,
+} from "../skill-management/dynamic-form-panel";
 
-function getAgentType(agent: AgentDetail | null): string | null {
-  if (!agent?.config_json) return null;
+function getAgentConfig(agent: AgentDetail | null): Record<string, unknown> {
+  if (!agent?.config_json) return {};
   try {
-    return JSON.parse(agent.config_json).agent_type || null;
+    return JSON.parse(agent.config_json) as Record<string, unknown>;
   } catch {
-    return null;
+    return {};
   }
 }
 
@@ -28,7 +29,7 @@ export function AgentDetailPage() {
   const [agent, setAgent] = React.useState<AgentDetail | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [starting, setStarting] = React.useState(false);
-  const [showPerfPanel, setShowPerfPanel] = React.useState(false);
+  const [showPanel, setShowPanel] = React.useState(false);
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -40,8 +41,13 @@ export function AgentDetailPage() {
       .finally(() => setLoading(false));
   }, [agentId]);
 
-  const agentType = getAgentType(agent);
-  const hasPanel = agentType === "perf-analysis" || agentType === "kernel-diff";
+  const config = getAgentConfig(agent);
+  const inputForm = config.input_form as InputFormConfig | undefined;
+  // Panel is purely skill-driven: if the skill declared an input_form in
+  // its frontmatter, show DynamicFormPanel; otherwise the "Start Agent"
+  // button launches the agent with the raw system prompt. Perf agent's
+  // legacy inline panel has been retired in favour of this path.
+  const hasPanel = !!inputForm;
 
   // Helper: create HiClaw task + conversation, then navigate
   const startAgentConversation = React.useCallback(
@@ -50,19 +56,12 @@ export function AgentDetailPage() {
       setStarting(true);
       setErrorMsg(null);
       try {
-        // 1. Create HiClaw task record
         const taskResult = await TaskService.createTask({ agent_id: agentId });
-
-        // 2. Create conversation via the standard hook (respects v1_enabled)
         const convData = await createConversation({ query: message });
-
-        // 3. Link HiClaw task to conversation
         await TaskService.startTask(
           taskResult.task_id,
           convData.conversation_id,
         ).catch(() => {});
-
-        // 4. Navigate to conversation (useTaskPolling handles the rest)
         navigate(`/conversations/${convData.conversation_id}`);
       } catch (e: unknown) {
         const err = e as { message?: string };
@@ -74,15 +73,13 @@ export function AgentDetailPage() {
     [agentId, starting, navigate, createConversation],
   );
 
-  // Perf agent flow: panel submit → create conversation with analysis message
-  const handlePerfSubmit = React.useCallback(
-    async (_tracePath: string, message: string) => {
+  const handleFormSubmit = React.useCallback(
+    async (message: string) => {
       await startAgentConversation(message);
     },
     [startAgentConversation],
   );
 
-  // Generic agent flow: create conversation with system prompt
   const handleStartAgent = async () => {
     if (!agent) return;
     const prompt = agent.system_prompt
@@ -160,7 +157,6 @@ export function AgentDetailPage() {
                   onClick={async () => {
                     try {
                       await AgentService.syncAgent(agent.id);
-                      // Reload agent
                       AgentService.getAgent(agent.id).then(setAgent);
                     } catch (e) {
                       console.error("Sync failed:", e);
@@ -178,16 +174,14 @@ export function AgentDetailPage() {
           {hasPanel ? (
             <button
               type="button"
-              onClick={() => setShowPerfPanel((v) => !v)}
+              onClick={() => setShowPanel((v) => !v)}
               disabled={starting || !agent.is_enabled}
               className={cn(
                 "px-6 py-2.5 disabled:opacity-50 rounded-lg text-sm font-medium text-black transition",
-                agentType === "kernel-diff"
-                  ? "bg-[#F97316] hover:bg-[#EA690E]"
-                  : "bg-[#4ECDC4] hover:bg-[#3dbdb5]",
+                "bg-[#4ECDC4] hover:bg-[#3dbdb5]",
               )}
             >
-              {starting ? "分析中..." : showPerfPanel ? "收起面板" : "开始分析"}
+              {starting ? "分析中..." : showPanel ? "收起面板" : "开始分析"}
             </button>
           ) : (
             <button
@@ -209,16 +203,15 @@ export function AgentDetailPage() {
         </div>
       )}
 
-      {/* Analysis panel */}
-      {hasPanel && showPerfPanel && (
+      {/* Analysis panel — skill-driven DynamicFormPanel */}
+      {hasPanel && showPanel && inputForm && (
         <div className="mb-6">
-          {agentType === "perf-analysis" ? (
-            <PerfAnalysisInlinePanel
-              onSubmit={handlePerfSubmit}
-              onDismiss={() => setShowPerfPanel(false)}
-              disabled={starting}
-            />
-          ) : null}
+          <DynamicFormPanel
+            config={inputForm}
+            onSubmit={handleFormSubmit}
+            onDismiss={() => setShowPanel(false)}
+            disabled={starting}
+          />
         </div>
       )}
 

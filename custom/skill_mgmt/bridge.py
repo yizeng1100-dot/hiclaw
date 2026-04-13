@@ -223,7 +223,8 @@ def get_reports(skill_name: str) -> list[dict] | None:
                             continue
                         normalized.append(
                             {
-                                'label': r.get('label') or str(file_path).rsplit('/', 1)[-1],
+                                'label': r.get('label')
+                                or str(file_path).rsplit('/', 1)[-1],
                                 'file': file_path,
                             }
                         )
