@@ -830,15 +830,17 @@ async def get_conversation_skills(
             project_dir = get_project_dir(
                 ctx.sandbox_spec.working_dir, ctx.conversation.selected_repository
             )
-            assert ctx.sandbox is not None, (
-                'sandbox must be set when reaching skill loader'
-            )
+            # >>> CUSTOM: HiClaw — remote worker conversations have no local
+            # SandboxInfo (ctx.sandbox is None); load_and_merge_all_skills now
+            # accepts sandbox: SandboxInfo | None and just skips the sandbox
+            # skill source in that case. Do NOT assert here. <<<
             all_skills = await app_conversation_service.load_and_merge_all_skills(
                 ctx.sandbox,
                 ctx.conversation.selected_repository,
                 project_dir,
                 ctx.agent_server_url,
             )
+            # >>> END CUSTOM <<<
 
         logger.info(
             f'Loaded {len(all_skills)} skills for conversation {conversation_id}: '
