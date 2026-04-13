@@ -84,6 +84,7 @@ async def list_tasks(
     created_by: str | None = Query(None),
     status: str | None = Query(None),
     agent_id: str | None = Query(None),
+    conversation_id: str | None = Query(None),
     search: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -95,6 +96,7 @@ async def list_tasks(
             created_by=created_by,
             status=status,
             agent_id=agent_id,
+            conversation_id=conversation_id,
             search=search,
             limit=limit,
             offset=offset,
@@ -144,6 +146,27 @@ async def create_task(data: TaskCreate):
                 'default_llm_model': agent.default_llm_model,
             },
         }
+    finally:
+        await db.close()
+
+
+@router.get('/by-conversation/{conversation_id}')
+async def get_task_by_conversation(conversation_id: str):
+    """Reverse-lookup a task by the real app_conversation_id.
+
+    Tasks persist ``conversation_id`` as ``task-<startTaskId>`` and not
+    the URL-visible hex app_conversation_id, so the frontend cannot just
+    filter ``/tasks?conversation_id=...`` to find the owning task from
+    the chat page's conv id. This endpoint joins through the start-task
+    table to resolve it.
+    """
+    db = await get_agent_db()
+    try:
+        svc = TaskService(db)
+        task = await svc.get_task_by_app_conversation(conversation_id)
+        if not task:
+            raise HTTPException(status_code=404, detail='Task not found')
+        return task.model_dump()
     finally:
         await db.close()
 

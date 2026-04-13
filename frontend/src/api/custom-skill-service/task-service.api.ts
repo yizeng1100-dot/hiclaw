@@ -34,6 +34,7 @@ export class TaskService {
   static async listTasks(params?: {
     status?: string;
     agent_id?: string;
+    conversation_id?: string;
     search?: string;
     limit?: number;
     offset?: number;
@@ -45,6 +46,25 @@ export class TaskService {
   static async getTask(taskId: string): Promise<TaskInfo> {
     const resp = await openHands.get(`/api/v1/tasks/${taskId}`);
     return resp.data;
+  }
+
+  /**
+   * Reverse-lookup a task by the real app_conversation_id. Needed
+   * because task.conversation_id is stored as `task-<startTaskId>`,
+   * not the hex conv id visible in the chat URL. Returns null if no
+   * task is linked.
+   */
+  static async getByConversation(
+    conversationId: string,
+  ): Promise<TaskInfo | null> {
+    try {
+      const resp = await openHands.get<TaskInfo>(
+        `/api/v1/tasks/by-conversation/${conversationId}`,
+      );
+      return resp.data;
+    } catch {
+      return null;
+    }
   }
 
   static async createTask(data: {

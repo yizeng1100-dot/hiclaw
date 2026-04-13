@@ -5,8 +5,8 @@ import {
   TaskService,
   type TaskInfo,
 } from "#/api/custom-skill-service/task-service.api";
-import { AgentService } from "#/api/custom-skill-service/agent-service.api";
 import V1ConversationService from "#/api/conversation-service/v1-conversation-service.api";
+import type { TaskListItem } from "#/utils/parse-task-list";
 import { cn } from "#/utils/utils";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -25,53 +25,22 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "已取消",
 };
 
-interface WorkflowPhase {
-  key: string;
-  label: string;
-  desc: string;
-  file: string | null;
-  // Phase that is allowed to be skipped (e.g. screenshot when chromium isn't
-  // installed). Skipped optional phases don't poison later phases as `pending`
-  // and don't get rendered as `error` in failed-task state.
-  optional?: boolean;
-}
-
-// Fallback phases if agent has no workflow_phases in config
-const DEFAULT_PHASES: WorkflowPhase[] = [
-  { key: "running", label: "执行中", desc: "任务运行中", file: null },
-];
-
 export function TaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
   const [task, setTask] = React.useState<TaskInfo | null>(null);
   const [loading, setLoading] = React.useState(true);
-  const [phases, setPhases] = React.useState<WorkflowPhase[]>(DEFAULT_PHASES);
-  const [phasesDone, setPhasesDone] = React.useState<boolean[]>([false]);
-  const [conversationExecutionStatus, setConversationExecutionStatus] =
-    React.useState<string | null>(null);
+  // Execution progress comes straight from the LLM-emitted
+  // TaskTrackerObservation events (same source as the right-panel
+  // TaskListTab), so this page and the live task list always agree.
+  const [taskList, setTaskList] = React.useState<TaskListItem[]>([]);
 
-  // Load task and agent workflow phases
+  // Load task record
   React.useEffect(() => {
     if (!taskId) return;
     setLoading(true);
     TaskService.getTask(taskId)
-      .then(async (t) => {
-        setTask(t);
-        // Load workflow phases from agent config
-        if (t.agent_id) {
-          try {
-            const agent = await AgentService.getAgent(t.agent_id);
-            const config = JSON.parse(agent.config_json || "{}");
-            if (config.workflow_phases?.length) {
-              setPhases(config.workflow_phases);
-              setPhasesDone(config.workflow_phases.map(() => false));
-            }
-          } catch {
-            /* use default phases */
-          }
-        }
-      })
+      .then(setTask)
       .catch((e) => console.error("Failed to load task:", e))
       .finally(() => setLoading(false));
   }, [taskId]);
@@ -107,6 +76,8 @@ export function TaskDetailPage() {
     }
   }, [task?.conversation_id]);
 
+  // Sync conversation terminal state back onto the task record so the
+  // status badge matches reality even when nothing else refreshes it.
   React.useEffect(() => {
     if (!resolvedConvId || !taskId || task?.status !== "running") return;
 
@@ -117,8 +88,6 @@ export function TaskDetailPage() {
         ]);
         const conv = convs?.[0];
         const execStatus = conv?.execution_status?.toLowerCase() ?? null;
-        setConversationExecutionStatus(execStatus);
-
         if (execStatus === "finished" || execStatus === "stopped") {
           await TaskService.updateTask(taskId, { status: "completed" });
           const updated = await TaskService.getTask(taskId);
@@ -134,44 +103,69 @@ export function TaskDetailPage() {
     return () => clearInterval(interval);
   }, [resolvedConvId, taskId, task?.status]);
 
+  // Pull the conversation's TASKS.json (written by the task_tracker
+  // agent action) and render it as the execution plan. This is the same
+  // data the live TaskListTab in the chat panel displays, just read from
+  // the per-conversation sandbox dir on disk rather than the in-memory
+  // event store (which is only populated for the conversation the user
+  // is actively connected to via WebSocket).
   React.useEffect(() => {
-    // Poll phase files whenever we have a conv id and the task is in a state
-    // where progress is meaningful (running or already terminal). Each V1
-    // conversation has its own working_dir keyed by conversation_id, so stale
-    // files from other tasks cannot leak in — no need to gate on terminal
-    // execution_status like the previous version did.
     if (
       !resolvedConvId ||
       task?.status === "pending" ||
-      task?.status === "cancelled" ||
-      phases.length === 0
+      task?.status === "cancelled"
     )
       return;
 
-    const checkFiles = async () => {
-      const results = await Promise.all(
-        phases.map(async (phase) => {
-          if (!phase.file) return false;
-          try {
-            const content = await V1ConversationService.readConversationFile(
-              resolvedConvId,
-              phase.file,
-            );
-            return !!(content && content.length > 0);
-          } catch {
-            return false;
-          }
-        }),
-      );
-      // For phases without file (like cleanup): mark done if next phase is done
-      for (let i = 0; i < results.length - 1; i++) {
-        if (!phases[i].file && results[i + 1]) results[i] = true;
+    // Absolute path: per_conv_working_dir is /workspace/project/<hex>
+    // from the agent-server's perspective but TASKS.json is persisted at
+    // /workspace/conversations/<hex>/TASKS.json (the sandbox-data mount).
+    // readConversationFile passes absolute paths through unchanged, so
+    // we hit the real file directly.
+    const tasksPath = `/workspace/conversations/${resolvedConvId}/TASKS.json`;
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const raw = await V1ConversationService.readConversationFile(
+          resolvedConvId,
+          tasksPath,
+        );
+        if (cancelled || !raw) return;
+        const arr = JSON.parse(raw) as Array<{
+          title?: string;
+          notes?: string;
+          status?: string;
+        }>;
+        if (!Array.isArray(arr)) return;
+        const normalized: TaskListItem[] = arr.map((t, i) => {
+          const status = t.status as TaskListItem["status"] | undefined;
+          return {
+            id: String(i + 1),
+            title: t.title || `Task ${i + 1}`,
+            status:
+              status === "done" || status === "in_progress" ? status : "todo",
+            notes: t.notes || undefined,
+          };
+        });
+        setTaskList(normalized);
+      } catch {
+        /* parse/read errors leave the list empty — rendered as "no plan" */
       }
-      setPhasesDone(results);
     };
 
-    checkFiles();
-  }, [resolvedConvId, task?.status, phases, conversationExecutionStatus]);
+    refresh();
+    if (task?.status === "running") {
+      const interval = setInterval(refresh, 5000);
+      return () => {
+        cancelled = true;
+        clearInterval(interval);
+      };
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedConvId, task?.status]);
 
   const handleCancel = async () => {
     if (!taskId) return;
@@ -216,34 +210,6 @@ export function TaskDetailPage() {
             1000,
         )
       : null;
-
-  // Determine phase status from real file checks
-  const getPhaseStatus = (index: number) => {
-    if (task.status === "completed") return "done";
-    if (task.status === "failed") {
-      // All checked phases are done; first non-optional unchecked is error.
-      // Optional phases (e.g. screenshot when chromium isn't installed) are
-      // legitimately allowed to stay unchecked, so we skip them when looking
-      // for the first real failure, and render them as `skipped` rather than
-      // poisoning later phases with `pending`.
-      if (phasesDone[index]) return "done";
-      if (phases[index]?.optional) return "skipped";
-      const firstUnchecked = phasesDone.findIndex(
-        (d, i) => !d && !phases[i]?.optional,
-      );
-      return index === firstUnchecked ? "error" : "pending";
-    }
-    if (phasesDone[index]) return "done";
-    // First unchecked (non-optional) phase after last done = active
-    const lastDoneIdx = phasesDone.lastIndexOf(true);
-    if (
-      task.status === "running" &&
-      index === lastDoneIdx + 1 &&
-      !phases[index]?.optional
-    )
-      return "active";
-    return "pending";
-  };
 
   return (
     <div className="h-full flex flex-col p-6 text-white overflow-auto custom-scrollbar">
@@ -367,125 +333,96 @@ export function TaskDetailPage() {
           )}
         </div>
 
-        {/* Right: Execution Flow */}
+        {/* Right: Execution Flow — reuses the same task_tracking data
+            source as the live TaskListTab, so the two views are always
+            in lock-step. */}
         <div className="lg:col-span-2">
           <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
             <h3 className="text-sm font-semibold text-gray-300 mb-4">
               执行流程
             </h3>
 
-            {/* Flow diagram */}
-            <div className="flex flex-col gap-1">
-              {phases.map((phase, i) => {
-                const status = getPhaseStatus(i);
-                return (
-                  <div key={phase.key} className="flex items-center gap-3">
-                    {/* Connector line + Node */}
-                    <div className="flex flex-col items-center w-8">
+            {taskList.length === 0 ? (
+              <p className="text-xs text-gray-500">
+                {task.status === "running"
+                  ? "等待 Agent 生成执行计划..."
+                  : "本次任务未生成执行计划"}
+              </p>
+            ) : (
+              <div className="flex flex-col">
+                {taskList.map((item, i) => (
+                  <div key={item.id} className="flex px-1">
+                    {/* Connector line + node — mirrors task-list-tab.tsx */}
+                    <div className="flex flex-col items-center mr-2 w-5 shrink-0">
                       {i > 0 && (
                         <div
                           className={cn(
-                            "w-0.5 h-3",
-                            status === "done"
+                            "w-0.5 h-2",
+                            item.status === "done"
                               ? "bg-green-500"
-                              : status === "active"
+                              : item.status === "in_progress"
                                 ? "bg-blue-500"
-                                : status === "error"
-                                  ? "bg-red-500"
-                                  : status === "skipped"
-                                    ? "bg-amber-700/60"
-                                    : "bg-gray-700",
+                                : "bg-gray-700",
                           )}
                         />
                       )}
                       <div
                         className={cn(
-                          "w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 shrink-0",
-                          status === "done"
+                          "w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border-2 shrink-0",
+                          item.status === "done"
                             ? "bg-green-900/50 border-green-500 text-green-400"
-                            : status === "active"
+                            : item.status === "in_progress"
                               ? "bg-blue-900/50 border-blue-500 text-blue-400 animate-pulse"
-                              : status === "error"
-                                ? "bg-red-900/50 border-red-500 text-red-400"
-                                : status === "skipped"
-                                  ? "bg-amber-900/30 border-amber-700 text-amber-500"
-                                  : "bg-gray-800 border-gray-600 text-gray-500",
+                              : "bg-gray-800 border-gray-600 text-gray-500",
                         )}
                       >
-                        {status === "done"
+                        {item.status === "done"
                           ? "✓"
-                          : status === "error"
-                            ? "✕"
-                            : status === "active"
-                              ? "●"
-                              : status === "skipped"
-                                ? "⊘"
-                                : i + 1}
+                          : item.status === "in_progress"
+                            ? "●"
+                            : i + 1}
                       </div>
-                      {i < phases.length - 1 && (
+                      {i < taskList.length - 1 && (
                         <div
                           className={cn(
-                            "w-0.5 h-3",
-                            status === "done"
+                            "w-0.5 h-2",
+                            item.status === "done"
                               ? "bg-green-500"
-                              : status === "skipped"
-                                ? "bg-amber-700/60"
-                                : "bg-gray-700",
+                              : "bg-gray-700",
                           )}
                         />
                       )}
                     </div>
 
-                    {/* Label */}
-                    <div className="flex-1 py-1">
-                      <p
-                        className={cn(
-                          "text-sm font-medium",
-                          status === "done"
-                            ? "text-green-400"
-                            : status === "active"
-                              ? "text-blue-400"
-                              : status === "error"
-                                ? "text-red-400"
-                                : status === "skipped"
-                                  ? "text-amber-500"
-                                  : "text-gray-500",
-                        )}
-                      >
-                        {phase.label}
-                      </p>
-                      <p className="text-xs text-gray-600">{phase.desc}</p>
-                    </div>
-
-                    {/* Status indicator */}
-                    <span
+                    <div
                       className={cn(
-                        "text-xs px-2 py-0.5 rounded",
-                        status === "done"
-                          ? "bg-green-900/30 text-green-500"
-                          : status === "active"
-                            ? "bg-blue-900/30 text-blue-400"
-                            : status === "error"
-                              ? "bg-red-900/30 text-red-400"
-                              : status === "skipped"
-                                ? "bg-amber-900/30 text-amber-500"
-                                : "bg-gray-800 text-gray-600",
+                        "flex-1 py-1",
+                        item.status === "in_progress" &&
+                          "bg-blue-900/20 rounded px-2 -mx-1",
                       )}
                     >
-                      {status === "done"
-                        ? "完成"
-                        : status === "active"
-                          ? "执行中"
-                          : status === "error"
-                            ? "失败"
-                            : status === "skipped"
-                              ? "跳过"
-                              : "等待"}
-                    </span>
+                      <p
+                        className={cn(
+                          "text-sm font-medium leading-snug",
+                          item.status === "done"
+                            ? "text-green-400"
+                            : item.status === "in_progress"
+                              ? "text-blue-400"
+                              : "text-gray-400",
+                        )}
+                      >
+                        {item.title}
+                      </p>
+                      {item.notes && (
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {item.notes}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Real-time status hint */}
@@ -495,8 +432,8 @@ export function TaskDetailPage() {
               <div>
                 <p className="text-sm text-blue-400">任务正在执行中</p>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  每 10
-                  秒自动检测阶段进度。点击&ldquo;查看对话&rdquo;可查看实时输出。
+                  每 5
+                  秒同步对话事件。点击&ldquo;查看对话&rdquo;可查看实时输出。
                 </p>
               </div>
             </div>
