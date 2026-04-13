@@ -68,6 +68,14 @@ class ClaudeConversation:
         # >>> CUSTOM: HiClaw <<<
         self._llm_base_url = llm_base_url
         self._llm_model = llm_model
+        # Long-lived stats dict shared across all _async_run() invocations
+        # in this conversation. Carries cumulative token/cost, the
+        # tool_use_id → tool_name map, and one-shot flags like init_emitted
+        # (so the "Claude session ready" header only prints once per
+        # conversation, not once per user turn).
+        self._stats: dict[str, Any] = {}
+        if self._llm_model:
+            self._stats['model'] = self._llm_model
         # >>> END CUSTOM <<<
 
         # Create minimal ConversationState
@@ -428,12 +436,10 @@ class ClaudeConversation:
         client = ClaudeSDKClient(options=options)
         self._client = client
 
-        # >>> CUSTOM: HiClaw — running token/cost stats for the bridge to emit
-        # ConversationStateUpdateEvent(key='stats', ...) so the frontend's
-        # ContextUsageIndicator works in Claude mode. <<<
-        _stats: dict[str, Any] = {}
-        if self._llm_model:
-            _stats['model'] = self._llm_model
+        # >>> CUSTOM: HiClaw — use the conversation-wide stats dict (built in
+        # __init__) so cumulative token/cost AND one-shot flags like
+        # init_emitted survive across user turns. <<<
+        _stats = self._stats
         # >>> END CUSTOM <<<
 
         try:
