@@ -29,7 +29,7 @@ import urllib.request
 # ---------------------------------------------------------------------------
 # Dependency spec
 # ---------------------------------------------------------------------------
-PYTHON_PACKAGES = ["requests", "playwright"]
+PYTHON_PACKAGES = ["requests", "playwright", "perfetto"]
 
 TRACE_PROCESSOR_URL = "https://get.perfetto.dev/trace_processor"
 TRACE_PROCESSOR_PREBUILT = os.path.expanduser(

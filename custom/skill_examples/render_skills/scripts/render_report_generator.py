@@ -1,58 +1,20 @@
 #!/usr/bin/env python3
-"""Generate HTML render performance report with top-N issues and Framework root cause analysis.
+"""Phase 3: Generate HTML report matching v3fix style.
 
-V2: Only shows top 3-5 most important issues with:
-- Per-issue Perfetto screenshots
-- Android Framework source-level root cause analysis
-- Optimization suggestions grounded in framework internals
+Dark theme, framework analysis with call chains, source code refs,
+trace diagnosis guides, root causes, and optimization suggestions.
 """
-import argparse, base64, json, os, sys
-from pathlib import Path
+import argparse
+import base64
+import json
 from datetime import datetime
+from pathlib import Path
 
-OUTPUT_DIR = "/workspace/render_output"
+# ─── Framework knowledge base per jank type ───────────────────────────
 
-SEVERITY_COLORS = {
-    "high": "#ff4444",
-    "medium": "#ffaa00",
-    "low": "#44aa44",
-    "normal": "#888888",
-    "info": "#4488ff",
-}
-
-SEVERITY_LABELS = {
-    "high": "严重",
-    "medium": "中等",
-    "low": "低",
-    "normal": "正常",
-}
-
-JANK_TYPE_CN = {
-    "AppDeadlineMissed": "应用侧超时",
-    "App Deadline Missed": "应用侧超时",
-    "BufferStuffing": "Buffer 塞满",
-    "Buffer Stuffing": "Buffer 塞满",
-    "SurfaceFlingerCpuDeadlineMissed": "SF 主线程 CPU 超时",
-    "SurfaceFlingerGpuDeadlineMissed": "SF GPU 合成超时",
-    "DisplayHal": "显示 HAL 延迟",
-    "Display HAL": "显示 HAL 延迟",
-    "PredictionError": "VSync 预测错误",
-    "Prediction Error": "VSync 预测错误",
-    "SurfaceFlingerScheduling": "SF 调度异常",
-    "SurfaceFlingerStuffing": "SF 侧 Stuffing",
-    "SurfaceFlinger Stuffing": "SF 侧 Stuffing",
-    "DroppedFrame": "帧被丢弃",
-    "Dropped Frame": "帧被丢弃",
-    "Unknown": "未知原因",
-    "Unknown Jank": "未知原因",
-}
-
-# ---------------------------------------------------------------------------
-# Android Framework source-level root cause analysis per jank type
-# ---------------------------------------------------------------------------
-FRAMEWORK_ANALYSIS = {
-    "app_deadline": {
-        "title": "App Deadline Missed - 应用侧帧超时根因分析",
+FRAMEWORK_KB = {
+    "App Deadline Missed": {
+        "cn_name": "应用侧超时",
         "call_chain": [
             "VSYNC-app 信号到达",
             "Choreographer.doFrame()",
@@ -60,31 +22,67 @@ FRAMEWORK_ANALYSIS = {
             "  → ANIMATION callbacks (属性动画/过渡动画)",
             "  → TRAVERSAL: ViewRootImpl.performTraversals()",
             "    → performMeasure() → performLayout() → performDraw()",
-            "  → ThreadedRenderer.draw() → syncFrameState",
-            "RenderThread: nSyncAndDrawFrame → issueDrawCommands",
-            "RenderThread: queueBuffer → 提交给 SurfaceFlinger",
+            "  → ThreadedRenderer.draw() → postAndWait 同步到 RenderThread",
+            "RenderThread: DrawFrames (HWUI 帧入口)",
+            "  → syncFrameState (从 UI 线程同步 RenderNode 树 + prepareTree)",
+            "  → renderFrameImpl (Skia SkCanvas 指令录制: drawBitmap/drawPath/drawText)",
+            "  → flush commands (Skia GrContext::flush → OpsTask::onExecute → GPU Op 批处理)",
+            "    → FillRectOp / TextureOp / PathStencilCoverOp (具体 Skia GPU Op)",
+            "  → eglSwapBuffersWithDamageKHR (EGL 提交帧 buffer → 等待 GPU fence)",
+            "  → Waiting for GPU (GPU completion fence — GPU 完成所有绘制)",
+            "  → queueBuffer → 提交帧到 BufferQueue → SurfaceFlinger 消费",
         ],
         "source_refs": [
-            ("Choreographer.java", "frameworks/base/core/java/android/view/Choreographer.java",
-             "doFrame() 接收 VSYNC-app 信号后依次分发 INPUT → ANIMATION → TRAVERSAL 回调。"
-             "帧起点 = doFrame 开始，终点 = max(GPU完成时间, queueBuffer时间)。"
-             "如果总时间超过 VSYNC 间隔 (16.6ms@60Hz / 11.1ms@90Hz)，标记为 JANK_APP_DEADLINE_MISSED。"),
-            ("ViewRootImpl.java", "frameworks/base/core/java/android/view/ViewRootImpl.java",
-             "performTraversals() 是帧渲染主入口，依次执行 measure → layout → draw。"
-             "Trace 中看 'performTraversals' slice 内部哪个阶段耗时最长即为瓶颈。"
-             "常见: measure/layout 慢 → View 层级问题; draw 慢 → Canvas 绘制过重。"),
-            ("ThreadedRenderer.java", "frameworks/base/core/java/android/view/ThreadedRenderer.java",
-             "draw() 将 DisplayList 同步到 RenderThread (syncFrameState)，"
-             "然后 RenderThread 执行 nSyncAndDrawFrame 提交 GPU 指令。"
-             "Trace 中看 'syncFrameState' 耗时 → 主线程和 RenderThread 的同步开销。"),
+            {
+                "file": "Choreographer.java",
+                "path": "frameworks/base/core/java/android/view/Choreographer.java",
+                "desc": "doFrame() 接收 VSYNC-app 信号后依次分发 INPUT → ANIMATION → TRAVERSAL 回调。帧起点 = doFrame 开始，终点 = max(GPU完成时间, queueBuffer时间)。如果总时间超过 VSYNC 间隔 (16.6ms@60Hz / 11.1ms@90Hz)，标记为 JANK_APP_DEADLINE_MISSED。",
+            },
+            {
+                "file": "ViewRootImpl.java",
+                "path": "frameworks/base/core/java/android/view/ViewRootImpl.java",
+                "desc": "performTraversals() 是帧渲染主入口，依次执行 measure → layout → draw。Trace 中看 'performTraversals' slice 内部哪个阶段耗时最长即为瓶颈。常见: measure/layout 慢 → View 层级问题; draw 慢 → Canvas 绘制过重。",
+            },
+            {
+                "file": "ThreadedRenderer.java",
+                "path": "frameworks/base/core/java/android/view/ThreadedRenderer.java",
+                "desc": "draw() 将 DisplayList 同步到 RenderThread (syncFrameState)，然后 RenderThread 执行 nSyncAndDrawFrame 提交 GPU 指令。Trace 中看 'syncFrameState' 耗时 → 主线程和 RenderThread 的同步开销。",
+            },
+            {
+                "file": "CanvasContext.cpp",
+                "path": "frameworks/base/libs/hwui/renderthread/CanvasContext.cpp",
+                "desc": "draw() 是 RenderThread 的帧入口，对应 Trace 中的 'DrawFrames' slice。"
+                        "内部: prepareTree → syncFrameState → renderFrameImpl → flush → eglSwapBuffers。"
+                        "瓶颈: renderFrameImpl 长 → Skia 绘制指令多; flush commands 长 → GPU Op 多; "
+                        "eglSwapBuffers 长 → GPU 渲染慢或 buffer 争用。",
+            },
+            {
+                "file": "EglManager.cpp",
+                "path": "frameworks/base/libs/hwui/renderthread/EglManager.cpp",
+                "desc": "eglSwapBuffersWithDamageKHR() 提交帧 buffer 到 BufferQueue。正常 < 2ms。"
+                        "如果 > 5ms → GPU 未完成渲染 (Waiting for GPU fence)，或 BufferQueue 满。"
+                        "后面紧跟的 'Waiting for GPU' slice = GPU 实际渲染时间。",
+            },
+            {
+                "file": "ShaderCache.cpp",
+                "path": "frameworks/base/libs/hwui/pipeline/skia/ShaderCache.cpp",
+                "desc": "Skia shader 首次编译触发 'shader_compile' + 'cache_miss'。每次 7-11ms，"
+                        "冷启动可能连续 9+ 次。优化: Vulkan pipeline cache 或 ShaderCache warmup。",
+            },
         ],
-        "trace_diagnosis": [
+        "trace_guide": [
             "在 Perfetto 中定位 Actual Timeline 的红色帧，查看对应的 `Choreographer#doFrame` slice",
             "展开 doFrame 内部: 检查 input/animation/traversal 各阶段耗时占比",
             "检查 `performTraversals` 内 measure vs layout vs draw 哪个最长",
             "检查 RenderThread 的 `DrawFrame` / `syncFrameState` 耗时",
             "检查主线程是否有 `Binder.transact`、`GC`、`JIT compiling` 等阻塞 slice",
             "检查线程状态: Running (绿色) vs Sleeping (蓝色) vs Runnable (白色) vs Uninterruptible (橙色)",
+            "**展开 RenderThread** 的 DrawFrames slice，检查子 slice 层级:",
+            "  syncFrameState → renderFrameImpl → flush commands → eglSwapBuffers → Waiting for GPU",
+            "如果 renderFrameImpl 长: Skia 绘制指令多 → 检查 Canvas 操作复杂度和 draw call 数量",
+            "如果 flush commands 长: GPU Op 执行慢 → 检查 OpsTask::onExecute 中哪个 Op 最耗时",
+            "如果 eglSwapBuffers + Waiting for GPU 长: GPU 渲染慢 → 检查 GPU 频率和 shader 复杂度",
+            "检查是否有 'shader_compile' / 'cache_miss' — 每次 7-11ms 的冷启动 jank 源",
         ],
         "root_causes": [
             "**Measure/Layout 过重**: View 层级深、RelativeLayout 嵌套、RecyclerView 多类型 item",
@@ -92,8 +90,12 @@ FRAMEWORK_ANALYSIS = {
             "**Input/Animation 回调耗时**: 触摸事件处理或动画计算占用了大部分帧时间",
             "**主线程 I/O 阻塞**: SharedPreferences.commit()、数据库查询、文件读写",
             "**主线程 Binder 调用**: 同步 IPC 等待远端进程响应 (ContentProvider/Service)",
-            "**GC / JIT**: 运行时垃圾回收暂停 (concurrent GC 影响小但 full GC 影响大)，JIT 编译暂停",
+            "**GC / JIT**: 运行时垃圾回收暂停，JIT 编译暂停",
             "**锁竞争**: synchronized/ReentrantLock 等待其他线程释放锁",
+            "**RenderThread GPU 管线瓶颈**: renderFrameImpl/flush commands/eglSwapBuffers 某段超长",
+            "**Skia 绘制指令过多**: 大量 drawBitmap/drawPath/drawText 或 saveLayer，表现为 Drawing slice 和 OpsTask 耗时长",
+            "**Shader 编译卡顿 (冷启动)**: 首次渲染特定 effect 时触发 shader_compile，每次 7-11ms",
+            "**GPU 频率低 / Thermal 降频**: flush commands 和 Waiting for GPU 同时变长",
         ],
         "optimizations": [
             "使用 `ConstraintLayout` 减少嵌套层级，避免 `RelativeLayout` 嵌套导致双 measure",
@@ -103,68 +105,37 @@ FRAMEWORK_ANALYSIS = {
             "使用 `ViewPropertyAnimator` 或 `RenderThread` 动画替代主线程动画",
             "减少 `Canvas.saveLayer()` 调用（触发 offscreen buffer 分配）",
             "使用 Systrace/Perfetto 标记 `Trace.beginSection()` 定位业务代码瓶颈",
+            "**展开 DrawFrames** slice 做 RenderThread 瓶颈定位: syncFrameState / renderFrameImpl / flush / eglSwap / Waiting for GPU",
+            "减少 Canvas.drawPath() 复杂度, 对静态 Path 使用缓存",
+            "使用 ShaderCache warmup 减少冷启动 shader_compile 卡顿",
         ],
     },
-    "buffer_stuffing": {
-        "title": "Buffer Stuffing - BufferQueue 塞满根因分析",
-        "call_chain": [
-            "App RenderThread: nSyncAndDrawFrame → issueDrawCommands",
-            "App RenderThread: Surface.queueBuffer() → 提交 buffer 给 BufferQueue",
-            "App RenderThread: Surface.dequeueBuffer() → 尝试获取下一个空 buffer",
-            "  → BufferQueueProducer.dequeueBuffer() 阻塞（所有 slot 被占）",
-            "SF: onMessageRefresh → acquireBuffer() → latchBuffer() → 消费 buffer",
-        ],
-        "source_refs": [
-            ("BufferQueueProducer.cpp", "frameworks/native/libs/gui/BufferQueueProducer.cpp",
-             "dequeueBuffer() 在 BufferQueue 所有 slot 被占用时阻塞。"
-             "Triple buffering (3 buffers) 下，如果 SF 合成慢导致前两帧还没消费，"
-             "第三帧 dequeue 就会阻塞 App 的 RenderThread。"
-             "Trace 中表现为 'dequeueBuffer' slice 持续 > 5ms。"),
-            ("BufferLayerConsumer.cpp", "frameworks/native/libs/gui/BufferLayerConsumer.cpp",
-             "SurfaceFlinger 在 onMessageRefresh 中调用 acquireBuffer 消费 buffer。"
-             "如果 SF 侧合成延迟（Display HAL 或 GPU 合成慢），消费速度跟不上生产速度。"),
-        ],
-        "trace_diagnosis": [
-            "检查 RenderThread 的 `dequeueBuffer` slice 耗时（正常 < 1ms，阻塞时 > 5ms）",
-            "检查 Actual Timeline: 帧是否标记为 'Late Present' 但 on_time_finish=true",
-            "检查 SF Actual Timeline 是否有对应的延迟（黄色帧表示 SF 导致的卡顿）",
-            "检查 SF 的 `onMessageRefresh` / `commit` / `composite` 总耗时",
-            "通常与 Display HAL / SF Stuffing 同时出现，需要联合分析",
-        ],
-        "root_causes": [
-            "**SurfaceFlinger 消费慢**: SF 合成时间长（层数多/GPU 合成回退），buffer 消费速度低于生产速度",
-            "**Display HAL 级联**: presentFence 延迟 → buffer 无法释放 → dequeueBuffer 阻塞",
-            "**App 连续快速渲染**: fling/动画场景下 App 渲染速度 > SF 消费速度",
-            "**GPU 合成回退**: HWC 无法处理某些 Layer，回退到 GPU 合成导致 SF 耗时增加",
-        ],
-        "optimizations": [
-            "优先排查 Display HAL / SF 侧延迟 — Buffer Stuffing 通常是下游问题的级联",
-            "减少 Layer 数量降低 SF 合成时间",
-            "检查 `dumpsys SurfaceFlinger --comp-type` 确认是否有 GPU 合成回退",
-            "如果 App 侧无 deadline missed，问题主要在 SF/Display 侧",
-        ],
-    },
-    "display_hal": {
-        "title": "Display HAL - 显示硬件延迟根因分析",
+    "Display HAL": {
+        "cn_name": "显示 HAL 延迟",
         "call_chain": [
             "SurfaceFlinger.onMessageRefresh()",
-            "  → commit() → composite() → presentDisplay()",
-            "HWComposer.presentAndGetReleaseFences()",
+            "  → prepareFrame() → HwcPresentOrValidateDisplay()",
+            "  → postFramebuffer() → HWComposer.presentAndGetReleaseFences()",
             "HWC HAL: presentDisplay() → 提交帧到显示控制器",
-            "Kernel: DRM/KMS → Display Controller → Panel",
-            "返回 presentFence → SF 在下一帧等待此 fence",
+            "  → [composer-servic] PerformCommit → HWDeviceDRM::Commit",
+            "    → HWDeviceDRM::AtomicCommit → DRMAtomicReq::Commit",
+            "Kernel: DRM/KMS → crtc_commit → Display Controller → Panel",
+            "返回 presentFence → SF 在下一帧 postComposition 中等待此 fence",
+            "[HWC release] waitForever → 释放上一帧 buffer",
         ],
         "source_refs": [
-            ("HWComposer.cpp", "frameworks/native/services/surfaceflinger/DisplayHardware/HWComposer.cpp",
-             "presentAndGetReleaseFences() 调用 HWC HAL 的 presentDisplay()，"
-             "HAL 返回一个 presentFence。SF 在下一帧开始时等待这个 fence 信号。"
-             "Trace 中关键 slice: 'waiting for presentFence NNN'（NNN 是 fence ID）。"),
-            ("SurfaceFlinger.cpp", "frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp",
-             "postComposition() 中检查 presentFence。"
-             "正常 presentFence 等待 < 1ms（fence 已在上一帧完成时 signal）。"
-             "如果持续 > 16ms，说明显示硬件未能在一个 VSYNC 内完成帧呈现。"),
+            {
+                "file": "HWComposer.cpp",
+                "path": "frameworks/native/services/surfaceflinger/DisplayHardware/HWComposer.cpp",
+                "desc": "presentAndGetReleaseFences() 调用 HWC HAL 的 presentDisplay()，HAL 返回一个 presentFence。SF 在下一帧开始时等待这个 fence 信号。Trace 中关键 slice: 'waiting for presentFence NNN'。",
+            },
+            {
+                "file": "SurfaceFlinger.cpp",
+                "path": "frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp",
+                "desc": "postComposition() 中检查 presentFence。正常 presentFence 等待 < 1ms。如果持续 > 16ms，说明显示硬件未能在一个 VSYNC 内完成帧呈现。",
+            },
         ],
-        "trace_diagnosis": [
+        "trace_guide": [
             "在 SF 进程中搜索 'waiting for presentFence' slice，检查耗时（正常 < 1ms）",
             "检查 SF Actual Timeline 帧颜色: 红色 = SF 导致的 jank",
             "检查 'HWC::presentDisplay' 或 'hwc_commit' slice 耗时",
@@ -187,33 +158,41 @@ FRAMEWORK_ANALYSIS = {
             "联系硬件厂商确认 HWC 驱动是否有已知问题",
         ],
     },
-    "sf_cpu": {
-        "title": "SF CPU Deadline Missed - SurfaceFlinger 主线程超时根因分析",
+    "SurfaceFlinger CPU Deadline Missed": {
+        "cn_name": "SF 合成超时",
         "call_chain": [
             "VSYNC-sf 信号到达",
             "SurfaceFlinger.onMessageRefresh()",
-            "  → handleTransaction(): 处理 App 提交的 Surface 状态变更",
-            "  → handleComposition(): 计算 Layer 可见区域/混合模式/变换矩阵",
-            "  → composite(): GPU 或 HWC 合成",
-            "  → postComposition(): fence 管理、帧统计",
+            "  → latchBuffers(): 从 BufferQueue 获取 App 提交的 buffer",
+            "  → rebuildLayerStacks(): 计算 Layer 可见区域和层级",
+            "  → prepareFrame(): 决定合成策略 (HWC overlay vs GPU fallback)",
+            "    → chooseCompositionStrategy() → HwcPresentOrValidateDisplay()",
+            "  → finishFrame(): 执行合成",
+            "    → composeSurfaces(): GPU 合成路径 (RenderEngine::drawLayers)",
+            "  → postFramebuffer(): 提交合成结果到显示控制器",
+            "  → postComposition(): fence 管理、present fence 等待、帧统计",
         ],
         "source_refs": [
-            ("SurfaceFlinger.cpp", "frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp",
-             "onMessageRefresh() 是 SF 的主帧循环，对应 VSYNC-sf 信号。"
-             "当总处理时间超过 VSYNC 间隔时标记为 SF_CPU_DEADLINE_MISSED。"
-             "Trace 中看 'onMessageRefresh' 或 'commit' + 'composite' slice 总时长。"),
-            ("CompositionEngine.cpp", "frameworks/native/services/surfaceflinger/CompositionEngine/",
-             "handleComposition 计算每个 Layer 的可见区域、混合模式。"
-             "Layer 数量是核心因子 — 每多一个 Layer 约增加 0.1-0.5ms。"
-             "Trace 中检查 'composite layers' 或 'RenderEngine' 相关 slice。"),
+            {
+                "file": "SurfaceFlinger.cpp",
+                "path": "frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp",
+                "desc": "onMessageRefresh() 是 SF 的主帧循环，对应 VSYNC-sf 信号。当总处理时间超过 VSYNC 间隔时标记为 SF_CPU_DEADLINE_MISSED。Trace 中看 'onMessageRefresh' 或 'commit' + 'composite' slice 总时长。",
+            },
+            {
+                "file": "CompositionEngine.cpp",
+                "path": "frameworks/native/services/surfaceflinger/CompositionEngine/",
+                "desc": "handleComposition 计算每个 Layer 的可见区域、混合模式。Layer 数量是核心因子 — 每多一个 Layer 约增加 0.1-0.5ms。Trace 中检查 'composite layers' 或 'RenderEngine' 相关 slice。",
+            },
         ],
-        "trace_diagnosis": [
+        "trace_guide": [
             "在 SF 进程找 'onMessageRefresh' / 'commit' / 'composite' slice",
             "检查 'handleTransaction' 耗时 — Layer 状态变更处理",
             "检查 'composite layers' 耗时 — 合成计算",
             "检查 SF 线程状态: 是否有 Runnable (排队等 CPU) 或 Uninterruptible (等 I/O)",
             "检查 SF Binder 线程的 'setTransactionState' — 频繁事务导致锁竞争",
             "Layer 数量: `dumpsys SurfaceFlinger --list` 查看当前 Layer 列表",
+            "重点检查 'prepareFrame' / 'chooseCompositionStrategy' 耗时 — 是否 HWC 验证慢",
+            "如果 composeSurfaces 长 → Layer 过多导致 GPU 合成回退，检查 REThreaded::drawLayers",
         ],
         "root_causes": [
             "**Layer 数量过多**: App 大量独立 Surface (多窗口/画中画/浮窗/SurfaceView)",
@@ -228,46 +207,120 @@ FRAMEWORK_ANALYSIS = {
             "检查 GPU 合成: `dumpsys SurfaceFlinger --comp-type` 看是否有 CLIENT (GPU) 合成",
         ],
     },
-    "sf_gpu": {
-        "title": "SF GPU Deadline Missed - SurfaceFlinger GPU 合成超时根因分析",
+    "SurfaceFlinger GPU Deadline Missed": {
+        "cn_name": "SF GPU 合成超时",
         "call_chain": [
-            "SurfaceFlinger.composite()",
-            "  → RenderEngine::drawLayers() (GPU 合成路径)",
-            "  → OpenGL/Vulkan 指令提交",
-            "GPU 执行合成",
-            "GPU fence signal → 合成完成",
+            "VSYNC-sf 信号到达",
+            "SurfaceFlinger.onMessageRefresh()",
+            "  → prepareFrame(): 决定合成策略",
+            "    → chooseCompositionStrategy() → HwcPresentOrValidateDisplay()",
+            "    → 某些 Layer 被 HWC 拒收 → 回退 CLIENT (GPU) 合成",
+            "  → composeSurfaces(): CLIENT 合成路径",
+            "    → RenderEngine::drawLayers()",
+            "      → SkiaGLRenderEngine::drawLayersInternal()",
+            "      → bindFrameBuffer(目标 Surface) + 逐 Layer drawMesh",
+            "        → shader bind / texture bind / blend / drawArrays",
+            "      → GrContext::flush() → GPU 命令提交",
+            "      → eglSwapBuffersWithDamageKHR() → 等待 GPU fence",
+            "    → waitFence: SF 侧 GPU completion track 的 waitForever",
+            "  → postFramebuffer(): 提交合成结果到显示控制器",
+            "  → postComposition(): fence 管理 / present fence 等待 / 帧统计",
         ],
         "source_refs": [
-            ("RenderEngine.cpp", "frameworks/native/libs/renderengine/",
-             "当 HWC 无法处理某些 Layer（如 YUV 格式、特殊混合模式、旋转等），"
-             "SF 回退到 GPU 合成 (RenderEngine)。GPU 指令提交后通过 fence 等待完成。"
-             "如果 GPU fence 未在 deadline 前 signal，标记为 SF_GPU_DEADLINE_MISSED。"),
-            ("HWComposer.cpp", "frameworks/native/services/surfaceflinger/DisplayHardware/HWComposer.cpp",
-             "validateDisplay() 决定每个 Layer 走 HWC overlay 还是 GPU 合成。"
-             "HWC_COMPOSITION_CLIENT 表示 GPU 合成。Layer 越多/越复杂，GPU 合成越慢。"),
+            {
+                "file": "SurfaceFlinger.cpp",
+                "path": "frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp",
+                "desc": "composeSurfaces() 进入 CLIENT 合成路径，调用 RenderEngine::drawLayers 做 GPU 合成。Trace 中的 'composeSurfaces' slice 耗时 = RenderEngine 绘制 + GPU 等待。超 VSYNC 间隔 → SF_GPU_DEADLINE_MISSED。",
+            },
+            {
+                "file": "CompositionEngine/Output.cpp",
+                "path": "frameworks/native/services/surfaceflinger/CompositionEngine/src/Output.cpp",
+                "desc": "chooseCompositionStrategy() 向 HWC 提交一组 Layer 试探 (presentOrValidate)。若 HWC 返回 CLIENT/CLIENT_TARGET 表示无法处理 → 回退到 GPU 合成路径。Trace 看 'prepareFrame' 子 slice 判断是否触发回退。",
+            },
+            {
+                "file": "SkiaGLRenderEngine.cpp",
+                "path": "frameworks/native/libs/renderengine/skia/SkiaGLRenderEngine.cpp",
+                "desc": "drawLayersInternal() 是 SF GPU 合成的真实实现：为每个 Layer 选择 shader、上传/复用 texture、配置 blend、执行 drawMesh。Trace 中 'drawLayers' slice 内部耗时主要就在这里。",
+            },
+            {
+                "file": "RenderEngine.h",
+                "path": "frameworks/native/libs/renderengine/include/renderengine/RenderEngine.h",
+                "desc": "drawLayers() 接口返回 drawFence，上层通过 waitFence 等待 GPU 完成。'waitForever' slice（SF 侧 GPU completion track）的时长 = GPU 实际渲染耗时。",
+            },
         ],
-        "trace_diagnosis": [
-            "检查 SF 的 'RenderEngine' / 'GLES' / 'drawLayers' slice 耗时",
-            "检查 GPU completion track — fence signal 是否延迟",
-            "检查 'validateDisplay' 后有多少 Layer 走了 CLIENT (GPU) 合成",
-            "SF Actual Timeline 帧如果 on_time_finish=false 且 gpu_composition=true → GPU 瓶颈",
-            "检查 GPU 频率: `cat /sys/class/devfreq/*/cur_freq` (是否被 thermal 降频)",
+        "trace_guide": [
+            "在 **SurfaceFlinger 进程** 找 'onMessageRefresh' / 'commit' / 'composite' slice（不是 App 进程）",
+            "展开 'composeSurfaces' → 'drawLayers' 子 slice 查看 RenderEngine 执行路径",
+            "检查 SF 侧的 **GPU completion track**（如 `GPU completion 2692`）里的 'waitForever' slice 时长 = 实际 GPU 渲染耗时",
+            "对比 'prepareFrame' 的 HWC 验证结果 — 是否因为 Layer 属性触发了 CLIENT 合成回退",
+            "查看 RenderEngine 线程的 'drawMesh' 子 slice 数 ≈ 本帧参与 GPU 合成的 Layer 数",
+            "`adb shell dumpsys SurfaceFlinger --comp-type` 查看当前 Layer 的实际合成类型（HWC vs CLIENT）",
+            "`adb shell dumpsys SurfaceFlinger` 搜 'GLES' 部分看 RenderEngine 配置和最近的 drawLayers 统计",
+            "`adb shell cat /sys/class/kgsl/kgsl-3d0/gpubusy` 或 perfetto GPU counters 看 GPU 频率和利用率",
         ],
         "root_causes": [
-            "**GPU 合成 Layer 过多**: 大量 Layer 回退到 GPU 合成，GPU 负载过重",
-            "**GPU 降频**: Thermal throttling 导致 GPU 频率降低",
-            "**复杂合成**: Layer 使用了 GPU 才能处理的特性（YUV、特殊 blend mode、旋转）",
-            "**GPU 被 App 占用**: App 的 RenderThread GPU 工作与 SF GPU 合成竞争 GPU 资源",
+            "**HWC 回退到 GPU 合成**: 某些 Layer 属性（旋转、缩放、复杂 blending、YUV）HWC 无法直接扫描，被迫走 CLIENT 路径 — 这是最常见的原因",
+            "**CLIENT 合成 Layer 数过多**: 每个 Layer 都需要 shader bind + drawMesh，Layer 越多 GPU 越慢",
+            "**大尺寸 texture 上传**: 首次显示或内容变化大的 Surface 需要完整 texture 上传",
+            "**首次 shader 编译**: SkiaGL 的合成 shader 首次编译 (~5-10ms) 表现为 SF GPU 超时",
+            "**GPU 降频 / 被抢占**: 省电模式或其他进程占用 GPU 导致合成帧 GPU 执行时间拉长",
+            "**SF 侧 GPU completion fence 等待长**: 'waitForever' slice 长 — 说明 GPU 真的在忙而不是 CPU 调度问题",
         ],
         "optimizations": [
-            "减少 CLIENT 合成 Layer: 避免使用 GPU-only 特性（如 SurfaceView rotation）",
-            "降低分辨率或 Layer 尺寸减少 GPU 填充率压力",
-            "检查 GPU 频率和 thermal: `dumpsys thermalservice`",
-            "减少 overdraw: 确保不透明 Layer 设置 opaque flag",
+            "减少触发 HWC 回退: 避免 Layer 旋转/缩放变换、避免跨 Layer 复杂 blending",
+            "优先使用 SurfaceView（HWC 可直接扫描） 而不是 TextureView（必须 GPU 合成）",
+            "合并 Layer: 减少小的浮窗/贴片类 Layer 数量",
+            "预热合成 shader: 应用启动早期触发一次典型 Layer 组合的合成",
+            "监控 CLIENT 合成比例: `dumpsys SurfaceFlinger --comp-type | grep -c CLIENT`，异常高说明系统性触发了回退",
+            "检查 `adb shell dumpsys SurfaceFlinger` 中 'Display 0 HWC layers' 段 — 看哪些 Layer 被标为 GLES/CLIENT",
+            "如果是 shader 编译导致: 尽量复用合成 pipeline (避免每帧切换 blending mode)",
         ],
     },
-    "prediction_error": {
-        "title": "Prediction Error - VSync 预测错误根因分析",
+    "Buffer Stuffing": {
+        "cn_name": "Buffer 塞满",
+        "call_chain": [
+            "App RenderThread: DrawFrames → renderFrameImpl → flush commands",
+            "App RenderThread: eglSwapBuffersWithDamageKHR → queueBuffer (提交 buffer)",
+            "App RenderThread: dequeueBuffer → 尝试获取下一个空 buffer",
+            "  → BufferQueueProducer.dequeueBuffer() 阻塞（所有 slot 被占）",
+            "  → 阻塞原因: SF 还没消费前面的 buffer (SF 合成慢/presentFence 慢)",
+            "SF: onMessageRefresh → latchBuffers → acquireBuffer() → 消费 buffer",
+            "SF: present → waiting for presentFence → 等待上一帧的显示完成",
+        ],
+        "source_refs": [
+            {
+                "file": "BufferQueueProducer.cpp",
+                "path": "frameworks/native/libs/gui/BufferQueueProducer.cpp",
+                "desc": "dequeueBuffer() 在 BufferQueue 所有 slot 被占用时阻塞。Triple buffering (3 buffers) 下，如果 SF 合成慢导致前两帧还没消费，第三帧 dequeue 就会阻塞 App 的 RenderThread。Trace 中表现为 'dequeueBuffer' slice 持续 > 5ms。",
+            },
+            {
+                "file": "BufferLayerConsumer.cpp",
+                "path": "frameworks/native/libs/gui/BufferLayerConsumer.cpp",
+                "desc": "SurfaceFlinger 在 onMessageRefresh 中调用 acquireBuffer 消费 buffer。如果 SF 侧合成延迟，消费速度跟不上生产速度。",
+            },
+        ],
+        "trace_guide": [
+            "检查 RenderThread 的 `dequeueBuffer` slice 耗时（正常 < 1ms，阻塞时 > 5ms）",
+            "检查 Actual Timeline: 帧是否标记为 'Late Present' 但 on_time_finish=true",
+            "检查 SF Actual Timeline 是否有对应的延迟",
+            "检查 SF 的 `onMessageRefresh` / `commit` / `composite` 总耗时",
+            "通常与 Display HAL / SF Stuffing 同时出现，需要联合分析",
+        ],
+        "root_causes": [
+            "**SurfaceFlinger 消费慢**: SF 合成时间长，buffer 消费速度低于生产速度",
+            "**Display HAL 级联**: presentFence 延迟 → buffer 无法释放 → dequeueBuffer 阻塞",
+            "**App 连续快速渲染**: fling/动画场景下 App 渲染速度 > SF 消费速度",
+            "**GPU 合成回退**: HWC 无法处理某些 Layer，回退到 GPU 合成导致 SF 耗时增加",
+        ],
+        "optimizations": [
+            "优先排查 Display HAL / SF 侧延迟 — Buffer Stuffing 通常是下游问题的级联",
+            "减少 Layer 数量降低 SF 合成时间",
+            "检查 `dumpsys SurfaceFlinger --comp-type` 确认是否有 GPU 合成回退",
+            "如果 App 侧无 deadline missed，问题主要在 SF/Display 侧",
+        ],
+    },
+    "Prediction Error": {
+        "cn_name": "VSync 预测偏差",
         "call_chain": [
             "VSyncPredictor.nextAnticipatedVSyncTimeFrom()",
             "  → 线性回归模型预测下一个 VSYNC 时间",
@@ -275,19 +328,22 @@ FRAMEWORK_ANALYSIS = {
             "  → 偏差超过阈值 → 标记 PredictionError",
         ],
         "source_refs": [
-            ("VSyncPredictor.cpp", "frameworks/native/services/surfaceflinger/Scheduler/VSyncPredictor.cpp",
-             "VSyncPredictor 使用线性回归模型基于历史 VSYNC 时间戳预测下一个 VSYNC。"
-             "当实际 present 时间与预测偏差超过 half-VSYNC 时，标记为 PredictionError。"
-             "模型需要几帧来适应刷新率变化。"),
-            ("Scheduler.cpp", "frameworks/native/services/surfaceflinger/Scheduler/Scheduler.cpp",
-             "Scheduler 管理 VSYNC-app 和 VSYNC-sf 的 phase offset。"
-             "当刷新率切换时，phase offset 需要重新计算，过渡期容易出现预测错误。"),
+            {
+                "file": "VSyncPredictor.cpp",
+                "path": "frameworks/native/services/surfaceflinger/Scheduler/VSyncPredictor.cpp",
+                "desc": "VSyncPredictor 使用线性回归模型基于历史 VSYNC 时间戳预测下一个 VSYNC。当实际 present 时间与预测偏差超过 half-VSYNC 时，标记为 PredictionError。模型需要几帧来适应刷新率变化。",
+            },
+            {
+                "file": "Scheduler.cpp",
+                "path": "frameworks/native/services/surfaceflinger/Scheduler/Scheduler.cpp",
+                "desc": "Scheduler 管理 VSYNC-app 和 VSYNC-sf 的 phase offset。当刷新率切换时，phase offset 需要重新计算，过渡期容易出现预测错误。",
+            },
         ],
-        "trace_diagnosis": [
-            "检查 Expected Timeline vs Actual Timeline: 帧的预期时间窗口和实际时间是否偏差大",
+        "trace_guide": [
+            "检查 Expected Timeline vs Actual Timeline: 预期时间窗口和实际时间是否偏差大",
             "检查是否有刷新率切换事件 (60→90→120Hz)",
             "检查 VSYNC 信号间隔是否稳定",
-            "PredictionError 帧通常在 Actual Timeline 显示为浅绿色（高延迟但平滑）",
+            "PredictionError 帧通常在 Actual Timeline 显示为浅绿色",
             "通常是系统级问题，App 侧无法直接修复",
         ],
         "root_causes": [
@@ -302,309 +358,286 @@ FRAMEWORK_ANALYSIS = {
             "PredictionError 通常是系统级问题，App 侧可通过稳定帧率间接改善",
         ],
     },
-    "sf_stuffing": {
-        "title": "SF Stuffing - SurfaceFlinger 侧帧堆积根因分析",
+    "SurfaceFlinger Scheduling": {
+        "cn_name": "SF 调度延迟",
         "call_chain": [
-            "SF: 上一帧的 composite/present 还未完成",
-            "  → 新的 VSYNC-sf 到达",
-            "  → 新帧的 commit 被延迟",
-            "Display frame 实际持续时间 > 1 VSYNC 间隔",
-            "连续帧堆积 → 延迟累加 → 用户感知卡顿",
+            "VSYNC-sf 信号到达",
+            "SF 主线程处于 Runnable 状态（等待 CPU 调度）",
+            "CPU 调度器将 SF 线程调度到 CPU 上",
+            "SurfaceFlinger.onMessageRefresh() 延迟开始",
         ],
         "source_refs": [
-            ("FrameTimeline.cpp", "frameworks/native/services/surfaceflinger/FrameTimeline/FrameTimeline.cpp",
-             "当 SF 的 display frame 实际持续时间超过预期时，"
-             "标记为 SurfaceFlingerStuffing。典型场景: 上一帧的 presentFence 延迟,"
-             "导致 SF 开始处理新帧时已经晚于 VSYNC-sf。"
-             "Trace 中表现为 SF Actual Timeline 连续多帧持续时间 > 16.6ms。"),
+            {
+                "file": "SurfaceFlinger.cpp",
+                "path": "frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp",
+                "desc": "SF 收到 VSYNC-sf 后等待被调度执行。如果 CPU 负载高或 SF 线程优先级被抢占，onMessageRefresh 开始时间会晚于 VSYNC 信号。",
+            },
         ],
-        "trace_diagnosis": [
-            "检查 SF Actual Timeline: 是否有连续多帧 > 1 VSYNC 间隔",
-            "检查前一帧的 'waiting for presentFence' 是否超时 — 通常是级联原因",
-            "检查 SF 的 commit/composite 自身耗时是否正常",
-            "如果 SF 自身工作 < 5ms 但帧持续时间 > 16ms → Display HAL 级联",
-            "如果 SF 自身工作 > 16ms → SF CPU 瓶颈",
-        ],
-        "root_causes": [
-            "**Display HAL 级联**: presentFence 延迟 → 上一帧卡住 → 新帧排队",
-            "**SF CPU 瓶颈级联**: SF 合成慢 → 上一帧未完成 → 新帧 stuffing",
-            "**GPU 合成延迟**: GPU fence 信号晚 → 上一帧 composite 阶段延迟",
-        ],
-        "optimizations": [
-            "SF Stuffing 是级联效应，优先排查上游根因:",
-            "  → 如果伴随 Display HAL: 排查 HWC/驱动/thermal",
-            "  → 如果伴随 SF CPU: 减少 Layer 数量",
-            "  → 如果伴随 SF GPU: 减少 GPU 合成回退",
-        ],
-    },
-    "dropped": {
-        "title": "Dropped Frame - 帧丢弃根因分析",
-        "call_chain": [
-            "App 提交帧 → queueBuffer → BufferQueue",
-            "SF acquireBuffer → 获取帧",
-            "帧的 target present time 已过 (错过了目标 VSYNC)",
-            "BufferQueue 中有更新的帧可用",
-            "SF 丢弃旧帧，使用最新帧 → 用户感知跳帧",
-        ],
-        "source_refs": [
-            ("FrameTimeline.cpp", "frameworks/native/services/surfaceflinger/FrameTimeline/FrameTimeline.cpp",
-             "Dropped Frame 是最严重的 jank 类型。当帧错过目标 VSYNC 且有更新帧时，"
-             "旧帧被丢弃。Trace 中 Actual Timeline 显示为蓝色帧。"
-             "用户感知: 动画/滑动中突然跳了一帧，视觉上「抖动」。"),
-            ("SurfaceFlinger.cpp", "frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp",
-             "handlePageFlip 中，SF 从 BufferQueue acquire 最新 buffer。"
-             "如果队列中有多个 pending buffer，旧 buffer 被跳过 (dropped)。"),
-        ],
-        "trace_diagnosis": [
-            "Actual Timeline 中蓝色帧 = Dropped Frame",
-            "检查被 drop 的帧对应的 App doFrame 耗时 — 是否 > 2 VSYNC",
-            "检查是否有连续多帧 drop — 严重卡顿的标志",
-            "检查 App 主线程是否有长 slice (Binder/GC/I/O) 阻塞了多帧",
-            "检查 SF 侧是否有 Display HAL / GPU 延迟导致消费慢",
-            "Dropped Frame 通常是其他 jank 类型的严重后果",
+        "trace_guide": [
+            "检查 SF 主线程在 VSYNC-sf 后的线程状态",
+            "Runnable（白色）时间长 → CPU 调度延迟",
+            "检查同一 CPU 上是否有高优先级任务抢占",
+            "检查 CPU 频率是否处于低频状态",
         ],
         "root_causes": [
-            "**严重 App 侧 Jank**: 连续多帧 doFrame > 2 VSYNC，buffer 堆积后旧帧被丢弃",
-            "**SF 侧严重延迟**: SF 合成严重滞后，多帧排队后只取最新帧",
-            "**系统负载过高**: CPU/GPU 资源不足导致渲染 pipeline 整体延迟",
-            "**主线程完全阻塞**: ANR 级别的阻塞 (> 100ms) 导致连续多帧被 drop",
+            "**CPU 负载高**: 其他进程占用 CPU 导致 SF 调度延迟",
+            "**SF 线程未绑定大核**: SF 跑在小核上导致性能不足",
+            "**RT 任务抢占**: 实时优先级任务抢占 SF 的 CPU 时间",
         ],
         "optimizations": [
-            "Dropped Frame 是「症状」不是「原因」— 需要先解决上游 jank:",
-            "  → 检查 App doFrame 耗时，优化主线程工作量",
-            "  → 检查是否有 Binder/GC/I/O 导致的主线程长阻塞",
-            "  → 检查系统负载: `top -d 1` 看 CPU 使用率",
-            "  → 检查 SF 侧 Display HAL / GPU 延迟",
+            "检查 SF 线程 CPU 亲和性: `taskset -p <sf_pid>`",
+            "确保 SF 线程运行在大核上",
+            "减少系统整体 CPU 负载",
         ],
     },
 }
 
 
-def load_json(path: Path) -> dict | None:
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return None
+def _find_kb(jank_type):
+    """Find matching knowledge base entry for a jank type (may be composite)."""
+    # Try exact match first
+    if jank_type in FRAMEWORK_KB:
+        return FRAMEWORK_KB[jank_type]
+    # Try matching the first component of composite types
+    for key in FRAMEWORK_KB:
+        if key in jank_type:
+            return FRAMEWORK_KB[key]
+    return None
 
 
-def load_screenshots(output_dir: Path) -> dict[str, str]:
-    """Load screenshots as base64 strings, keyed by screenshot name."""
-    manifest_path = output_dir / "screenshots" / "screenshot_manifest.json"
-    if not manifest_path.exists():
-        return {}
-    manifest = json.loads(manifest_path.read_text())
-    if manifest.get("skipped_reason") or manifest.get("captured", 0) == 0:
-        return {}
-    screenshots = {}
-    for shot in manifest.get("screenshots", []):
-        if not shot.get("success") or not shot.get("file"):
-            continue
-        img_path = output_dir / "screenshots" / shot["file"]
-        if img_path.exists():
-            img_data = base64.b64encode(img_path.read_bytes()).decode()
-            screenshots[shot["name"]] = img_data
+def main():
+    # CLI mirrors the render-performance-workflow skill invocation:
+    #   python3 render_report_generator.py --output-dir <dir> [--top-n N]
+    # For backwards compatibility we still accept --analysis-dir/--output
+    # (the flags used by the original reference generator).
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output-dir",
+        help="Directory containing phase outputs; render_report.html is written here.",
+    )
+    parser.add_argument("--top-n", type=int, default=5)
+    parser.add_argument("--analysis-dir")
+    parser.add_argument("--output")
+    args = parser.parse_args()
 
-    # Also load multi-shot files (e.g. 00_App Jank Frame #123_0.png, _1.png)
-    screenshots_dir = output_dir / "screenshots"
-    if screenshots_dir.exists():
-        for img_file in sorted(screenshots_dir.glob("*.png")):
-            if img_file.name not in [s.get("file") for s in manifest.get("screenshots", [])]:
-                img_data = base64.b64encode(img_file.read_bytes()).decode()
-                screenshots[img_file.stem] = img_data
+    if args.output_dir:
+        analysis = Path(args.output_dir)
+        output = analysis / "render_report.html"
+    else:
+        if not args.analysis_dir or not args.output:
+            parser.error("--output-dir (or both --analysis-dir and --output) required")
+        analysis = Path(args.analysis_dir)
+        output = Path(args.output)
+    top_n = max(1, args.top_n)
 
-    return screenshots
+    print("[Phase 3] Generating report...")
 
+    app_jank = _load(analysis / "app_jank.json")
+    # All phase-3 (target process) / phase-2 (tp_state) / thread map inputs
+    # are optional — fall back to sensible defaults so the generator can
+    # still produce a report when upstream phases are skipped or haven't
+    # finished yet.
+    target = _maybe_load(analysis / "target_process.json") or {
+        "process_name": app_jank.get("process_name") or "unknown",
+    }
+    tp_state = _maybe_load(analysis / "tp_state.json")
+    thread_map = _maybe_load(analysis / "thread_map.json")
+    _ = tp_state  # currently unused by the template but loaded for parity
+    _ = thread_map
 
-def severity_badge(severity: str) -> str:
-    color = SEVERITY_COLORS.get(severity, "#888")
-    label = SEVERITY_LABELS.get(severity, severity)
-    return f'<span class="badge" style="background:{color}">{label}</span>'
+    screenshots_dir = analysis / "screenshots"
+    manifest = None
+    if (screenshots_dir / "screenshot_manifest.json").exists():
+        manifest = _load(screenshots_dir / "screenshot_manifest.json")
 
-
-def screenshot_html(screenshots: dict, name_keywords: list[str]) -> str:
-    """Find and render ALL screenshots matching keywords (supports multi-shot)."""
-    matched = []
-    for key, b64 in screenshots.items():
-        for kw in name_keywords:
-            if kw.lower() in key.lower():
-                matched.append((key, b64))
-                break
-    if not matched:
-        return '<div class="no-screenshot">截图未生成</div>'
-    html = ''
-    for key, b64 in matched:
-        html += f'''
-            <div class="screenshot">
-                <img src="data:image/png;base64,{b64}" alt="{key}"
-                     onclick="this.classList.toggle('expanded')"
-                     title="点击查看大图 / Click to enlarge" />
-                <p class="screenshot-label">Perfetto 截图: {key}</p>
-            </div>'''
-    return html
-    return '<div class="no-screenshot">截图未生成 (可能 pin 或导航失败)</div>'
-
-
-def _classify_issue_category(name: str) -> str:
-    """Classify an issue name to a framework analysis category."""
-    name_lower = name.lower()
-    if "app jank" in name_lower or "app deadline" in name_lower:
-        return "app_deadline"
-    if "buffer stuffing" in name_lower:
-        return "buffer_stuffing"
-    if "display hal" in name_lower:
-        return "display_hal"
-    if "sf cpu" in name_lower:
-        return "sf_cpu"
-    if "sf gpu" in name_lower:
-        return "sf_cpu"  # similar analysis
-    if "prediction" in name_lower:
-        return "prediction_error"
-    if "sf stuffing" in name_lower or "surfaceflinger stuffing" in name_lower:
-        return "sf_stuffing"
-    if "dropped" in name_lower:
-        return "dropped"
-    return "app_deadline"
-
-
-def framework_analysis_html(category: str) -> str:
-    """Generate HTML for Android Framework root cause analysis."""
-    info = FRAMEWORK_ANALYSIS.get(category)
-    if not info:
-        return ""
-
-    html = f'<div class="framework-analysis">'
-    html += f'<h4>Android Framework 根因分析</h4>'
-
-    # Call chain
-    html += '<div class="call-chain"><h5>调用链路</h5><div class="chain">'
-    for i, step in enumerate(info["call_chain"]):
-        if i > 0:
-            html += '<span class="chain-arrow">→</span>'
-        html += f'<span class="chain-step">{step}</span>'
-    html += '</div></div>'
-
-    # Source references
-    html += '<div class="source-refs"><h5>源码分析</h5>'
-    for fname, fpath, desc in info["source_refs"]:
-        html += f'''
-        <div class="source-ref">
-            <div class="source-file"><code>{fname}</code>
-                <span class="source-path">{fpath}</span>
-            </div>
-            <p>{desc}</p>
-        </div>'''
-    html += '</div>'
-
-    # Trace diagnosis guide
-    trace_diag = info.get("trace_diagnosis", [])
-    if trace_diag:
-        html += '<div class="trace-diagnosis"><h5>Perfetto Trace 诊断指南</h5><ul>'
-        for step in trace_diag:
-            html += f'<li>{step}</li>'
-        html += '</ul></div>'
-
-    # Root causes
-    html += '<div class="root-causes"><h5>可能的根因</h5><ul>'
-    for cause in info["root_causes"]:
-        html += f'<li>{cause}</li>'
-    html += '</ul></div>'
-
-    # Optimizations
-    html += '<div class="optimizations"><h5>优化建议</h5><ul class="opt-list">'
-    for opt in info["optimizations"]:
-        html += f'<li>{opt}</li>'
-    html += '</ul></div>'
-
-    html += '</div>'
-    return html
-
-
-def _collect_top_issues(jank_types_data, app_jank_data, sf_jank_data, top_n=5):
-    """Collect and rank top N issues across all analysis data.
-
-    Returns list of dicts with: name, category, severity, dur_ms, details, keywords
-    """
-    issues = []
-
-    # App Jank issues
-    if app_jank_data and app_jank_data.get("has_issue"):
-        adm = app_jank_data.get("app_deadline_missed")
-        if adm and adm.get("top_frames"):
-            top_frame = adm["top_frames"][0]
-            issues.append({
-                "name": f"App Deadline Missed (Frame #{top_frame.get('id', '?')})",
-                "category": "app_deadline",
-                "severity": "high",
-                "dur_ms": top_frame.get("actual_dur_ms", top_frame.get("dur", 0) / 1e6),
-                "frame_count": adm.get("jank_frames", 0),
-                "details": adm,
-                "keywords": ["App Jank", "app_deadline"],
-            })
-
-        bs = app_jank_data.get("buffer_stuffing")
-        if bs and bs.get("top_frames"):
-            top_frame = bs["top_frames"][0]
-            issues.append({
-                "name": f"Buffer Stuffing (Frame #{top_frame.get('id', '?')})",
-                "category": "buffer_stuffing",
-                "severity": "medium",
-                "dur_ms": top_frame.get("dur_ms", top_frame.get("dur", 0) / 1e6),
-                "frame_count": bs.get("jank_frames", 0),
-                "details": bs,
-                "keywords": ["Buffer Stuffing", "buffer_stuffing"],
-            })
-
-    # SF Jank issues
-    if sf_jank_data and sf_jank_data.get("has_issue"):
-        sf_issue_map = {
-            "display_hal": ("Display HAL Jank", "display_hal", "high"),
-            "sf_cpu": ("SF CPU Deadline Missed", "sf_cpu", "high"),
-            "sf_gpu": ("SF GPU Deadline Missed", "sf_cpu", "high"),
-            "sf_stuffing": ("SF Stuffing", "sf_stuffing", "medium"),
-            "prediction_error": ("VSync Prediction Error", "prediction_error", "medium"),
-            "dropped": ("Dropped Frame", "dropped", "high"),
-            "sf_scheduling": ("SF Scheduling", "sf_cpu", "medium"),
-        }
-        for key, (title, category, default_sev) in sf_issue_map.items():
-            data = sf_jank_data.get(key)
-            if not data or not data.get("top_frames"):
-                continue
-            top_frame = data["top_frames"][0]
-            issues.append({
-                "name": f"{title} (Token #{top_frame.get('display_frame_token', '?')})",
-                "category": category,
-                "severity": default_sev,
-                "dur_ms": top_frame.get("dur_ms", top_frame.get("dur", 0) / 1e6),
-                "frame_count": data.get("jank_frames", 0),
-                "details": data,
-                "keywords": [title, key, title.split()[0]],  # e.g. "SF" for partial match
-            })
-
-    # Sort: severity (high first), then duration descending
-    severity_order = {"high": 0, "medium": 1, "low": 2}
-    issues.sort(key=lambda i: (severity_order.get(i["severity"], 3), -i["dur_ms"]))
-
-    return issues[:top_n]
-
-
-def generate_html(output_dir: Path, top_n: int = 5) -> str:
-    jank_types_data = load_json(output_dir / "jank_types.json")
-    app_jank_data = load_json(output_dir / "app_jank.json")
-    sf_jank_data = load_json(output_dir / "sf_jank.json")
-    screenshot_targets = load_json(output_dir / "screenshot_targets.json")
-    screenshots = load_screenshots(output_dir)
-
-    # Build SQL targets lookup
-    sql_targets = {}
-    if screenshot_targets:
-        for t in screenshot_targets.get("targets", []):
-            sql_targets[t.get("issue_name", "")] = t
-
+    top_frames = app_jank.get("top_frames", [])[:top_n]
+    total = app_jank.get("total_frames", 0)
+    jank_n = app_jank.get("jank_frames", 0)
+    jank_rate = app_jank.get("jank_rate", 0)
+    severity = app_jank.get("severity", "unknown")
+    type_summary = app_jank.get("jank_type_summary", {})
+    type_details = app_jank.get("jank_type_details", {})
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    html = f"""<!DOCTYPE html>
+    html = _CSS_HEADER.format(
+        process=target['process_name'],
+        time=now,
+        total=total,
+        jank_n=jank_n,
+        jank_rate=f"{jank_rate*100:.1f}",
+        type_count=len(type_summary),
+    )
+
+    # Jank type distribution table
+    html += '<div class="card"><h3>Jank 类型分布 (Top)</h3><table>\n'
+    html += '<tr><th>类型</th><th>帧数</th><th>平均耗时</th><th>严重程度</th></tr>\n'
+    for jt, cnt in sorted(type_summary.items(), key=lambda x: -x[1]):
+        detail = type_details.get(jt, {})
+        avg = detail.get("avg_dur_ms", 0)
+        kb = _find_kb(jt)
+        cn = kb["cn_name"] if kb else jt
+        sev_color = "#ff4444" if avg > 30 else "#ffaa00" if avg > 10 else "#3fb950"
+        sev_text = "严重" if avg > 30 else "中等" if avg > 10 else "轻微"
+        html += f'<tr><td>{cn} <code style="color:#484f58;font-size:11px">{jt}</code></td>'
+        html += f'<td>{cnt}</td><td>{avg:.1f} ms</td>'
+        html += f'<td><span class="badge" style="background:{sev_color}">{sev_text}</span></td></tr>\n'
+    html += '</table></div>\n'
+
+    # Top 5 issues
+    html += '<h2>Top 5 重点问题分析</h2>\n'
+
+    for i, frame in enumerate(top_frames):
+        jt = frame["jank_type"]
+        dur = frame["actual_dur_ms"]
+        detail = type_details.get(jt, {})
+        affected = detail.get("count", 0)
+        max_dur = detail.get("max_dur_ms", dur)
+        sev_color = "#ff4444" if dur > 30 else "#ffaa00"
+        sev_text = "严重" if dur > 30 else "中等"
+        kb = _find_kb(jt)
+        cn = kb["cn_name"] if kb else jt
+
+        html += '<div class="card">\n<div class="card-header">\n'
+        html += f'    <h3><span class="issue-num">{i+1}</span>{cn} ({jt}) '
+        html += f'<span class="badge" style="background:{sev_color}">{sev_text}</span></h3>\n'
+        html += f'    <span>{affected} 帧受影响 | 最长 {max_dur:.1f}ms</span>\n'
+        html += '</div>\n'
+
+        # Top frames table
+        top3 = detail.get("top_frames", [frame])[:3]
+        if top3:
+            html += '<h4>Top 问题帧</h4><table>\n'
+            html += '<tr><th>Frame ID</th><th>耗时</th><th>类型</th></tr>\n'
+            for f in top3:
+                html += f'<tr><td>#{f["id"]}</td><td>{f["actual_dur_ms"]:.1f}ms</td><td>{f["jank_type"]}</td></tr>\n'
+            html += '</table>\n'
+
+        # Problem-frame metadata (always shown — sourced from app_jank.json enrichment)
+        rr = frame.get("region_range", {})
+        kw_hit = frame.get("keywords_hit", []) or []
+        ev = frame.get("evidence_slices", []) or []
+        target_ts_v = frame.get("target_ts", frame.get("ts"))
+        focus_track_v = frame.get("focus_track", "-")
+        problem_desc = frame.get("problem_description", "-")
+        screenshot_reason = frame.get("screenshot_reasoning",
+            "先用全局图覆盖整段 trace 看分布，再在 target_ts ± 窗口的细节图收敛并点选证据 slice。")
+
+        if ev:
+            ev_rows = "".join(
+                f'<tr><td><code>{e.get("name", "-")}</code></td>'
+                f'<td>{e.get("thread", "-")}</td>'
+                f'<td>{e.get("dur_ms", 0)} ms</td>'
+                f'<td>{e.get("ts", "-")} ns</td></tr>\n'
+                for e in ev[:5]
+            )
+            ev_block = (
+                '<h5 style="margin-top:12px">证据 slices (Top 5)</h5>'
+                '<table><tr><th>Slice</th><th>线程</th><th>耗时</th><th>起点 ts</th></tr>'
+                f'{ev_rows}</table>'
+            )
+        else:
+            ev_block = '<p style="color:#8b949e;font-size:13px">未命中关键词 slices（关键词集为空或对应阶段无 slice 数据）。</p>'
+
+        html += '<h4>问题帧元数据</h4><table>\n'
+        html += '<tr><th style="width:120px">字段</th><th>内容</th></tr>\n'
+        html += f'<tr><td>问题类型</td><td>{jt}</td></tr>\n'
+        html += f'<tr><td>对应帧</td><td>#{frame.get("id")}（实际耗时 {dur:.1f} ms）</td></tr>\n'
+        html += (
+            f'<tr><td>捷区范围</td>'
+            f'<td>{rr.get("start_ts", "-")} ~ {rr.get("end_ts", "-")} ns '
+            f'（约 {rr.get("window_ms", 0)} ms）</td></tr>\n'
+        )
+        html += f'<tr><td>目标时刻</td><td>{target_ts_v} ns</td></tr>\n'
+        html += f'<tr><td>焦点轨道</td><td>{focus_track_v}</td></tr>\n'
+        html += f'<tr><td>命中关键词</td><td>{", ".join(kw_hit) or "-"}</td></tr>\n'
+        html += f'<tr><td>问题描述</td><td>{problem_desc}</td></tr>\n'
+        html += f'<tr><td>截图逻辑</td><td>{screenshot_reason}</td></tr>\n'
+        html += '</table>\n'
+        html += ev_block
+
+        # Screenshots (if captured)
+        if manifest and i < len(manifest.get("screenshots", [])):
+            ss = manifest["screenshots"][i]
+            for key, label in [("global", "全局图"), ("detail", "局部细节图")]:
+                fname = ss.get(key)
+                if not fname:
+                    continue
+                img_path = screenshots_dir / fname
+                if img_path.exists():
+                    b64 = base64.b64encode(img_path.read_bytes()).decode()
+                    html += f'''<div class="screenshot">
+    <img src="data:image/png;base64,{b64}" alt="{fname}"
+         onclick="this.classList.toggle('expanded')"
+         title="点击查看大图 / Click to enlarge" />
+    <p class="screenshot-label">Perfetto 截图: {label} - {fname}</p>
+</div>\n'''
+
+            html += '<div class="reasoning-callout">'
+            html += '<h5>截图复盘说明</h5>'
+            html += f'<p>{screenshot_reason}</p>'
+            html += '</div>\n'
+
+        # Framework analysis
+        if kb:
+            html += '<div class="framework-analysis"><h4>Android Framework 根因分析</h4>\n'
+
+            # Call chain
+            html += '<div class="call-chain"><h5>调用链路</h5><div class="chain">\n'
+            for j, step in enumerate(kb["call_chain"]):
+                if j > 0:
+                    html += '<span class="chain-arrow">→</span>'
+                html += f'<span class="chain-step">{step}</span>'
+            html += '</div></div>\n'
+
+            # Source refs
+            html += '<div class="source-refs"><h5>源码分析</h5>\n'
+            for ref in kb["source_refs"]:
+                html += f'''<div class="source-ref">
+    <div class="source-file"><code>{ref["file"]}</code>
+        <span class="source-path">{ref["path"]}</span>
+    </div>
+    <p>{ref["desc"]}</p>
+</div>\n'''
+            html += '</div>\n'
+
+            # Trace diagnosis
+            html += '<div class="trace-diagnosis"><h5>Perfetto Trace 诊断指南</h5><ul>\n'
+            for tip in kb["trace_guide"]:
+                html += f'<li>{tip}</li>\n'
+            html += '</ul></div>\n'
+
+            # Root causes
+            html += '<div class="root-causes"><h5>可能的根因</h5><ul>\n'
+            for cause in kb["root_causes"]:
+                html += f'<li>{cause}</li>\n'
+            html += '</ul></div>\n'
+
+            # Optimizations
+            html += '<div class="optimizations"><h5>优化建议</h5><ul class="opt-list">\n'
+            for opt in kb["optimizations"]:
+                html += f'<li>{opt}</li>\n'
+            html += '</ul></div>\n'
+
+            html += '</div>\n'  # framework-analysis
+
+        html += '</div>\n'  # card
+
+    # Footer
+    html += f'''</div>
+<footer>
+    Generated by render-jank-analysis workflow | {now}
+</footer>
+</body>
+</html>'''
+
+    output.write_text(html)
+    size_kb = output.stat().st_size / 1024
+    print(f"[Phase 3] Complete: {output} ({size_kb:.0f}KB)")
+
+
+# ─── CSS + Header Template ────────────────────────────────────────────
+
+_CSS_HEADER = '''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -631,8 +664,6 @@ tr:hover td {{ background: #161b22; }}
 .stat-item {{ background: #21262d; border-radius: 8px; padding: 16px; text-align: center; }}
 .stat-value {{ font-size: 32px; font-weight: 700; color: #58a6ff; }}
 .stat-label {{ font-size: 13px; color: #8b949e; margin-top: 4px; }}
-
-/* Screenshot */
 .screenshot {{ text-align: center; margin: 16px 0; }}
 .screenshot img {{
     max-width: 100%; border: 1px solid #30363d; border-radius: 8px;
@@ -645,9 +676,6 @@ tr:hover td {{ background: #161b22; }}
     border-radius: 12px; border: 2px solid #58a6ff;
 }}
 .screenshot-label {{ font-size: 12px; color: #8b949e; margin-top: 6px; }}
-.no-screenshot {{ color: #484f58; font-style: italic; padding: 12px; text-align: center; }}
-
-/* Framework Analysis */
 .framework-analysis {{
     background: #0d1117; border: 1px solid #1f3a5f; border-radius: 8px;
     padding: 16px; margin: 16px 0;
@@ -672,28 +700,18 @@ tr:hover td {{ background: #161b22; }}
 .optimizations .opt-list {{ list-style: none; padding: 0; }}
 .optimizations .opt-list li {{ padding: 6px 0 6px 20px; font-size: 14px; position: relative; }}
 .optimizations .opt-list li::before {{ content: ">>"; position: absolute; left: 0; color: #3fb950; }}
-
-/* Issue number badge */
 .issue-num {{ display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #1f6feb; color: #fff; font-weight: 700; font-size: 14px; margin-right: 8px; }}
-
+.reasoning-callout {{ background: #0f1720; border: 1px solid #26415e; border-left: 3px solid #58a6ff; border-radius: 6px; padding: 12px 16px; margin: 14px 0; }}
+.reasoning-callout h5 {{ color: #58a6ff; margin-bottom: 6px; }}
+.reasoning-callout p {{ font-size: 13px; line-height: 1.6; color: #c9d1d9; }}
 footer {{ text-align: center; padding: 32px 0; color: #484f58; font-size: 13px; border-top: 1px solid #21262d; margin-top: 40px; }}
 </style>
 </head>
 <body>
 <div class="container">
 <h1>Android 渲染性能分析报告</h1>
-<p class="subtitle">生成时间: {now} | HiClaw Render Performance Analyzer</p>
-"""
+<p class="subtitle">生成时间: {time} | 目标进程: {process}</p>
 
-    # --- Overview Stats ---
-    if jank_types_data:
-        total = jank_types_data.get("total_frames", 0)
-        jank_count = jank_types_data.get("jank_frame_count", 0)
-        jank_rate = jank_types_data.get("jank_rate_pct", 0)
-        severity = jank_types_data.get("severity", "normal")
-        detected_types = jank_types_data.get("detected_types", [])
-
-        html += f"""
 <h2>概览</h2>
 <div class="stat-grid">
     <div class="stat-item">
@@ -701,196 +719,31 @@ footer {{ text-align: center; padding: 32px 0; color: #484f58; font-size: 13px; 
         <div class="stat-label">总帧数</div>
     </div>
     <div class="stat-item">
-        <div class="stat-value" style="color:{SEVERITY_COLORS.get(severity, '#fff')}">{jank_count}</div>
+        <div class="stat-value" style="color:#ff4444">{jank_n}</div>
         <div class="stat-label">Jank 帧数</div>
     </div>
     <div class="stat-item">
-        <div class="stat-value" style="color:{SEVERITY_COLORS.get(severity, '#fff')}">{jank_rate:.1f}%</div>
+        <div class="stat-value" style="color:#ff4444">{jank_rate}%</div>
         <div class="stat-label">Jank 率</div>
     </div>
     <div class="stat-item">
-        <div class="stat-value">{len(detected_types)}</div>
+        <div class="stat-value">{type_count}</div>
         <div class="stat-label">Jank 类型数</div>
     </div>
 </div>
-"""
-        # Jank type summary table (compact)
-        jt_list = jank_types_data.get("jank_types", [])
-        if jt_list:
-            # Only show top types by frame count
-            jt_sorted = sorted(jt_list, key=lambda x: -x.get("frame_count", 0))[:8]
-            html += """
-<div class="card">
-<h3>Jank 类型分布 (Top)</h3>
-<table>
-<tr><th>类型</th><th>帧数</th><th>平均耗时</th><th>严重程度</th></tr>
-"""
-            for jt in jt_sorted:
-                jtype = jt.get("jank_type", "?")
-                cn = JANK_TYPE_CN.get(jtype, jtype)
-                html += f"""<tr>
-    <td>{cn} <code style="color:#484f58;font-size:11px">{jtype}</code></td>
-    <td>{jt.get('frame_count', 0)}</td>
-    <td>{jt.get('avg_dur_ms', 0):.1f} ms</td>
-    <td>{severity_badge(jt.get('severity', 'normal'))}</td>
-</tr>"""
-            html += "</table></div>"
-
-    # --- Top Issues with Framework Analysis ---
-    top_issues = _collect_top_issues(jank_types_data, app_jank_data, sf_jank_data, top_n)
-
-    if top_issues:
-        html += f'<h2>Top {len(top_issues)} 重点问题分析</h2>'
-
-        for idx, issue in enumerate(top_issues, 1):
-            category = issue["category"]
-            severity = issue["severity"]
-            dur_ms = issue["dur_ms"]
-            frame_count = issue.get("frame_count", 0)
-            details = issue.get("details", {})
-
-            html += f'''
-<div class="card">
-<div class="card-header">
-    <h3><span class="issue-num">{idx}</span>{issue["name"]} {severity_badge(severity)}</h3>
-    <span>{frame_count} 帧受影响 | 最长 {dur_ms:.1f}ms</span>
-</div>
 '''
-            # Key metrics for this issue
-            if category == "app_deadline":
-                adm = details
-                html += '<div class="stat-grid">'
-                if adm.get("doframe_over_16ms", 0) > 0:
-                    html += f'<div class="stat-item"><div class="stat-value">{adm["doframe_over_16ms"]}</div><div class="stat-label">doFrame > 16ms</div></div>'
-                if adm.get("draw_over_16ms", 0) > 0:
-                    html += f'<div class="stat-item"><div class="stat-value">{adm["draw_over_16ms"]}</div><div class="stat-label">DrawFrame > 16ms</div></div>'
-                if adm.get("gpu_wait_events", 0) > 0:
-                    html += f'<div class="stat-item"><div class="stat-value">{adm["gpu_wait_events"]}</div><div class="stat-label">GPU Wait</div></div>'
-                html += '</div>'
-
-                # Top frames table
-                top_frames = adm.get("top_frames", [])[:3]
-                if top_frames:
-                    html += '<h4>Top 超时帧</h4><table><tr><th>Frame ID</th><th>耗时</th><th>类型</th></tr>'
-                    for f in top_frames:
-                        html += f'<tr><td>#{f.get("id","?")}</td><td>{f.get("actual_dur_ms",0):.1f}ms</td><td>{f.get("jank_type","")}</td></tr>'
-                    html += '</table>'
-
-            elif category == "buffer_stuffing":
-                bs = details
-                html += '<div class="stat-grid">'
-                html += f'<div class="stat-item"><div class="stat-value">{bs.get("dequeue_blocked", 0)}</div><div class="stat-label">dequeueBuffer 阻塞</div></div>'
-                html += f'<div class="stat-item"><div class="stat-value">{bs.get("queue_overflow", 0)}</div><div class="stat-label">Buffer Queue 溢出</div></div>'
-                html += '</div>'
-
-            elif category == "display_hal":
-                dh = details
-                html += f'<p>HWC 事件数: {dh.get("hwc_events", 0)}</p>'
-                top_hwc = dh.get("top_hwc", [])[:3]
-                if top_hwc:
-                    html += '<h4>Top presentFence 等待</h4><table><tr><th>Fence</th><th>等待时间</th></tr>'
-                    for h in top_hwc:
-                        html += f'<tr><td>{h.get("name","?")}</td><td>{h.get("dur_ms",0):.1f}ms</td></tr>'
-                    html += '</table>'
-
-            else:
-                # Generic: show top frames
-                top_frames = details.get("top_frames", [])[:3]
-                if top_frames:
-                    html += '<h4>Top 问题帧</h4><table><tr><th>Frame Token</th><th>耗时</th></tr>'
-                    for f in top_frames:
-                        token = f.get("display_frame_token", f.get("id", "?"))
-                        dur = f.get("dur_ms", f.get("dur", 0) / 1e6)
-                        html += f'<tr><td>#{token}</td><td>{dur:.1f}ms</td></tr>'
-                    html += '</table>'
-
-            # Screenshot for this issue
-            html += screenshot_html(screenshots, issue.get("keywords", [issue["name"]]))
-
-            # SQL-driven diagnostic details (from prepare_screenshot_targets.py)
-            sql_target = sql_targets.get(issue["name"], {})
-            if sql_target:
-                sql_desc = sql_target.get("description", "")
-                runnable_threads = sql_target.get("runnable_threads", [])
-                blocking_chain = sql_target.get("blocking_chain", [])
-
-                html += '<div class="framework-analysis">'
-                html += '<h4>Trace 诊断详情（SQL 查询结果）</h4>'
-
-                if sql_desc:
-                    html += f'<div class="tip"><b>问题定位：</b>{sql_desc}</div>'
-
-                # Runnable/Blocked threads table
-                if runnable_threads:
-                    html += '<h5>关键阻塞线程（Runnable/D-state > 1ms）</h5>'
-                    html += '<table><tr><th>线程</th><th>TID</th><th>状态</th><th>最长阻塞</th><th>累计</th></tr>'
-                    state_cn = {"R": "Runnable(等CPU)", "R+": "Runnable(被抢占)",
-                                "D": "D状态(non-IO)", "DK": "D状态(内核)"}
-                    for r in runnable_threads[:6]:
-                        html += f'<tr><td><code>{r.get("thread_name","?")}</code></td>'
-                        html += f'<td>{r.get("tid","")}</td>'
-                        html += f'<td>{state_cn.get(r.get("state",""), r.get("state",""))}</td>'
-                        html += f'<td><b>{r.get("max_dur_ms",0):.1f}ms</b></td>'
-                        html += f'<td>{r.get("total_ms",0):.1f}ms</td></tr>'
-                    html += '</table>'
-
-                # Key slices
-                slices = sql_target.get("slices", [])
-                if slices:
-                    html += '<h5>关键 Slice（故障时间段内）</h5>'
-                    html += '<table><tr><th>Slice</th><th>线程</th><th>耗时</th></tr>'
-                    for s in slices[:5]:
-                        html += f'<tr><td><code>{s.get("name","?")[:50]}</code></td>'
-                        html += f'<td>{s.get("thread_name","")}</td>'
-                        html += f'<td>{s.get("dur",0)/1e6:.1f}ms</td></tr>'
-                    html += '</table>'
-
-                # Related events
-                related = sql_target.get("related_events", [])
-                if related:
-                    html += '<h5>关联事件（binder/GC/lock/presentFence）</h5>'
-                    html += '<table><tr><th>事件</th><th>线程</th><th>耗时</th></tr>'
-                    for r in related[:4]:
-                        html += f'<tr><td><code>{r.get("name","?")[:45]}</code></td>'
-                        html += f'<td>{r.get("thread_name","")}</td>'
-                        html += f'<td>{r.get("dur",0)/1e6:.1f}ms</td></tr>'
-                    html += '</table>'
-
-                html += '</div>'
-
-            # Framework root cause analysis
-            html += framework_analysis_html(category)
-
-            html += '</div>'  # end card
-
-    # --- Footer ---
-    html += f"""
-</div>
-<footer>
-    Generated by HiClaw Render Performance Analyzer | {now}<br>
-    Android Framework source references based on AOSP main branch
-</footer>
-</body>
-</html>"""
-
-    return html
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output-dir", default=OUTPUT_DIR)
-    parser.add_argument("--top-n", type=int, default=5, help="Number of top issues to show")
-    args = parser.parse_args()
+def _load(path):
+    return json.loads(Path(path).read_text())
 
-    output_dir = Path(args.output_dir)
-    os.makedirs(output_dir, exist_ok=True)
 
-    html = generate_html(output_dir, top_n=args.top_n)
-    report_path = output_dir / "render_report.html"
-    report_path.write_text(html, encoding="utf-8")
+def _maybe_load(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except Exception:
+        return {}
 
-    print(f"[report] Render report generated: {report_path}")
-    print(json.dumps({"report": str(report_path), "status": "ok"}))
 
 if __name__ == "__main__":
     main()

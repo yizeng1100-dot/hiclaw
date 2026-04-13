@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import subprocess
@@ -122,26 +123,70 @@ def check_memory_available(min_mb: int = 500) -> bool:
     return True
 
 
+def _playwright_browser_ready() -> bool:
+    """Check whether Playwright's managed chromium actually has a binary on
+    disk. The python package can be importable while the download step was
+    skipped (e.g. first run inside a fresh sandbox), in which case
+    ``launch()`` blows up at runtime with ``Executable doesn't exist``."""
+    cache = os.path.expanduser("~/.cache/ms-playwright")
+    if not os.path.isdir(cache):
+        return False
+    for entry in os.listdir(cache):
+        if "chromium" not in entry.lower():
+            continue
+        # Walk a couple of levels for either chrome or chrome-headless-shell
+        for root, _dirs, files in os.walk(os.path.join(cache, entry)):
+            for f in files:
+                if f in ("chrome", "chrome-headless-shell"):
+                    full = os.path.join(root, f)
+                    if os.access(full, os.X_OK):
+                        return True
+    return False
+
+
+def _system_chromium_path() -> str | None:
+    """Return path to a system chromium/chrome binary Playwright can drive
+    via ``executable_path=``, or None if none is available."""
+    for name in ("google-chrome", "chromium-browser", "chromium"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
 def ensure_playwright() -> bool:
+    # Package import check
     try:
         import playwright  # noqa: F401
-        return True
     except ImportError:
-        pass
-    print("[screenshot] Installing playwright...")
+        print("[screenshot] Installing playwright...")
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "playwright", "-q"],
+                check=True, capture_output=True, timeout=120,
+            )
+        except Exception as e:
+            print(f"[screenshot] Failed to install playwright: {e}")
+            return False
+
+    # Browser binary check — either Playwright's managed chromium or a
+    # system chromium we can point launch() at. If neither is available,
+    # try to install Playwright's bundled chromium. Failure here is still
+    # recoverable as long as a system chromium exists.
+    if _playwright_browser_ready() or _system_chromium_path():
+        return True
+
+    print("[screenshot] Installing chromium via playwright...")
     try:
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "playwright", "-q"],
-            check=True, capture_output=True, timeout=120,
-        )
-        subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
-            check=True, capture_output=True, timeout=300,
+            check=True, capture_output=True, timeout=600,
         )
-        return True
     except Exception as e:
-        print(f"[screenshot] Failed to install playwright: {e}")
-        return False
+        print(f"[screenshot] Playwright chromium install failed: {e}")
+        return _system_chromium_path() is not None
+
+    return _playwright_browser_ready() or _system_chromium_path() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -975,11 +1020,38 @@ def capture_screenshots(
         return results
 
     with sync_playwright() as p:
-        # Try system Chrome first, then default chromium
-        try:
-            browser = p.chromium.launch(headless=True, channel="chrome")
-        except Exception:
-            browser = p.chromium.launch(headless=True)
+        # Launch fallback chain:
+        #   1. Playwright's bundled chromium (fastest path when browsers
+        #      were installed via `playwright install chromium`)
+        #   2. System google-chrome via channel="chrome"
+        #   3. Any system chromium/chromium-browser via executable_path=
+        # The previous version tried 2 → 1 only, which silently skipped
+        # phase 7 in sandboxes that had a system chromium but no managed
+        # playwright browser.
+        browser = None
+        launch_errors: list[str] = []
+        for attempt in ("managed", "channel-chrome", "system-chromium"):
+            try:
+                if attempt == "managed":
+                    browser = p.chromium.launch(headless=True)
+                elif attempt == "channel-chrome":
+                    browser = p.chromium.launch(headless=True, channel="chrome")
+                else:
+                    exe = _system_chromium_path()
+                    if not exe:
+                        continue
+                    browser = p.chromium.launch(
+                        headless=True, executable_path=exe
+                    )
+                print(f"[screenshot] Launched browser via: {attempt}")
+                break
+            except Exception as e:
+                launch_errors.append(f"{attempt}: {e}")
+        if browser is None:
+            raise RuntimeError(
+                "Failed to launch any chromium. Tried: "
+                + " | ".join(launch_errors)
+            )
         page = browser.new_page(viewport={"width": 1920, "height": 1080})
 
         # Load Perfetto UI

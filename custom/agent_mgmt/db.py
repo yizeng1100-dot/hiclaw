@@ -48,9 +48,10 @@ async def _ensure_tables():
         # Seed built-in agents on first startup
         session = _session_factory()
         try:
-            from custom.agent_mgmt.seed import seed_perf_agent, seed_kernel_diff_agent
+            from custom.agent_mgmt.seed import seed_perf_agent, seed_kernel_diff_agent, seed_render_agent
             await seed_perf_agent(session)
             await seed_kernel_diff_agent(session)
+            await seed_render_agent(session)
         finally:
             await session.close()
 

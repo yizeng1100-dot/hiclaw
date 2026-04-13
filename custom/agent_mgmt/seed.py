@@ -228,6 +228,113 @@ async def seed_perf_agent(db: AsyncSession) -> None:
         await db.rollback()
 
 
+RENDER_AGENT_NAME = '渲染性能分析 Agent'
+
+RENDER_AGENT_SKILL_NAMES = [
+    'render-performance-workflow',
+    'setup-env',
+    'init-render-jank-metric',
+    'analyze-jank-types',
+    'analyze-app-jank',
+    'analyze-sf-jank',
+    'capture-trace-screenshot',
+    'generate-report',
+]
+
+RENDER_AGENT_DESCRIPTION = (
+    'Android 应用绘制渲染性能分析。'
+    '上传 Perfetto trace 文件，自动分析 Jank 类型分布、App/SF 层卡顿根因，生成 HTML 报告。'
+)
+
+RENDER_AGENT_USAGE = """\
+## 使用方式
+
+1. 在 Agent 详情页点击「开始分析」
+2. 上传或输入 trace 文件路径
+3. 选择分析重点（完整分析 / App Jank / SF Jank / 帧率统计）
+4. 点击「Analyze」开始分析
+
+## 分析流程（10 阶段）
+
+1. 环境初始化（安装依赖）
+2. 加载 Trace
+3. 查找前台进程
+4. Jank 指标初始化
+5. Jank 类型识别
+6. 应用层 Jank 分析
+7. SurfaceFlinger Jank 分析
+8. Perfetto UI 截图（可选）
+9. 清理 Trace Processor
+10. 生成 HTML 渲染报告
+
+## 输出
+
+- `/workspace/render_output/render_report.html` — 渲染性能报告
+"""
+
+
+def _load_render_workflow_content() -> str:
+    """Load render-performance-workflow.md as system_prompt."""
+    workflow_path = (
+        Path(__file__).parent.parent
+        / 'skill_examples'
+        / 'render_skills'
+        / 'render-performance-workflow.md'
+    )
+    if workflow_path.exists():
+        return workflow_path.read_text(encoding='utf-8')
+    _logger.warning(f'Render workflow skill not found: {workflow_path}')
+    return ''
+
+
+async def seed_render_agent(db: AsyncSession) -> None:
+    """Create the built-in Render Performance Analysis Agent if it doesn't exist."""
+    try:
+        result = await db.execute(
+            select(StoredAgent).where(StoredAgent.name == RENDER_AGENT_NAME)
+        )
+        existing = result.scalars().first()
+        if existing is not None:
+            changed = False
+            if not existing.config_json:
+                existing.config_json = json.dumps({'agent_type': 'render-analysis'})
+                changed = True
+            if not existing.usage_instructions:
+                existing.usage_instructions = RENDER_AGENT_USAGE
+                changed = True
+            if not existing.system_prompt:
+                existing.system_prompt = _load_render_workflow_content()
+                changed = True
+            if changed:
+                await db.commit()
+                _logger.info(f'Updated existing agent: {RENDER_AGENT_NAME}')
+            await _link_skills_by_name(db, existing.id, RENDER_AGENT_SKILL_NAMES)
+            return
+
+        agent_id = uuid4()
+        agent = StoredAgent(
+            id=agent_id,
+            name=RENDER_AGENT_NAME,
+            description=RENDER_AGENT_DESCRIPTION,
+            system_prompt=_load_render_workflow_content(),
+            category='performance',
+            tags=json.dumps(['android', 'render', 'jank', 'surfaceflinger', '渲染分析']),
+            config_json=json.dumps({'agent_type': 'render-analysis'}),
+            usage_instructions=RENDER_AGENT_USAGE,
+            is_enabled=True,
+            created_by='system',
+        )
+        db.add(agent)
+        await db.commit()
+        _logger.info(f'Seeded built-in agent: {RENDER_AGENT_NAME}')
+
+        await _link_skills_by_name(db, agent_id, RENDER_AGENT_SKILL_NAMES)
+
+    except Exception as e:
+        _logger.warning(f'Failed to seed render agent: {e}', exc_info=True)
+        await db.rollback()
+
+
 async def seed_kernel_diff_agent(db: AsyncSession) -> None:
     """Create the built-in Kernel Diff Analysis Agent if it doesn't exist."""
     try:
