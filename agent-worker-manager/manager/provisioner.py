@@ -407,14 +407,18 @@ class Provisioner:
             # same top-level package. The openhands wheels are installed
             # individually in pass 2.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 1/2)...")
+            # >>> CUSTOM: HiClaw — see pass 2 notes below; same flags/timeout
+            # hardening applied here. <<<
             stdout_all, stderr, ec = await self.ssh.run(
                 f"cd {REMOTE_DEPS_PATH}/wheels && "
                 f"NON_OH=$(ls *.whl | grep -v '^openhands_' | tr '\\n' ' ') && "
-                f"{pip_env} {remote_python} -m pip install -q --break-system-packages --upgrade "
+                f"{pip_env} {remote_python} -m pip install --break-system-packages --upgrade "
+                f"--no-cache-dir --disable-pip-version-check "
                 f"--ignore-installed --prefer-binary --target {venv}/lib "
                 f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
-                f"$NON_OH 2>&1; echo EXIT_CODE=$?", timeout=600)
-            logger.info(f"[{self._host}] Pip pass 1 tail: {stdout_all[-300:]}")
+                f"$NON_OH 2>&1; echo EXIT_CODE=$?", timeout=1200)
+            logger.info(f"[{self._host}] Pip pass 1 tail: {stdout_all[-800:]}")
+            # >>> END CUSTOM <<<
 
             # >>> CUSTOM: HiClaw — clean only openhands namespace before pass 2 <<<
             # Pass 1 no longer installs openhands_* (excluded by grep) but a
@@ -436,18 +440,31 @@ class Provisioner:
             # wheels passed at once. Sequential pip install commands break the
             # namespace because pip cleans the existing namespace dir each call.
             # Single command lets pip merge all subpackages correctly.
+            #
+            # >>> CUSTOM: HiClaw — pass 2 used to -q + 600s, which silently hung
+            # on slow remotes and gave no useful log on timeout. Now:
+            # - Drop -q so pip streams per-wheel progress into stdout (we tail
+            #   it on failure).
+            # - Add --no-cache-dir so pip doesn't try to write to ~/.cache/pip
+            #   (slow on some containers, and pointless for --target install).
+            # - Add --disable-pip-version-check so we don't spend time checking
+            #   pypi.org for a pip upgrade.
+            # - Bump timeout to 1200s (20 min) as a safety net for genuinely
+            #   slow disks.
             yield _evt(ProvisionStep.INSTALL_AGENT_SDK, "started", detail="Installing packages (pass 2/2)...")
             stdout2, stderr2, _ = await self.ssh.run(
-                f"{pip_env} {remote_python} -m pip install -q --break-system-packages "
+                f"{pip_env} {remote_python} -m pip install --break-system-packages "
+                f"--no-cache-dir --disable-pip-version-check "
                 f"--prefer-binary --target {venv}/lib "
                 f"--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ "
                 f"{REMOTE_DEPS_PATH}/wheels/openhands_sdk-*.whl "
                 f"{REMOTE_DEPS_PATH}/wheels/openhands_tools-*.whl "
                 f"{REMOTE_DEPS_PATH}/wheels/openhands_aci-*.whl "
                 f"{REMOTE_DEPS_PATH}/wheels/openhands_agent_server-*.whl "
-                f"2>&1; echo EXIT_CODE=$?", timeout=600)
+                f"2>&1; echo EXIT_CODE=$?", timeout=1200)
             ec2 = 0 if "EXIT_CODE=0" in stdout2 else 1
-            logger.info(f"[{self._host}] Pip pass 2 tail: {stdout2[-300:]}")
+            logger.info(f"[{self._host}] Pip pass 2 tail: {stdout2[-800:]}")
+            # >>> END CUSTOM <<<
 
             # Step 2d: Verify core import works
             check_out, _, _ = await self.ssh.run(
