@@ -598,6 +598,14 @@ class EventService:
                     'skills provided below. Always use real tool calls to inspect the '
                     'filesystem or run commands — do not guess answers to questions '
                     'about the workspace.'
+                    '\n\n'
+                    # >>> CUSTOM: HiClaw — force Chinese for the thinking channel
+                    # AND user-facing replies. Previously thinking text flipped
+                    # between English and Chinese because the system prompt was
+                    # English but users typed in Chinese. <<<
+                    '重要：你的所有内部思考（thinking / reasoning）和面向用户的回复都'
+                    '必须使用简体中文，无论用户用什么语言提问。工具调用参数（命令、文件'
+                    '路径、代码、正则等技术字段）保持原样英文，不要翻译。'
                 ),
                 persistence_dir=str(self.conversations_dir),
                 conversation_id=self.stored.id,

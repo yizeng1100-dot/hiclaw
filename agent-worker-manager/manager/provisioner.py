@@ -27,7 +27,7 @@ REMOTE_PYTHON_INSTALL_PATH = os.environ.get('HICLAW_REMOTE_PYTHON_PATH', '$HOME/
 TEMPLATES = {
     "openhands": {
         "venv_path": REMOTE_VENV_PATH,
-        "pip_package": "openhands-agent-server==1.16.1.post8 openhands-sdk==1.16.1 openhands-tools==1.16.1",
+        "pip_package": "openhands-agent-server==1.16.1.post9 openhands-sdk==1.16.1 openhands-tools==1.16.1",
         "binary": f"{REMOTE_VENV_PATH}/bin/agent-server",
         "health_check": "/health",
     },
