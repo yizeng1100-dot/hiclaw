@@ -22,7 +22,7 @@ BUNDLE_PATH = os.path.join(DEPS_DIR, "agent-deps-bundle.tar.gz")
 WHEELS_DIR = os.path.join(DEPS_DIR, "wheels")
 
 # What to download
-SDK_PACKAGES = "openhands-agent-server==1.16.1.post7 openhands-sdk==1.16.1 openhands-tools==1.16.1"
+SDK_PACKAGES = "openhands-agent-server==1.16.1.post8 openhands-sdk==1.16.1 openhands-tools==1.16.1"
 CODE_SERVER_VERSION = "4.96.4"
 
 

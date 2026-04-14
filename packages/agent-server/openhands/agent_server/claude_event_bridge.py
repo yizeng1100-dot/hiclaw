@@ -1142,13 +1142,57 @@ def _convert_result_message(message: Any) -> list[Event]:
     permission_denials = getattr(message, 'permission_denials', None) or []
     errors = getattr(message, 'errors', None) or []
 
-    # Failure path — emit AgentErrorEvent with diagnostics.
-    if is_error or (cost == 0.0 and num_turns == 0):
+    # Failure path — emit a concise system message with the real reason
+    # (if we can extract one) and skip the generic "no usable output" fallback
+    # when the bridge already surfaced the actual API error from
+    # AssistantMessage.error on a previous message in this stream.
+    result_text = getattr(message, 'result', None) or ''
+    errors_list = getattr(message, 'errors', None) or []
+    completely_empty = cost == 0.0 and num_turns == 0 and not result_text
+    if is_error or completely_empty:
         _logger.warning(
             f'Claude task finished WITHOUT success: '
             f'subtype={subtype}, is_error={is_error}, num_turns={num_turns}, '
-            f'stop_reason={stop_reason}, duration_ms={duration_ms}, cost=${cost:.4f}'
+            f'stop_reason={stop_reason}, duration_ms={duration_ms}, cost=${cost:.4f}, '
+            f'result={str(result_text)[:200]!r}, errors={errors_list}'
         )
+
+        # Try hardest to surface a human-readable reason. Priority:
+        #   1. result_text (often contains the raw API error body)
+        #   2. errors_list items
+        #   3. stop_reason
+        #   4. fall back to "task ran N turns then stopped"
+        reason_parts: list[str] = []
+        if result_text:
+            reason_parts.append(str(result_text).strip())
+        if errors_list:
+            reason_parts.extend(str(e).strip() for e in errors_list if e)
+        reason = '\n'.join(reason_parts).strip()
+
+        # If we got a concrete reason we show a richer summary. If not, and
+        # the task actually made progress (ran turns), it almost always means
+        # an earlier AssistantMessage.error already surfaced the real cause —
+        # in that case emit a compact "turns summary" line instead of the
+        # misleading "no usable output" text.
+        duration_s = (duration_ms or 0) / 1000.0
+        if reason:
+            summary = (
+                f'❌ Claude task failed after {num_turns} turn(s) in '
+                f'{duration_s:.1f}s\n{reason}'
+            )
+        elif num_turns > 0:
+            summary = (
+                f'❌ Claude task failed after {num_turns} turn(s) in '
+                f'{duration_s:.1f}s · stop={stop_reason or "unknown"}. '
+                f'See the previous error message for details.'
+            )
+        else:
+            summary = (
+                'Claude task ended without producing any output. Likely '
+                'causes: API key invalid, network blocked, or the request '
+                'was silently rejected by the gateway.'
+            )
+
         try:
             from openhands.sdk.event.llm_convertible.observation import (
                 AgentErrorEvent,
@@ -1156,12 +1200,7 @@ def _convert_result_message(message: Any) -> list[Event]:
             return [AgentErrorEvent(
                 tool_name='claude_agent',
                 tool_call_id='',
-                error=(
-                    f'Claude task ended with no usable output '
-                    f'(subtype={subtype}, is_error={is_error}, turns={num_turns}). '
-                    f'Likely causes: API key invalid, network blocked, '
-                    f'or the request was silently rejected.'
-                ),
+                error=summary,
             )]
         except Exception:
             return []
