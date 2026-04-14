@@ -176,6 +176,25 @@ async def fire_schedule(schedule_id: str) -> None:
             task_id=task_id,
             conversation_id=conv_id_for_link,
         )
+        # One-time schedules (DateTrigger) should fire exactly once.
+        # APScheduler removes the in-memory job after fire, but if the
+        # backend restarts within misfire_grace_time the trigger would
+        # be re-registered and fire again. Auto-disable on success so
+        # list_schedules(enabled=True) at next startup skips it.
+        if schedule.schedule.kind == 'one_time':
+            from custom.scheduled_tasks.models import ScheduledTaskUpdate
+
+            await svc.update_schedule(
+                schedule.id, ScheduledTaskUpdate(enabled=False)
+            )
+            try:
+                from custom.scheduled_tasks.scheduler import (
+                    unregister_schedule,
+                )
+
+                unregister_schedule(schedule.id)
+            except Exception:
+                pass
         notify_payload = NotifyFire(
             schedule_id=schedule.id,
             schedule_name=schedule.name,
@@ -221,3 +240,13 @@ async def fire_schedule(schedule_id: str) -> None:
                 await get_notifier().notify(notify_payload)
             except Exception:
                 _logger.exception('notifier raised, swallowing')
+        # Sync next_fire_at after each fire. For one_time/DateTrigger
+        # schedules, APScheduler drops the job after it fires — this
+        # sweep sets next_fire_at to NULL in the DB so the list page
+        # doesn't keep showing a stale "next run" timestamp.
+        try:
+            from custom.scheduled_tasks.scheduler import sync_next_fire_at
+
+            await sync_next_fire_at()
+        except Exception:
+            _logger.exception('post-fire sync_next_fire_at failed, swallowing')

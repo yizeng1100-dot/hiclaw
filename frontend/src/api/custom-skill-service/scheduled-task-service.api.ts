@@ -8,6 +8,7 @@ export type ScheduleKind =
   | "hourly"
   | "daily"
   | "weekly"
+  | "one_time"
   | "custom_cron";
 
 export interface SchedulePayload {

@@ -68,6 +68,14 @@ async def create_scheduled_task(data: ScheduledTaskCreate):
             await scheduler_module.sync_next_fire_at()
         except Exception:
             _logger.exception('failed to register new schedule with scheduler')
+        # Re-fetch so the response includes the next_fire_at that was
+        # just populated by sync_next_fire_at (otherwise the UI shows
+        # null for a freshly-created schedule until it's re-listed).
+        db2 = await get_agent_db()
+        try:
+            created = await ScheduledTaskService(db2).get_schedule(sched_id) or created
+        finally:
+            await db2.close()
 
     return created.model_dump(mode='json') if created else {'id': sched_id}
 

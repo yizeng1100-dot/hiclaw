@@ -21,6 +21,7 @@ const KINDS: { value: ScheduleKind; label: string; hint: string }[] = [
   { value: "every_n_minutes", label: "每 N 分钟", hint: "间隔触发" },
   { value: "hourly", label: "每小时", hint: "每个整点的第 M 分钟" },
   { value: "daily", label: "每天", hint: "每天固定时间" },
+  { value: "one_time", label: "一次性", hint: "指定某个时间点只跑一次" },
   { value: "weekly", label: "每周", hint: "选星期 + 时间" },
   { value: "custom_cron", label: "自定义 cron", hint: "5 字段格式" },
 ];
@@ -58,10 +59,23 @@ function describe(kind: ScheduleKind, params: Record<string, unknown>): string {
       return `${days.join("、") || "每周"} ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
     }
     if (kind === "custom_cron") return `cron: ${params.cron ?? ""}`;
+    if (kind === "one_time") {
+      const run = String(params.run_date ?? "");
+      return run ? `一次性: ${run.replace("T", " ")}` : "一次性";
+    }
   } catch {
     /* fallthrough */
   }
   return `${kind}[${JSON.stringify(params)}]`;
+}
+
+function defaultRunDate(): string {
+  // Seed one_time picker with "now + 5 minutes" rounded to the minute,
+  // formatted for <input type="datetime-local"> (local time, no tz).
+  const d = new Date(Date.now() + 5 * 60_000);
+  d.setSeconds(0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 const DEFAULT_PARAMS: Record<ScheduleKind, Record<string, unknown>> = {
@@ -69,6 +83,7 @@ const DEFAULT_PARAMS: Record<ScheduleKind, Record<string, unknown>> = {
   hourly: { minute: 0 },
   daily: { hour: 9, minute: 0 },
   weekly: { day_of_week: "mon", hour: 9, minute: 0 },
+  one_time: { run_date: defaultRunDate() },
   custom_cron: { cron: "0 9 * * *" },
 };
 
@@ -215,6 +230,21 @@ export function SchedulePicker({ value, onChange }: SchedulePickerProps) {
               />
             </div>
           </div>
+        )}
+
+        {value.kind === "one_time" && (
+          <label className="flex flex-col gap-1 text-xs text-gray-300">
+            执行时间（只跑一次，跑完就不再触发）
+            <input
+              type="datetime-local"
+              value={String(value.params.run_date ?? defaultRunDate())}
+              onChange={(e) => setParam("run_date", e.target.value)}
+              className="w-fit px-2 py-1 bg-[#161b22] border border-[#30363d] rounded text-white text-xs"
+            />
+            <span className="text-[11px] text-gray-600">
+              时间按服务器时区解析（当前 scheduler 环境为 UTC）。
+            </span>
+          </label>
         )}
 
         {value.kind === "custom_cron" && (

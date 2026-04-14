@@ -20,6 +20,7 @@ from typing import Any
 
 from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 
@@ -86,6 +87,20 @@ def schedule_params_to_trigger(kind: str, params: dict[str, Any]) -> BaseTrigger
         except ValueError as e:
             raise InvalidScheduleError(f'invalid cron expression: {e}') from e
 
+    if kind == 'one_time':
+        run_date = params.get('run_date')
+        if not run_date:
+            raise InvalidScheduleError('one_time requires run_date')
+        # DateTrigger accepts ISO strings or datetime objects; naive
+        # datetimes are interpreted in the scheduler's configured
+        # timezone (matches how CronTrigger behaves in the other
+        # kinds). After fire, DateTrigger.get_next_fire_time() returns
+        # None so the job naturally stops without needing cleanup.
+        try:
+            return DateTrigger(run_date=str(run_date))
+        except (ValueError, TypeError) as e:
+            raise InvalidScheduleError(f'invalid run_date: {e}') from e
+
     raise InvalidScheduleError(f'unknown schedule kind: {kind}')
 
 
@@ -118,6 +133,9 @@ def describe_schedule(kind: str, params: dict[str, Any]) -> str:
             )
         if kind == 'custom_cron':
             return f'cron: {params.get("cron", "")}'
+        if kind == 'one_time':
+            run = str(params.get('run_date', ''))
+            return f'一次性: {run.replace("T", " ")}' if run else '一次性'
     except Exception:
         pass
     return f'{kind}[{params}]'
