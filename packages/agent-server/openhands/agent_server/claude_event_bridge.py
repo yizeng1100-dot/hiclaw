@@ -184,7 +184,26 @@ def _accumulate_claude_usage(
     usage: dict[str, Any] | None,
     model: str,
 ) -> dict[str, int]:
-    """Merge Claude's per-message usage into the running stats dict."""
+    """Merge Claude's per-message usage into the running stats dict.
+
+    IMPORTANT: Anthropic's `input_tokens` on every AssistantMessage already
+    contains the full context (system prompt + every previous turn + the
+    current user message). Summing `input_tokens` across messages
+    N-tuple-counts and quickly exceeds the model's context window — which
+    blew the frontend ContextUsageIndicator past 100% ("422.6k / 200.0k")
+    in previous versions.
+
+    For the gauge to be correct:
+      prompt_tokens     = latest message's input_tokens (this IS the current
+                          context fill, because Anthropic replays the whole
+                          conversation each call)
+      completion_tokens = latest message's output_tokens
+      per_turn_token    = prompt + completion
+    So `used = prompt + completion` ≈ current context actually occupied —
+    which is what the gauge is meant to show.
+
+    cache_read / cache_write ARE cumulative (informational side metrics).
+    """
     current: dict[str, int] = stats.setdefault('token_usage', {
         'prompt_tokens': 0,
         'completion_tokens': 0,
@@ -198,8 +217,9 @@ def _accumulate_claude_usage(
         completion = int(usage.get('output_tokens') or 0)
         cache_read = int(usage.get('cache_read_input_tokens') or 0)
         cache_write = int(usage.get('cache_creation_input_tokens') or 0)
-        current['prompt_tokens'] += prompt
-        current['completion_tokens'] += completion
+        # NOT accumulated — see docstring.
+        current['prompt_tokens'] = prompt
+        current['completion_tokens'] = completion
         current['cache_read_tokens'] += cache_read
         current['cache_write_tokens'] += cache_write
         current['per_turn_token'] = prompt + completion
