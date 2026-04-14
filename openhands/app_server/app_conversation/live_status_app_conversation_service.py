@@ -149,6 +149,13 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
     access_token_hard_timeout: timedelta | None
     app_mode: str | None = None
     tavily_api_key: str | None = None
+    # >>> CUSTOM: HiClaw — optional Process-backed sandbox service used when
+    # agent_engine='claude_sdk' so Claude SDK runs on the host instead of in
+    # a docker container (which lacks our fork + Claude CLI). Injected by
+    # the DI wiring when enabled; otherwise left None and the default
+    # sandbox_service is used.
+    sandbox_service_host: SandboxService | None = None
+    # >>> END CUSTOM <<<
     # Class-level tunnel port cache used by _get_cached_tunnel_port(). Declared
     # here so mypy knows the attribute exists on the class object (the method
     # assigns to cls._tunnel_cache_data lazily on first call).
@@ -595,9 +602,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 *[asyncio.wait_for(t, timeout=5) for t in remote_tasks],
                 return_exceptions=True,
             )
-            for result in remote_results:
-                if isinstance(result, ConversationInfo):
-                    conversation_info_by_id[result.id] = result
+            for remote_result in remote_results:
+                if isinstance(remote_result, ConversationInfo):
+                    conversation_info_by_id[remote_result.id] = remote_result
         # >>> END CUSTOM <<<
 
         # Build app_conversation from info
@@ -637,9 +644,10 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             response.raise_for_status()
 
             data = response.json()
-            conversation_info = _conversation_info_type_adapter.validate_python(data)
-            conversation_info = [c for c in conversation_info if c]
-            return conversation_info
+            conversation_info_with_none = (
+                _conversation_info_type_adapter.validate_python(data)
+            )
+            return [c for c in conversation_info_with_none if c is not None]
         except httpx.HTTPStatusError:
             # The runtime API stops idle sandboxes all the time and they return a 404 or a 503.
             # This is normal and should not be considered an error.
@@ -1029,11 +1037,12 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         # >>> END CUSTOM <<<
 
         # Get or create the sandbox
+        sandbox: SandboxInfo
         if not task.request.sandbox_id:
             # First try to find a running sandbox for the current user
             _logger.info('[STARTUP] Step 1a: Looking for existing sandbox...')
-            sandbox = await self._find_running_sandbox_for_user()
-            if sandbox is None:
+            existing = await self._find_running_sandbox_for_user()
+            if existing is None:
                 # No running sandbox found, start a new one
                 _logger.info(
                     '[STARTUP] Step 1b: No existing sandbox, creating new one...'
@@ -1053,6 +1062,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                     f'[STARTUP] Step 1b: Sandbox created, id={sandbox.id}, status={sandbox.status}'
                 )
             else:
+                sandbox = existing
                 _logger.info(
                     f'[STARTUP] Step 1a: Found existing sandbox, id={sandbox.id}, status={sandbox.status}'
                 )
@@ -1861,11 +1871,18 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 bool(user.confirmation_mode), user.security_analyzer
             ),
             initial_message=final_initial_message,
-            secrets=secrets,
+            # The venv-installed agent_server/models.py is stale relative to
+            # packages/agent-server/ and its `secrets` field is typed
+            # narrower than SecretValue (str | SecretProvider). Runtime uses
+            # the local package where this works fine.
+            secrets=secrets,  # type: ignore[arg-type]
             plugins=sdk_plugins,
             hook_config=hook_config,
             # >>> CUSTOM: HiClaw — pass agent_engine to agent-server <<<
-            agent_engine=agent_engine or 'openhands_sdk',
+            # `agent_engine` is added in packages/agent-server/ but the
+            # stale venv snapshot doesn't know about it; type: ignore until
+            # the venv is refreshed.
+            agent_engine=agent_engine or 'openhands_sdk',  # type: ignore[call-arg]
             # >>> END CUSTOM <<<
         )
 
