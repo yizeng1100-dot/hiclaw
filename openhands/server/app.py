@@ -194,9 +194,34 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         import logging
 
         logging.getLogger(__name__).warning(f'HiClaw startup: {e}')
+
+    # >>> CUSTOM: HiClaw — Scheduled tasks (AsyncIOScheduler lifecycle) <<<
+    _scheduled_tasks_shutdown = None
+    try:
+        from custom.scheduled_tasks.scheduler import (
+            shutdown as _sched_shutdown,
+        )
+        from custom.scheduled_tasks.scheduler import (
+            start as _sched_start,
+        )
+
+        await _sched_start()
+        _scheduled_tasks_shutdown = _sched_shutdown
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(f'Scheduled tasks start: {e}')
+    # >>> END CUSTOM <<<
     # >>> END CUSTOM <<<
     async with conversation_manager:
-        yield
+        try:
+            yield
+        finally:
+            if _scheduled_tasks_shutdown is not None:
+                try:
+                    await _scheduled_tasks_shutdown()
+                except Exception:
+                    pass
 
 
 lifespans = [_lifespan, mcp_app.lifespan]
@@ -247,10 +272,12 @@ try:
     from custom.agent_mgmt.router import router as _agent_router
     from custom.agent_mgmt.task_router import router as _task_router
     from custom.file_uploads.router import router as _file_uploads_router
+    from custom.scheduled_tasks.router import router as _scheduled_tasks_router
 
     app.include_router(_agent_router, prefix='/api/v1')
     app.include_router(_task_router, prefix='/api/v1')
     app.include_router(_file_uploads_router, prefix='/api/v1')
+    app.include_router(_scheduled_tasks_router, prefix='/api/v1')
 except ImportError:
     pass
 # >>> END CUSTOM <<<

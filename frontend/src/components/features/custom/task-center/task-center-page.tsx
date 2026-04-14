@@ -136,9 +136,18 @@ export function TaskCenterPage() {
   return (
     <div className="h-full flex flex-col p-6 text-white overflow-auto custom-scrollbar">
       {/* Header */}
-      <div className="mb-5">
-        <h1 className="text-2xl font-bold">任务中心</h1>
-        <p className="text-sm text-gray-400 mt-1">共 {total} 个任务</p>
+      <div className="mb-5 flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">任务中心</h1>
+          <p className="text-sm text-gray-400 mt-1">共 {total} 个任务</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate("/scheduled-tasks")}
+          className="px-4 py-2 bg-[#58a6ff] hover:bg-[#4493f8] text-white rounded-lg text-sm font-medium"
+        >
+          定时任务 →
+        </button>
       </div>
 
       {/* Status Tabs */}

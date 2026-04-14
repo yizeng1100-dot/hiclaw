@@ -12,6 +12,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from custom.agent_mgmt.models import StoredAgent, AgentSkillLink, AgentFavorite, StoredTask
+from custom.scheduled_tasks.models import StoredScheduledTask, StoredScheduledTaskFire
 from openhands.app_server.utils.sql_utils import Base
 
 _engine = None
@@ -41,6 +42,8 @@ async def _ensure_tables():
                     AgentSkillLink.__table__,
                     AgentFavorite.__table__,
                     StoredTask.__table__,
+                    StoredScheduledTask.__table__,
+                    StoredScheduledTaskFire.__table__,
                 ],
             )
         _tables_created = True
