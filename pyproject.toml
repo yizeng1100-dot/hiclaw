@@ -260,6 +260,8 @@ pg8000 = "^1.31.5"
 asyncpg = ">=0.30,<0.32"
 deprecation = "^2.1.0"
 lmnr = "^0.7.20"
+# HiClaw — scheduled tasks (task center cron-like jobs)
+apscheduler = "^3.10"
 
 [tool.poetry.extras]
 third_party_runtimes = [ "e2b-code-interpreter", "modal", "runloop-api-client", "daytona" ]
