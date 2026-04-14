@@ -36,6 +36,7 @@ export default [
     route("tasks/:taskId", "routes/task-detail.tsx"),
     route("scheduled-tasks", "routes/scheduled-task-list.tsx"),
     route("scheduled-tasks/:scheduleId", "routes/scheduled-task-detail.tsx"),
+    route("chat", "routes/chat.tsx"),
     route("my-agents", "routes/my-agents.tsx"),
     // >>> END CUSTOM <<<
     route("oauth/device/verify", "routes/device-verify.tsx"),

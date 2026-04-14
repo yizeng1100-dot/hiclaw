@@ -11,6 +11,7 @@ import { SkillManagementButton } from "#/components/shared/buttons/skill-managem
 import { AgentCenterButton } from "#/components/shared/buttons/agent-center-button";
 import { MyAgentsButton } from "#/components/shared/buttons/my-agents-button";
 import { TaskCenterButton } from "#/components/shared/buttons/task-center-button";
+import { ChatButton } from "#/components/shared/buttons/chat-button";
 // >>> END CUSTOM <<<
 import { SettingsModal } from "#/components/shared/modals/settings/settings-modal";
 import { useSettings } from "#/hooks/query/use-settings";
@@ -41,9 +42,11 @@ export function Sidebar() {
   React.useEffect(() => {
     if (pathname === "/settings") {
       setSettingsModalIsOpen(false);
-    // >>> CUSTOM: HiClaw — disable auto-open LLM settings modal <<<
-    // LLM config is done via config files, not UI. Will re-enable later.
-    } else if (false &&
+      // >>> CUSTOM: HiClaw — disable auto-open LLM settings modal <<<
+      // LLM config is done via config files, not UI. Will re-enable later.
+    } else if (
+      // eslint-disable-next-line no-constant-condition
+      false &&
       !isFetchingSettings &&
       settingsIsError &&
       settingsError?.status !== 404
@@ -100,6 +103,7 @@ export function Sidebar() {
             <AgentCenterButton />
             <MyAgentsButton />
             <TaskCenterButton />
+            <ChatButton />
             {/* >>> END CUSTOM <<< */}
           </div>
 

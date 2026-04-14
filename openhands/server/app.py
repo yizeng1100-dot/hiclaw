@@ -271,6 +271,7 @@ app.include_router(_hiclaw_skills.router)
 try:
     from custom.agent_mgmt.router import router as _agent_router
     from custom.agent_mgmt.task_router import router as _task_router
+    from custom.chatbot.router import router as _chatbot_router
     from custom.file_uploads.router import router as _file_uploads_router
     from custom.scheduled_tasks.router import router as _scheduled_tasks_router
 
@@ -278,6 +279,7 @@ try:
     app.include_router(_task_router, prefix='/api/v1')
     app.include_router(_file_uploads_router, prefix='/api/v1')
     app.include_router(_scheduled_tasks_router, prefix='/api/v1')
+    app.include_router(_chatbot_router, prefix='/api/v1')
 except ImportError:
     pass
 # >>> END CUSTOM <<<
