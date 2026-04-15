@@ -8,6 +8,10 @@ import { StatsBar } from "./stats-bar";
 import { FilterBar } from "./filter-bar";
 import { TaskGrid } from "./task-grid";
 import { EditTaskModal } from "./edit-task-modal";
+import { MonthCalendar } from "./month-calendar";
+import { UpcomingRuns } from "./upcoming-runs";
+import { TaskHistoryModal } from "./task-history-modal";
+import { HolidayManagerModal } from "./holiday-manager-modal";
 import { useCommandScheduler } from "./use-command-scheduler";
 
 // `null` = modal closed, `undefined` = creating new, CommandSchedule = editing
@@ -28,6 +32,10 @@ export function CommandSchedulerPage() {
   } = useCommandScheduler();
 
   const [editing, setEditing] = React.useState<EditingState>(null);
+  const [historyFor, setHistoryFor] = React.useState<CommandSchedule | null>(
+    null,
+  );
+  const [holidayModal, setHolidayModal] = React.useState(false);
 
   return (
     <div className="h-full flex flex-col text-white bg-[#0d1117]">
@@ -43,7 +51,7 @@ export function CommandSchedulerPage() {
         q={filter.q || ""}
         onChange={setFilter}
         onNew={() => setEditing(undefined)}
-        onHolidays={() => window.alert("节假日管理: 后续")}
+        onHolidays={() => setHolidayModal(true)}
         onPauseAll={async () => {
           if (window.confirm("确定暂停所有任务?")) {
             await CommandSchedulerService.pauseAll();
@@ -63,11 +71,15 @@ export function CommandSchedulerPage() {
             loading={loading}
             onRun={runNow}
             onEdit={(s) => setEditing(s)}
-            onHistory={() => window.alert("历史 modal: 后续")}
+            onHistory={(s) => setHistoryFor(s)}
             onToggle={toggleEnabled}
             onDelete={remove}
           />
         </div>
+        <aside className="w-[280px] border-l border-[#30363d] p-3 overflow-y-auto custom-scrollbar">
+          <MonthCalendar />
+          <UpcomingRuns schedules={schedules} />
+        </aside>
       </div>
       {editing !== null && (
         <EditTaskModal
@@ -75,6 +87,15 @@ export function CommandSchedulerPage() {
           onClose={() => setEditing(null)}
           onSaved={refresh}
         />
+      )}
+      {historyFor && (
+        <TaskHistoryModal
+          schedule={historyFor}
+          onClose={() => setHistoryFor(null)}
+        />
+      )}
+      {holidayModal && (
+        <HolidayManagerModal onClose={() => setHolidayModal(false)} />
       )}
     </div>
   );
