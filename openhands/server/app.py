@@ -212,6 +212,29 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         logging.getLogger(__name__).warning(f'Scheduled tasks start: {e}')
     # >>> END CUSTOM <<<
+
+    # >>> CUSTOM: HiClaw — Command Scheduler (shell commands, shared APScheduler) <<<
+    try:
+        from custom.command_scheduler.db import get_cs_db as _cs_db_get
+        from custom.command_scheduler.holidays import (
+            sync_preset_holidays as _cs_sync_holidays,
+        )
+        from custom.command_scheduler.scheduler_integration import (
+            init as _cs_init,
+        )
+
+        _cs_db = await _cs_db_get()
+        try:
+            await _cs_sync_holidays(_cs_db)
+        finally:
+            await _cs_db.close()
+
+        await _cs_init()
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(f'command_scheduler start: {e}')
+    # >>> END CUSTOM <<<
     # >>> END CUSTOM <<<
     async with conversation_manager:
         try:
@@ -272,6 +295,7 @@ try:
     from custom.agent_mgmt.router import router as _agent_router
     from custom.agent_mgmt.task_router import router as _task_router
     from custom.chatbot.router import router as _chatbot_router
+    from custom.command_scheduler.router import router as _cs_router
     from custom.file_uploads.router import router as _file_uploads_router
     from custom.scheduled_tasks.router import router as _scheduled_tasks_router
 
@@ -280,6 +304,7 @@ try:
     app.include_router(_file_uploads_router, prefix='/api/v1')
     app.include_router(_scheduled_tasks_router, prefix='/api/v1')
     app.include_router(_chatbot_router, prefix='/api/v1')
+    app.include_router(_cs_router, prefix='/api/v1')
 except ImportError:
     pass
 # >>> END CUSTOM <<<

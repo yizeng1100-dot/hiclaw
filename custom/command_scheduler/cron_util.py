@@ -65,6 +65,5 @@ def describe(
         return f'每周 {dow} · {hm}'
     if kind == 'monthly':
         return f'每月 {dom} 号 · {hm}'
-    if kind == 'yearly':
-        return f'每年 {mon} 月 {dom} 日 · {hm}'
-    return cron_expr
+    # kind == 'yearly' (ScheduleKind is exhausted; one_time returned above)
+    return f'每年 {mon} 月 {dom} 日 · {hm}'
