@@ -1,10 +1,17 @@
 /* eslint-disable i18next/no-literal-string, no-alert */
 import React from "react";
-import { CommandSchedulerService } from "#/api/custom-skill-service/command-scheduler.api";
+import {
+  CommandSchedule,
+  CommandSchedulerService,
+} from "#/api/custom-skill-service/command-scheduler.api";
 import { StatsBar } from "./stats-bar";
 import { FilterBar } from "./filter-bar";
 import { TaskGrid } from "./task-grid";
+import { EditTaskModal } from "./edit-task-modal";
 import { useCommandScheduler } from "./use-command-scheduler";
+
+// `null` = modal closed, `undefined` = creating new, CommandSchedule = editing
+type EditingState = CommandSchedule | undefined | null;
 
 export function CommandSchedulerPage() {
   const {
@@ -20,6 +27,8 @@ export function CommandSchedulerPage() {
     remove,
   } = useCommandScheduler();
 
+  const [editing, setEditing] = React.useState<EditingState>(null);
+
   return (
     <div className="h-full flex flex-col text-white bg-[#0d1117]">
       <div className="px-5 py-3 border-b border-[#30363d]">
@@ -33,7 +42,7 @@ export function CommandSchedulerPage() {
         envTag={filter.env_tag}
         q={filter.q || ""}
         onChange={setFilter}
-        onNew={() => window.alert("新建任务 modal: 下一步")}
+        onNew={() => setEditing(undefined)}
         onHolidays={() => window.alert("节假日管理: 后续")}
         onPauseAll={async () => {
           if (window.confirm("确定暂停所有任务?")) {
@@ -53,13 +62,20 @@ export function CommandSchedulerPage() {
             schedules={schedules}
             loading={loading}
             onRun={runNow}
-            onEdit={() => window.alert("编辑 modal: 下一步")}
+            onEdit={(s) => setEditing(s)}
             onHistory={() => window.alert("历史 modal: 后续")}
             onToggle={toggleEnabled}
             onDelete={remove}
           />
         </div>
       </div>
+      {editing !== null && (
+        <EditTaskModal
+          initial={editing || undefined}
+          onClose={() => setEditing(null)}
+          onSaved={refresh}
+        />
+      )}
     </div>
   );
 }
