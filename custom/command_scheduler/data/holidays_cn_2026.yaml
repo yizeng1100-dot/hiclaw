@@ -1,0 +1,40 @@
+# 2026 China statutory holidays.
+# Source: placeholder draft — verify against the latest State Council release
+# before shipping. Users can add their own via the Holiday Manager UI.
+year: 2026
+holidays:
+  - {date: "2026-01-01", name: "元旦"}
+  - {date: "2026-02-16", name: "春节"}
+  - {date: "2026-02-17", name: "春节"}
+  - {date: "2026-02-18", name: "春节"}
+  - {date: "2026-02-19", name: "春节"}
+  - {date: "2026-02-20", name: "春节"}
+  - {date: "2026-02-21", name: "春节"}
+  - {date: "2026-02-22", name: "春节"}
+  - {date: "2026-04-04", name: "清明节"}
+  - {date: "2026-04-05", name: "清明节"}
+  - {date: "2026-04-06", name: "清明节"}
+  - {date: "2026-05-01", name: "劳动节"}
+  - {date: "2026-05-02", name: "劳动节"}
+  - {date: "2026-05-03", name: "劳动节"}
+  - {date: "2026-05-04", name: "劳动节"}
+  - {date: "2026-05-05", name: "劳动节"}
+  - {date: "2026-06-19", name: "端午节"}
+  - {date: "2026-06-20", name: "端午节"}
+  - {date: "2026-06-21", name: "端午节"}
+  - {date: "2026-09-25", name: "中秋节"}
+  - {date: "2026-09-26", name: "中秋节"}
+  - {date: "2026-09-27", name: "中秋节"}
+  - {date: "2026-10-01", name: "国庆节"}
+  - {date: "2026-10-02", name: "国庆节"}
+  - {date: "2026-10-03", name: "国庆节"}
+  - {date: "2026-10-04", name: "国庆节"}
+  - {date: "2026-10-05", name: "国庆节"}
+  - {date: "2026-10-06", name: "国庆节"}
+  - {date: "2026-10-07", name: "国庆节"}
+  - {date: "2026-10-08", name: "国庆节"}
+makeup_workdays:
+  - {date: "2026-02-14", name: "春节调休上班"}
+  - {date: "2026-02-28", name: "春节调休上班"}
+  - {date: "2026-09-19", name: "中秋调休上班"}
+  - {date: "2026-10-10", name: "国庆调休上班"}
