@@ -48,6 +48,16 @@ def _get_scheduler() -> AsyncIOScheduler:
     return _scheduler
 
 
+def get_shared_scheduler() -> AsyncIOScheduler:
+    """Public accessor for the shared HiClaw AsyncIOScheduler instance.
+
+    Used by other custom modules (e.g. command_scheduler) that want to
+    register their own APScheduler jobs onto the same instance so we
+    only have one event loop to manage.
+    """
+    return _get_scheduler()
+
+
 def is_running() -> bool:
     return _scheduler is not None and _scheduler.running
 

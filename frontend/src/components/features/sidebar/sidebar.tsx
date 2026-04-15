@@ -12,6 +12,7 @@ import { AgentCenterButton } from "#/components/shared/buttons/agent-center-butt
 import { MyAgentsButton } from "#/components/shared/buttons/my-agents-button";
 import { TaskCenterButton } from "#/components/shared/buttons/task-center-button";
 import { ChatButton } from "#/components/shared/buttons/chat-button";
+import { CommandSchedulerButton } from "#/components/shared/buttons/command-scheduler-button";
 // >>> END CUSTOM <<<
 import { SettingsModal } from "#/components/shared/modals/settings/settings-modal";
 import { useSettings } from "#/hooks/query/use-settings";
@@ -103,6 +104,7 @@ export function Sidebar() {
             <AgentCenterButton />
             <MyAgentsButton />
             <TaskCenterButton />
+            <CommandSchedulerButton />
             <ChatButton />
             {/* >>> END CUSTOM <<< */}
           </div>
