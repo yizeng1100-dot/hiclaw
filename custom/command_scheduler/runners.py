@@ -1,7 +1,10 @@
 """Pluggable command runners.
 
-P1a: subprocess runner — for local testing + as fallback
-P1b: sandbox runner — added in Task 7
+- ``subprocess_runner``: spawns a child process of HiClaw's backend.
+  The P1 default — see ``sandbox_manager`` for the reasoning.
+- ``sandbox_runner``: thin adapter that delegates to a future dedicated
+  shell-exec sandbox. Raises ``NotImplementedError`` in P1 because the
+  sandbox is stubbed (see ``sandbox_manager``).
 """
 
 from __future__ import annotations
@@ -36,3 +39,15 @@ async def subprocess_runner(
         stdout=stdout_b.decode('utf-8', errors='replace'),
         stderr=stderr_b.decode('utf-8', errors='replace'),
     )
+
+
+async def sandbox_runner(
+    command: str, working_dir: str | None, timeout_sec: int
+) -> RunResult:
+    """P2+ placeholder — delegates to the sandbox_manager stub."""
+    from custom.command_scheduler.sandbox_manager import exec_in_sandbox
+
+    exit_code, stdout, stderr = await exec_in_sandbox(
+        command, working_dir, timeout_sec
+    )
+    return RunResult(exit_code=exit_code, stdout=stdout, stderr=stderr)

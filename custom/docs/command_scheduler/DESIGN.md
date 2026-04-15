@@ -85,32 +85,43 @@ HiClaw 已经在 `custom/scheduled_tasks/` 里有一套"定时触发 agent"的�
 
 ### ADR-02 Sandbox 执行策略
 
-**决策**：P1 用**一个常驻的 Process sandbox**，所有命令都塞进去 `exec_command`。venv 预装在 sandbox 里。
+**最终决策（2026-04-15 实现阶段修正）**：P1 用 **`asyncio.create_subprocess_shell` 直接 fork 子进程**（`custom/command_scheduler/runners.py::subprocess_runner`）。命令以 HiClaw 后端进程为父进程直接执行。
 
-**考虑的方案**：
-- A. 常驻单 sandbox（采纳）
-- B. 每任务独占 sandbox —— 状态隔离好，但启动慢、数量多
-- C. 每次触发新建 sandbox —— 最干净，每次 ~秒级开销，调度密集时不可接受
+**为什么原计划行不通**：
+P1 原本计划复用 HiClaw 的 `ProcessSandboxService`，作为一个常驻的 shell-exec sandbox。**实现时发现这个假设错了** —— 该 service 的 `start_sandbox` 实际上是启动一个 **agent-server HTTP 进程**（见 `openhands/app_server/sandbox/process_sandbox_service.py::_start_agent_process`），没有 `exec_command` 接口。Agent 里跑 shell 命令是通过 agent-server 的 bash tool HTTP API 走的，对定时任务 dispatch 是个过重且别扭的路径。
 
-**理由**：
-- 这是**内部工具**、命令是**可信的**，状态污染由用户在脚本里自己负责（写 `cd /opt/scripts/xxx` 或用绝对路径即可）
-- Process sandbox 比 Docker 轻量得多，无 docker 依赖
-- 一个 sandbox 常驻，venv 只装一次，网络/DNS 配置只做一次
+**替代方案评估**：
+- A. 直接 `subprocess.create_subprocess_shell`（采纳）—— 简单、0 额外依赖、符合 P1 范围
+- B. 借道 agent-server 的 bash tool —— 每条命令要开/复用 HiClaw conversation，延迟和复杂度都不值
+- C. 自己做一个 shell-exec 专用 sandbox（systemd-nspawn / cgroup / pid namespace）—— P2+ 的事
+- D. Docker 容器执行 —— 要 docker daemon，内部工具不值这个依赖
 
-**退出条件**：如果方案 A 跑出问题（比如状态污染频繁、内存泄漏），降级到"每任务一个 sandbox"或直接 subprocess。
+**用户明确同意这条路**（2026-04-15 对话）：
+> "用 HiClaw sandbox 先试一下，不行再进程级"
 
-**为什么 Process 不是 Docker**：Process sandbox 在 HiClaw host 上直接 fork 进程，毫秒级，无容器拉镜像开销；Docker 需要 hiclaw host 有 docker daemon 权限，且每次启动需要网络初始化。
+现在就是"不行"的情况，进程级是明确的兜底。
+
+**安全和边界**（见 §11）：subprocess 和 HiClaw 后端共享权限，是**部门内部工具的信任模型**。没有做 cgroup / seccomp / chroot 限制。不要把这套东西暴露到公网。
+
+**venv 和工作目录**：`subprocess_runner` 不强制工作目录；每条任务自己在命令里 `cd` 或用绝对路径。预装 venv 的事情降级成"给用户一个推荐路径（`/opt/hiclaw/command_scheduler/venv`），让他们自己按需建/维护"。**P1 不再由 HiClaw 自动 provision venv**。
+
+**未来升级路径**（P2+）：`custom/command_scheduler/sandbox_manager.py` 保留为 stub，`runners.py::sandbox_runner` 也保留。将来做了专用 shell-exec sandbox，只需填实 `sandbox_manager.exec_in_sandbox` 并在 `fire.py` 里把 `subprocess_runner` 换成 `sandbox_runner`，其他代码不动。
 
 ### ADR-03 venv 预装范围
 
-**决策**：预装"**基础包**" —— `requests`, `httpx`, `python-dateutil`, `pyyaml`, `openpyxl`, `pandas`。
+**最终决策（2026-04-15 修正，随 ADR-02 一起调整）**：P1 **不自动 provision venv**。用户自己在部署 HiClaw 的机器上装任何需要的 Python 环境，命令里按需 `source xxx/bin/activate` 即可。
 
-**考虑的方案**：
-- A. 空 venv —— 用户自己装，体验差
-- B. 基础包（采纳）
-- C. 重型（含 matplotlib, numpy, sqlalchemy…）—— 90% 用不到，浪费磁盘和下载时间
+**为什么变了**：ADR-02 从 "HiClaw sandbox 常驻 + 预装 venv" 降级到了 "subprocess 直跑"，既然不是在隔离 sandbox 里，就没必要让 HiClaw 自己建 venv —— 部门的脚本本来就会依赖系统 Python / 已有 venv，强行预装一个新 venv 反而增加环境维护成本。
 
-**理由**：部门的 NPS 通报、数据通告大概率走 HTTP（`requests` / `httpx`）、读 Excel（`openpyxl`）、处理数据（`pandas`）。这是个"够用就行"的默认，用户缺包可以自己 `pip install`。
+**推荐路径（文档引导）**：
+- 脚本统一放 `/opt/hiclaw/command_scheduler/workspace/{subfolder}/`
+- 如果要 Python venv，部署时 `python -m venv /opt/hiclaw/command_scheduler/venv` 手动建，然后 `pip install requests httpx python-dateutil pyyaml openpyxl pandas`（或任何业务需要的包）
+- USER_GUIDE.md 会把这个路径作为示例，但不是强制约定
+
+**备选（被否决）**：
+- A. 空 venv 自动建 —— 用户还是要自己 pip install，不如直接让他们全部手动
+- B. 基础包预装（原方案） —— P1 sandbox 已被砍，失去了"预装一次到处跑"的价值
+- C. 重型预装 —— 同上
 
 ### ADR-04 节假日策略（升级原系统）
 
