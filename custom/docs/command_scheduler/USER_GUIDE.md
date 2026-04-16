@@ -37,7 +37,9 @@ HiClaw 的 **定时任务中心** 是一个"帮你每天/每周/每月自动跑�
 - **环境标签**：`正式` 还是 `测试`。只是打标签方便筛选，不影响执行
 - **命令类型**：`Linux` 还是 `Windows`
 
-  > ⚠️ **Windows 命令目前只能保存、不能执行**。将来部署 Windows Runner 后会自动点亮，P1 阶段选了 Windows 只能看、不能跑。
+  > **Linux 命令**：由 HiClaw 后端进程直接执行（subprocess），在 HiClaw 所在的 Linux 机器上跑。
+  >
+  > **Windows 命令**：需要你那台 Windows 机器上装并运行 **HiClaw Windows Runner**（一个小 Python 脚本，每 10s 轮询 HiClaw）。装好后 Windows 任务就能自动执行、结果自动回传。详细部署见 `tools/windows_runner/README.md`。如果 Runner 没装、或没在运行，Windows 任务卡片会一直显示 `pending_runner` 状态。
 
 ### 3.2 调度
 
@@ -93,7 +95,8 @@ python send_nps.py --env prod
 | 🟢 `success` | 退出码 0 |
 | 🔴 `failed` | 退出码 ≠ 0 或异常 |
 | 🟡 `timeout` | 超过 `最大执行时长` 被杀 |
-| ⚫ `skipped` | 上一次还没跑完（`prev_running`）/ 节假日 / Windows 暂存 |
+| ⚫ `skipped` | 上一次还没跑完（`prev_running`）/ 节假日 |
+| 🔷 `pending_runner` | Windows 任务等待 Runner 接活。Runner 在线会秒变 `running` |
 | 🔵 `running` | 正在跑 |
 
 点任意一次运行进入详情页：
@@ -171,7 +174,7 @@ python send_nps.py --env prod
 1. 看任务卡片 `下次执行时间` 是不是未来时刻
 2. 看任务是不是 `enabled`
 3. 看 `节假日策略` 是不是把今天跳过了
-4. 看 `命令类型` 是不是 `Windows`（会 skipped）
+4. 看 `命令类型` 是不是 `Windows` —— 如果是，fire 会卡在 `pending_runner`，看你那台 Windows 上的 Runner 有没有在跑（`tools/windows_runner/README.md`）
 5. 以上都对但还是没跑，联系平台维护者查 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)
 
 ### Q5. 我要改一个已经存在的任务
@@ -189,8 +192,13 @@ P1 阶段**只是筛选标签**，不影响任何执行行为。你可以用它�
 ### Q9. 我手误删了任务的 fires / 日志能恢复吗
 不能。删任务是级联删除，fires 和日志文件都会被清掉。删前请确认。
 
-### Q10. Windows 命令什么时候能真正执行
-等 Windows Runner 组件上线。没有确定时间表，关注 DESIGN.md §9 "P3 延伸" 部分。
+### Q10. 怎么启用 Windows 命令执行？
+1. 在 Windows 机器上装 Python 3.9+ 和 `requests`（`pip install requests`）
+2. 把 `tools/windows_runner/hiclaw_windows_runner.py` 拷过去（例如 `C:\tools\`）
+3. 起脚本：`python hiclaw_windows_runner.py --hiclaw-url http://<host>:12000 --api-key <key>`
+4. 开机自启：用 Windows Task Scheduler 或 NSSM，详见 [`tools/windows_runner/README.md`](../../tools/windows_runner/README.md)
+
+Runner 装好之后，在 HiClaw UI 里新建 `命令类型=Windows` 的任务就能自动执行。
 
 ---
 

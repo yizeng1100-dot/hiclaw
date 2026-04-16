@@ -137,15 +137,35 @@ P1 原本计划复用 HiClaw 的 `ProcessSandboxService`，作为一个常驻的
 
 **理由**：节假日表反正要做，顺手加个策略字段成本很低，但给部门提供了新能力（例如 "NPS 通报在国庆前一天就推出"）。
 
-### ADR-05 Windows 命令"暂存"
+### ADR-05 Windows 命令 —— Pull-model Runner（P2 落地）
 
-**决策**：加 `shell_kind` 字段（`linux / windows`）：
-- `linux` —— 正常调度执行
-- `windows` —— 只存配置，**不触发**。UI 上标记灰色 `⚠ Windows 命令 — 待 Windows Runner 上线`，触发时刻到了也不执行，`command_fires` 记录一条 `status=skipped, reason=windows_not_supported`
+**P1 最终决策**：`shell_kind=windows` 任务只存配置，触发时 `command_fires` 记 `status=skipped, reason=windows_not_supported`。UI 上标记灰色 `⚠ Windows 暂存`。
 
-**理由**：部门以后"要在 Linux 上部署"，但 HiClaw 目前的 sandbox 不跑 Windows。先保证配置能存、界面能看、后续接 Windows Runner 组件时一次点亮所有 Windows 任务。
+**P2 升级（2026-04-16）**：Windows 任务由运行在 Windows 机器上的独立 runner 脚本负责执行。**Pull 模型** —— runner 主动出网轮询 HiClaw 获取任务，执行完回传结果。
 
-**退出条件**：未来加 Windows Runner（独立进程挂在一台 Windows 机器上，通过 HTTP 拉任务），把 `windows` 的 dispatch 路径接通。
+**触发链路（P2）**：
+1. 调度时刻到，executor 创建 fire 行，状态标为 `pending_runner`（P1 的 `skipped: windows_not_supported` 路径被移除）
+2. Windows 上的 runner 每 10s 调 `GET /api/v1/command-scheduler/windows-runner/pending` 拿到所有 `pending_runner` 的 fire + schedule 命令
+3. 逐个 `POST /windows-runner/fires/{id}/start` 抢占（冲突返回 409，换下一个），然后本地 `subprocess.run(command, shell=True)` 执行
+4. 执行完 `POST /windows-runner/fires/{id}/complete` 回传 exit_code + stdout + stderr + status，服务端写全量日志 + DB tail，转成 `success/failed/timeout`
+5. 每次循环 `POST /windows-runner/heartbeat`，UI 能看到 runner 是否在线
+
+**为什么 Pull 不 Push**：
+- 推模型（AWS 主动 SSH/WinRM 到 Windows）需要 Windows 暴露入站端口，跨 NAT / 公司内网 / VPN 全都要配防火墙 —— 合规门槛高
+- 拉模型只要 Windows 能**出站访问 HiClaw**，哪怕换 Wi-Fi / 出差 / 家用路由器都能跑（2026-04-16 实测：用户从 123.138.24.219 出网访问 AWS 可达，反向 22/3389 全部 timeout → pull 是唯一选项）
+- Runner 是单文件 Python，部署简单，可 Task Scheduler / NSSM 开机自启
+
+**认证**：可选的 `HICLAW_WINDOWS_RUNNER_KEY` 环境变量。设置则 runner 请求必须带 `X-HiClaw-Runner-Key` header，不匹配 401。未设置则关闭 auth（纯内网部署可用）。
+
+**多 runner / 多机器**：
+- 当前支持"一组 windows 任务 + 一组 runner"。Fire 抢占靠 `/start` 接口的 409 race guard，多个 runner 并行抢不会重复执行
+- 未来多 Windows 机器路由：加 `windows_host_tag` 字段给 schedule，runner 带 `--tags a,b` 启动只拉匹配的 fire —— P3
+
+**相关文件**：
+- `custom/command_scheduler/router.py` — 5 个 `/windows-runner/*` 端点
+- `custom/command_scheduler/executor.py` — `shell_kind == 'windows'` 分支
+- `tools/windows_runner/hiclaw_windows_runner.py` — runner 脚本
+- `tools/windows_runner/README.md` — 部署手册
 
 ### ADR-06 任务 ID 生成方式
 
