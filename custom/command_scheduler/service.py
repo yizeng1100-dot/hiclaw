@@ -245,6 +245,24 @@ class CommandScheduleService:
             row.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await self.db.commit()
 
+    async def list_pending_runner_fires(self) -> list[tuple[StoredCommandFire, StoredCommandSchedule]]:
+        """All fires stuck in ``pending_runner`` plus their schedule rows.
+
+        Used by the Windows runner pull endpoint to hand out work.
+        Oldest fires first so nothing starves.
+        """
+        stmt = (
+            select(StoredCommandFire, StoredCommandSchedule)
+            .join(
+                StoredCommandSchedule,
+                StoredCommandFire.schedule_id == StoredCommandSchedule.id,
+            )
+            .where(StoredCommandFire.status == 'pending_runner')
+            .order_by(StoredCommandFire.started_at)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.all())
+
     async def has_running_fire_excluding(
         self, schedule_id: str, fire_id: str
     ) -> bool:

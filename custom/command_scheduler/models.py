@@ -171,3 +171,34 @@ class HolidayCheckResult(BaseModel):
     is_makeup_workday: bool
     is_workday: bool
     name: str | None = None
+
+
+# ─── Windows runner protocol ────────────────────────────────────────
+
+
+class PendingFireForRunner(BaseModel):
+    """What the Windows runner needs to execute one fire."""
+
+    fire_id: str
+    schedule_id: str
+    schedule_name: str
+    command: str
+    working_dir: str | None
+    max_duration_sec: int
+    created_at: datetime
+
+
+class RunnerCompleteRequest(BaseModel):
+    """Result payload the runner posts after finishing a fire."""
+
+    exit_code: int
+    stdout: str = ''
+    stderr: str = ''
+    # Optional: runner can explicitly mark the fire as 'timeout' even if
+    # it managed to kill the process; otherwise we classify by exit_code.
+    status: Literal['success', 'failed', 'timeout'] | None = None
+
+
+class RunnerHeartbeatRequest(BaseModel):
+    runner_id: str  # arbitrary tag — hostname / user-supplied
+    runner_version: str = '1.0.0'
