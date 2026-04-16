@@ -258,6 +258,19 @@ case "$MODE" in
         exit 1 ;;
 esac
 
+# ─── Sandbox-visible environment defaults ───
+# These are read by scripts running inside the conversation sandbox
+# (process_sandbox_service copies the parent env verbatim). Set
+# defaults here so a fresh install works out of the box, and let
+# deployments override them by pre-exporting before launching:
+#     PERFETTO_UI_URL=https://perfetto.rnd.hihonor.com/ bash deploy/start.sh pro
+#
+# If the user already exported PERFETTO_UI_URL, keep their value;
+# otherwise fall back to the public Perfetto UI. Intranet deployments
+# should preset this to their self-hosted Perfetto UI so render /
+# perf screenshot scripts don't try to reach the blocked public host.
+export PERFETTO_UI_URL="${PERFETTO_UI_URL:-https://ui.perfetto.dev}"
+
 # ─── Build frontend if source changed ───
 if [ -d "$PROJECT_DIR/frontend" ] && command -v npm &>/dev/null; then
     FRONTEND_BUILD="$PROJECT_DIR/frontend/build/client/index.html"
