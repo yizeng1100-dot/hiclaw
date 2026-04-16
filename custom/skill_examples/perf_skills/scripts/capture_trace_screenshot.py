@@ -841,11 +841,16 @@ def _scroll_to_process_area(page, process_name: str | None, jank_category: str =
         print(f"[screenshot]   Scroll failed: {e}")
 
 
+_DEFAULT_PERFETTO_URL = os.environ.get(
+    "PERFETTO_UI_URL", "https://ui.perfetto.dev"
+)
+
+
 def capture_screenshots(
     trace_path: str,
     issues: list[IssueRegion],
     output_dir: Path,
-    perfetto_url: str = "https://ui.perfetto.dev",
+    perfetto_url: str = _DEFAULT_PERFETTO_URL,
     process_name: str | None = None,
     top_n: int = 5,
 ) -> list[ScreenshotResult]:
@@ -1027,7 +1032,15 @@ def main():
     parser.add_argument("--trace", required=True, help="Path to .perfetto-trace file")
     parser.add_argument("--analysis-dir", required=True, help="Directory with analysis JSON outputs")
     parser.add_argument("--output-dir", default=None, help="Output directory for screenshots")
-    parser.add_argument("--perfetto-url", default="https://ui.perfetto.dev", help="Perfetto UI URL")
+    parser.add_argument(
+        "--perfetto-url",
+        default=_DEFAULT_PERFETTO_URL,
+        help=(
+            "Perfetto UI URL. Defaults to $PERFETTO_UI_URL env var if set, "
+            "else https://ui.perfetto.dev. Intranet deployments should export "
+            "PERFETTO_UI_URL=https://<internal-perfetto-ui>/"
+        ),
+    )
     parser.add_argument("--process-name", default=None, help="Target process name (auto-detected if omitted)")
     parser.add_argument("--top-n", type=int, default=5, help="Number of top issues to capture (default: 5)")
     parser.add_argument("--min-memory-mb", type=int, default=500)
