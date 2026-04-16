@@ -25,7 +25,14 @@ ScheduleKind = Literal['one_time', 'daily', 'weekly', 'monthly', 'yearly']
 HolidayPolicy = Literal['normal', 'skip', 'run_before', 'run_after']
 ShellKind = Literal['linux', 'windows']
 EnvTag = Literal['formal', 'test']
-FireStatus = Literal['running', 'success', 'failed', 'timeout', 'skipped']
+FireStatus = Literal[
+    'running',
+    'success',
+    'failed',
+    'timeout',
+    'skipped',
+    'pending_runner',
+]
 TriggerSource = Literal['scheduled', 'manual']
 
 

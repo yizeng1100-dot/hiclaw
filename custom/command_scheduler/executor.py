@@ -49,7 +49,12 @@ async def execute(
         return fire.id
 
     if schedule.shell_kind == 'windows':
-        await _mark_skipped(svc, fire.id, 'windows_not_supported')
+        # Windows commands are executed by a separate pull-model runner
+        # (see tools/windows_runner/). We leave the fire in
+        # ``pending_runner`` state; the runner will flip it to
+        # ``running`` when it picks up the work and finally to
+        # ``success`` / ``failed`` / ``timeout`` via the runner API.
+        await svc.update_fire(fire.id, status='pending_runner')
         return fire.id
 
     hsvc = HolidayService(db)
