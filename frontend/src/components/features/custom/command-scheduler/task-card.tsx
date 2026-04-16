@@ -40,8 +40,11 @@ export function TaskCard({
               {envBadge.text}
             </span>
             {windowsBadge && (
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">
-                ⚠ Windows 暂存
+              <span
+                className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-cyan-900/40 text-cyan-300"
+                title="需要在 Windows 上跑 runner 才会执行"
+              >
+                Windows Runner
               </span>
             )}
           </div>

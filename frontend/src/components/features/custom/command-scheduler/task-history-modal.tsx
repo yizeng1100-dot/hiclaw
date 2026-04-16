@@ -13,6 +13,7 @@ const STATUS_COLOR: Record<string, string> = {
   timeout: "bg-orange-900/40 text-orange-400",
   skipped: "bg-gray-800 text-gray-400",
   running: "bg-blue-900/40 text-blue-400",
+  pending_runner: "bg-cyan-900/40 text-cyan-400",
 };
 
 export function TaskHistoryModal({

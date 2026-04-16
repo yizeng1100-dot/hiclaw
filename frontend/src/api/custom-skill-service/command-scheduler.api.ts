@@ -14,7 +14,8 @@ export type FireStatus =
   | "success"
   | "failed"
   | "timeout"
-  | "skipped";
+  | "skipped"
+  | "pending_runner";
 export type TriggerSource = "scheduled" | "manual";
 
 export interface CommandSchedule {
