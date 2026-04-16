@@ -206,6 +206,15 @@ select_pro() {
     fi
     PYTHON="$RUNTIME_DIR/hiclaw-python"
     UVICORN="$RUNTIME_DIR/hiclaw-uvicorn"
+    # Expose the runtime interpreter to sandbox subprocesses as
+    # $RUNTIME_PY. process_sandbox_service copies the parent's env
+    # verbatim to child bash, so skills can invoke
+    # "$RUNTIME_PY" /workspace/custom/.../xxx.py and hit the correct
+    # CPython version (matches the cp312 wheels the offline bundle
+    # ships). Bare `python3` in sandbox otherwise resolves to the host
+    # /usr/bin/python3 — which on Ubuntu 22.04 is 3.10, breaking ABI
+    # compatibility with the prebuilt greenlet / Pillow wheels.
+    export RUNTIME_PY="$PYTHON"
     echo "  Mode: PRODUCTION (hiclaw-runtime)"
 }
 
@@ -227,6 +236,10 @@ select_dev() {
         echo "  Run: cd $PROJECT_DIR && poetry install"
         exit 1
     fi
+    # Expose the same interpreter as $RUNTIME_PY for sandbox children
+    # (same rationale as select_pro). In Poetry-venv mode this points
+    # at the venv's python3, matching the installed dependencies.
+    export RUNTIME_PY="$PYTHON"
 }
 
 case "$MODE" in

@@ -86,12 +86,17 @@ reports:
 绝对不要用 `scripts/xxx.py` 这类相对路径。**
 
 ```bash
-python3 /workspace/custom/skill_examples/render_skills/scripts/<脚本名>.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/<脚本名>.py \
   <脚本参数> \
   --output-dir "$(pwd)/render_analysis_output"
 ```
 
 要点：
+- **`"$RUNTIME_PY"` 是平台注入的环境变量**，指向 app-server 本身用的 Python
+  解释器（例如 `/home/.../.hiclaw/runtime/hiclaw-python`）。它和脚本依赖的
+  wheel 版本完全匹配。直接写裸 `python3` 会落到宿主机系统 Python（Ubuntu
+  22.04 默认是 3.10），而 offline bundle 里的 wheel 是 cp312，ABI 不兼容,
+  `greenlet`、`Pillow` 等会直接 ImportError。
 - **`$(pwd)` 在每条命令开头被展开**，得到当前 conversation 的工作目录（由平台
   自动隔离到 `/workspace/project/<conv_hex>/`）。后端进度条、下载按钮、产物
   列表都基于这个目录探测，**必须用 `$(pwd)/render_analysis_output`**，
@@ -102,6 +107,8 @@ python3 /workspace/custom/skill_examples/render_skills/scripts/<脚本名>.py \
   conversation 目录，`$(pwd)` 就会改变，输出会落到错的地方，前端找不到。
 - **绝对不要** `python3 scripts/...` — 依赖 LLM 恰好在 skill 目录，实际
   conversation cwd 是 `/tmp/openhands-sandboxes/...`，会直接 "No such file" 报错。
+- **绝对不要** 裸 `python3 xxx.py` — 会落到宿主机系统 Python，ABI 不对;
+  必须用 `"$RUNTIME_PY" xxx.py`。
 
 ## 严格约束
 
@@ -142,7 +149,7 @@ export PERFETTO_UI_URL=https://perfetto.rnd.hihonor.com/
 ### 阶段 0: 环境初始化
 
 ```bash
-python3 /workspace/custom/skill_examples/render_skills/scripts/setup_env.py
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/setup_env.py
 ```
 
 自动安装所有依赖：
@@ -155,7 +162,7 @@ python3 /workspace/custom/skill_examples/render_skills/scripts/setup_env.py
 ### 阶段 1: Jank 分析
 
 ```bash
-python3 /workspace/custom/skill_examples/render_skills/scripts/analyze_jank.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/analyze_jank.py \
   --trace {{trace_path}} \
   --output-dir "$(pwd)/render_analysis_output"
 ```
@@ -178,7 +185,7 @@ RenderThread / hwuiTask / SF / RenderEngine / HWC）。
 ### 阶段 2: Perfetto 截图（可选）
 
 ```bash
-python3 /workspace/custom/skill_examples/render_skills/scripts/capture_screenshots.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/capture_screenshots.py \
   --trace {{trace_path}} \
   --analysis-dir "$(pwd)/render_analysis_output" \
   --output-dir "$(pwd)/render_analysis_output/screenshots"
@@ -194,7 +201,7 @@ pin 的所有关键 track）+ 局部细节图（target_ts ± 窗口内的 slice�
 ### 阶段 3: 生成报告
 
 ```bash
-python3 /workspace/custom/skill_examples/render_skills/scripts/render_report_generator.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/render_report_generator.py \
   --output-dir "$(pwd)/render_analysis_output" \
   --top-n {{top_n}}
 ```
@@ -218,21 +225,21 @@ python3 /workspace/custom/skill_examples/render_skills/scripts/render_report_gen
 
 ```bash
 # 阶段 0
-python3 /workspace/custom/skill_examples/render_skills/scripts/setup_env.py
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/setup_env.py
 
 # 阶段 1
-python3 /workspace/custom/skill_examples/render_skills/scripts/analyze_jank.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/analyze_jank.py \
   --trace /workspace/project/abc123def456/trace.perfetto-trace \
   --output-dir "$(pwd)/render_analysis_output"
 
 # 阶段 2
-python3 /workspace/custom/skill_examples/render_skills/scripts/capture_screenshots.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/capture_screenshots.py \
   --trace /workspace/project/abc123def456/trace.perfetto-trace \
   --analysis-dir "$(pwd)/render_analysis_output" \
   --output-dir "$(pwd)/render_analysis_output/screenshots"
 
 # 阶段 3
-python3 /workspace/custom/skill_examples/render_skills/scripts/render_report_generator.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/render_report_generator.py \
   --output-dir "$(pwd)/render_analysis_output" \
   --top-n 5
 ```
@@ -248,5 +255,9 @@ python3 scripts/setup_env.py
 cd /workspace/custom/skill_examples/render_skills/scripts && python3 analyze_jank.py ...
 
 # ❌ 错：hardcode 共享路径，会被多个任务互相覆盖，前端进度条/下载按钮都探测不到
-python3 /workspace/.../analyze_jank.py ... --output-dir /workspace/render_output
+"$RUNTIME_PY" /workspace/.../analyze_jank.py ... --output-dir /workspace/render_output
+
+# ❌ 错：裸 python3 会落到宿主机 /usr/bin/python3（Ubuntu 22.04 是 3.10），
+#    和 offline bundle 里的 cp312 wheel ABI 不兼容，greenlet/Pillow ImportError
+python3 /workspace/custom/skill_examples/render_skills/scripts/analyze_jank.py ...
 ```
