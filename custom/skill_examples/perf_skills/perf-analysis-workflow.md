@@ -127,16 +127,18 @@ reports:
 **每个阶段的脚本调用必须使用如下绝对路径模板。绝对不要 `cd` 到脚本目录。**
 
 ```bash
-python3 /workspace/custom/skill_examples/perf_skills/scripts/<脚本名>.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/perf_skills/scripts/<脚本名>.py \
   <脚本参数> \
   --output-dir "$(pwd)/perf_analysis_output"
 ```
 
 要点：
+- **`"$RUNTIME_PY"` 是平台注入的环境变量**，指向 app-server 本身用的 Python 解释器（例如 `/home/.../.hiclaw/runtime/hiclaw-python`）。它和脚本依赖的 wheel 版本完全匹配。直接写裸 `python3` 会落到宿主机系统 Python（Ubuntu 22.04 默认 3.10）— 和 offline bundle 里的 cp312 wheel ABI 不兼容，`greenlet`、`Pillow` 等会直接 ImportError
 - **`$(pwd)` 在每条命令开头被展开**，得到当前 conversation 的工作目录（由平台自动隔离到 `/workspace/project/<conv_hex>/`）
 - 所有 phase 的输出统一落到 `$(pwd)/perf_analysis_output/`，前端进度条按这个路径轮询
 - **绝对不要** `cd /workspace/custom/.../scripts &&` 这种写法 — 一旦 cd 出 conversation 目录，`$(pwd)` 就会改变，输出会落到错的地方
 - **绝对不要** hardcode `/workspace/perf_analysis_output` 这种共享路径 — 那是老 hack，会被多个任务互相覆盖
+- **绝对不要** 裸 `python3 xxx.py` — ABI 不对，ImportError；必须用 `"$RUNTIME_PY" xxx.py`
 
 ## 严格约束
 
@@ -173,7 +175,7 @@ python3 /workspace/custom/skill_examples/perf_skills/scripts/<脚本名>.py \
 **示例**（阶段 1 的完整命令)：
 
 ```bash
-python3 /workspace/custom/skill_examples/perf_skills/scripts/trace_processor_init.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/perf_skills/scripts/trace_processor_init.py \
   --trace /workspace/test_trace.perfetto-trace \
   --port 9001 \
   --output-dir "$(pwd)/perf_analysis_output"
@@ -183,10 +185,14 @@ python3 /workspace/custom/skill_examples/perf_skills/scripts/trace_processor_ini
 
 ```bash
 # ❌ 错：cd 改变了 $(pwd)，输出会落到 /workspace/custom/.../scripts/perf_analysis_output/
-cd /workspace/custom/skill_examples/perf_skills/scripts && python3 trace_processor_init.py --trace ... --output-dir perf_analysis_output
+cd /workspace/custom/skill_examples/perf_skills/scripts && "$RUNTIME_PY" trace_processor_init.py --trace ... --output-dir perf_analysis_output
 
 # ❌ 错：hardcode 共享路径，会被多个任务互相覆盖
-python3 /workspace/.../trace_processor_init.py --trace ... --output-dir /workspace/perf_analysis_output
+"$RUNTIME_PY" /workspace/.../trace_processor_init.py --trace ... --output-dir /workspace/perf_analysis_output
+
+# ❌ 错：裸 python3 会落到宿主机 /usr/bin/python3（Ubuntu 22.04 是 3.10），
+#    和 offline bundle 里的 cp312 wheel ABI 不兼容，ImportError
+python3 /workspace/custom/skill_examples/perf_skills/scripts/trace_processor_init.py ...
 ```
 
 ## 第5阶段分支选择
@@ -206,7 +212,7 @@ python3 /workspace/.../trace_processor_init.py --trace ... --output-dir /workspa
 **此步骤为可选。** 在清理 trace_processor 之前，尝试对 Perfetto UI 中的问题片段截图：
 
 ```bash
-python3 /workspace/custom/skill_examples/perf_skills/scripts/capture_trace_screenshot.py \
+"$RUNTIME_PY" /workspace/custom/skill_examples/perf_skills/scripts/capture_trace_screenshot.py \
   --trace $TRACE_FILE \
   --analysis-dir "$(pwd)/perf_analysis_output" \
   --output-dir "$(pwd)/perf_analysis_output/screenshots" \
