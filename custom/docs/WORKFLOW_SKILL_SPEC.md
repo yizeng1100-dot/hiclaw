@@ -442,6 +442,155 @@ custom/
     └── WORKFLOW_SKILL_SPEC.md    # 本文档
 ```
 
+## 系统已有 Agent 实例参考
+
+截至 2026-04-17，平台上已注册 5 个 Agent。下面列出各 agent 的 workflow skill 配置
+作为真实参考，新 agent 可直接照抄改。
+
+### 1. 性能分析 Agent（标杆，最完整）
+
+| 项 | 值 |
+|---|---|
+| Workflow | `custom/skill_examples/perf_skills/perf-analysis-workflow.md` |
+| Category | performance |
+| Phases | 10 个（init → target → range → state → branch → memory → render → screenshot → cleanup → report） |
+| input_form | 3 字段：`trace_path`(file) + `direction`(select, 7 个选项) + `extra`(text) |
+| reports | 2 个：完整报告 `full_report.html` + 问题报告 `issue_report.html` |
+| 输出目录 | `perf_analysis_output/`（相对路径，per-conv 隔离）✅ |
+| 脚本调用 | `"$RUNTIME_PY" /workspace/custom/skill_examples/perf_skills/scripts/xxx.py`（绝对路径 + RUNTIME_PY）✅ |
+
+**input_form 配置：**
+
+```yaml
+input_form:
+  - key: trace_path
+    type: file
+    label: Trace 文件
+    accept: .perfetto-trace,.pb,.pftrace,.html,.txt,.json,.systrace,.ftrace
+    required: true
+  - key: direction
+    type: select
+    label: 分析方向
+    default: full
+    options:
+      - { label: 完整分析, value: full, desc: 9 阶段完整流水线 }
+      - { label: 启动性能, value: startup, desc: 启动耗时分析 }
+      - { label: CPU, value: cpu, desc: Running / 大小核 / 频率 }
+      - { label: 调度, value: scheduling, desc: Runnable / 优先级 }
+      - { label: IO, value: io, desc: IO / Non-IO 阻塞 }
+      - { label: 内存, value: memory, desc: OOM / GC / 分配 }
+      - { label: 渲染, value: rendering, desc: Jank / VSYNC }
+  - key: extra
+    type: text
+    label: 补充说明
+    placeholder: 可选，关注的具体场景 / 进程 / 时间段...
+    required: false
+```
+
+### 2. 渲染性能分析 Agent
+
+| 项 | 值 |
+|---|---|
+| Workflow | `custom/skill_examples/render_skills/render-performance-workflow.md` |
+| Category | performance |
+| Phases | 4 个（setup → analyze → screenshot → report） |
+| input_form | 4 字段：`trace_path`(file) + `focus`(select) + `top_n`(number) + `extra`(text) |
+| reports | 1 个：渲染性能报告 `render_report.html` |
+| 输出目录 | `render_analysis_output/`（相对路径）✅ |
+| 脚本调用 | `"$RUNTIME_PY" /workspace/custom/skill_examples/render_skills/scripts/xxx.py` ✅ |
+| 特殊依赖 | Playwright + Chromium（截图用），需内网设 `PERFETTO_UI_URL` 环境变量 |
+
+**input_form 配置：**
+
+```yaml
+input_form:
+  - key: trace_path
+    type: file
+    label: Trace 文件
+    accept: .perfetto-trace,.pb,.pftrace
+    required: true
+  - key: focus
+    type: select
+    label: 分析重点
+    default: full
+    options:
+      - { label: 完整分析, value: full, desc: 分析 + 截图 + 报告 }
+      - { label: 快速分析（不截图）, value: fast, desc: 分析 + 报告，跳过截图 }
+  - key: top_n
+    type: number
+    label: Top N 问题数
+    default: 5
+    min: 1
+    max: 20
+  - key: extra
+    type: text
+    label: 补充说明
+    required: false
+```
+
+### 3. 内核对比分析 Agent
+
+| 项 | 值 |
+|---|---|
+| Workflow | `custom/skill_examples/android-kernel-diff-analysis.md` |
+| Category | kernel-analysis |
+| Phases | 无（seed 时只设了 system_prompt，没有 phases frontmatter） |
+| input_form | 无（前端用默认"启动 Agent"按钮，无动态表单）|
+| 状态 | 老式 agent，未迁移到 workflow + input_form 规范 |
+
+> **待改进**：建议补 `input_form`（old_tag / new_tag 两个 text 字段）+ `phases`（clone → diff → analyze → report）+ `reports`（`kernel_analysis_report.md`），让它和性能/渲染 agent 体验一致。
+
+### 4. 日志分析 Agent
+
+| 项 | 值 |
+|---|---|
+| Workflow | `custom/skill_examples/log_analysis/log-analysis-workflow.md` |
+| Category | 运维 |
+| Phases | 3 个（parse → statistics → report）|
+| input_form | 无 |
+| 输出目录 | `/workspace/log_output/`（**⚠️ 绝对路径，老式写法**）|
+| 脚本调用 | `python3 scripts/xxx.py`（**⚠️ 相对路径，依赖 cwd**）|
+
+> **待改进**：
+> 1. 输出路径从 `/workspace/log_output/` 改成 `log_analysis_output/`（相对路径，per-conv 隔离）
+> 2. 脚本调用从 `python3 scripts/xxx.py` 改成 `"$RUNTIME_PY" /workspace/custom/skill_examples/log_analysis/scripts/xxx.py`（绝对路径 + RUNTIME_PY）
+> 3. 补 `input_form`（`log_file` file 字段 + `format` select 字段）
+
+### 5. 回声测试 Agent
+
+| 项 | 值 |
+|---|---|
+| Category | 测试 |
+| 用途 | 简单的 echo 回显，用于验证 agent 链路是否通 |
+| input_form | 无 |
+| Phases | 无 |
+
+---
+
+## 环境变量参考
+
+以下环境变量影响 workflow 脚本在 sandbox 内的行为。由 `deploy/start.sh` 在启动时
+export，通过 `process_sandbox_service.py` 的 `os.environ.copy()` 自动传给 sandbox
+bash 子进程。
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `RUNTIME_PY` | `$RUNTIME_DIR/hiclaw-python`(pro) 或 Poetry venv python(dev) | sandbox 内脚本调用应使用 `"$RUNTIME_PY" /workspace/.../xxx.py` 而非裸 `python3`，避免落到宿主机系统 Python（Ubuntu 22.04 = 3.10）导致 ABI 不兼容 |
+| `PERFETTO_UI_URL` | `https://ui.perfetto.dev` | 渲染 agent 截图脚本 `capture_screenshots.py` / `capture_trace_screenshot.py` 的 Perfetto UI 地址。内网部署设为 `https://perfetto.rnd.hihonor.com/`（或其他自部署实例） |
+| `OH_SECRET_KEY` | 由 `start_dev.sh` 设置 | OpenHands 认证密钥 |
+| `SANDBOX_VOLUMES` | 见 `start_dev.sh` | sandbox bind-mount 挂载点（`sandbox-data:/workspace/conversations:rw,custom:/workspace/custom:ro`） |
+
+### 内网部署启动示例
+
+```bash
+PERFETTO_UI_URL=https://perfetto.rnd.hihonor.com/ bash deploy/start.sh pro
+```
+
+`RUNTIME_PY` 和 `PERFETTO_UI_URL` 都会自动传进 sandbox 子进程，所有 workflow 脚本
+直接读环境变量即可，不需要每次手动 export。
+
+---
+
 ## 版本记录
 
 | 版本 | 日期 | 变更 |
@@ -449,3 +598,4 @@ custom/
 | 1.0.0 | 2026-03-30 | 初始版本，定义 phases frontmatter 规范 |
 | 1.1.0 | 2026-04-09 | output 路径平台约定改为相对路径 + 自动 per-conversation 隔离；绝对路径作为向后兼容保留。详情见 `output 路径约定` 一节。 |
 | 1.2.0 | 2026-04-13 | 新增 `input_form` / `submit_message` / `reports` 三个 frontmatter 字段，让 agent 的输入表单 + 下载按钮完全由 skill 驱动，前端零代码改动即可加新 agent。`PerfAnalysisInlinePanel` 硬编码面板已退役。详情见「动态输入表单」一节。 |
+| 1.3.0 | 2026-04-17 | 新增「系统已有 Agent 实例参考」——列出 5 个在线 agent 的 workflow 配置作为真实案例；新增「环境变量参考」——`RUNTIME_PY` / `PERFETTO_UI_URL` 的说明和内网部署启动示例；标注日志分析 / 内核对比 agent 的待改进项。 |
