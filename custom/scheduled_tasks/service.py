@@ -39,7 +39,10 @@ def _to_uuid(val: Any) -> UUID:
     try:
         return UUID(s)
     except ValueError:
-        return UUID(s.replace('-', ''))
+        try:
+            return UUID(s.replace('-', ''))
+        except ValueError:
+            raise ValueError(f'invalid UUID: {s!r}') from None
 
 
 def _row_to_info(

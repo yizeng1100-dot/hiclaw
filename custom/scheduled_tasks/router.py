@@ -57,7 +57,10 @@ async def create_scheduled_task(data: ScheduledTaskCreate):
     db = await get_agent_db()
     try:
         svc = ScheduledTaskService(db)
-        sched_id = await svc.create_schedule(data)
+        try:
+            sched_id = await svc.create_schedule(data)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         created = await svc.get_schedule(sched_id)
     finally:
         await db.close()
