@@ -56,13 +56,16 @@ async def _ensure_tables():
             )
         _tables_created = True
 
-        # Seed built-in agents on first startup
+        # Seed built-in agents + demo schedules on first startup
         session = _session_factory()
         try:
             from custom.agent_mgmt.seed import seed_perf_agent, seed_kernel_diff_agent, seed_render_agent
             await seed_perf_agent(session)
             await seed_kernel_diff_agent(session)
             await seed_render_agent(session)
+
+            from custom.command_scheduler.seed import seed_demo_schedules
+            await seed_demo_schedules(session)
         finally:
             await session.close()
 
