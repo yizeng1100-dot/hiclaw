@@ -1,12 +1,15 @@
 // >>> CUSTOM: HiClaw — sandbox reconnect modal <<<
 import React from "react";
 import axios from "axios";
-import { SANDBOX_ERROR_EVENT, SandboxErrorKind } from "#/utils/sandbox-error-event";
+import {
+  SANDBOX_ERROR_EVENT,
+  SandboxErrorKind,
+} from "#/utils/sandbox-error-event";
 import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
 
 type State =
   | { kind: "hidden" }
-  | { kind: "stale"; message: string }       // auto-reconnect triggered, just inform
+  | { kind: "stale"; message: string } // auto-reconnect triggered, just inform
   | { kind: "need_password"; message: string } // need user to input password
   | { kind: "reconnecting"; message: string }
   | { kind: "error"; message: string };
@@ -59,15 +62,20 @@ export function SandboxReconnectModal() {
       const url = workerManagerUrl.startsWith("/")
         ? `${window.location.origin}${workerManagerUrl}`
         : workerManagerUrl;
-      await axios.post(`${url}/api/machines/connect`, {
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        password: pwd,
-        mode: config.mode,
-        template: config.template,
-        workspace: config.workspace,
-      }, { timeout: 60000 });
+      await axios.post(
+        `${url}/api/machines/connect`,
+        {
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          password: pwd,
+          mode: config.mode,
+          template: config.template,
+          workspace: config.workspace,
+          os_type: config.osType,
+        },
+        { timeout: 60000 },
+      );
       // Save the (possibly new) password
       if (pwd !== config.password) {
         setConfig({ password: pwd });
@@ -81,8 +89,11 @@ export function SandboxReconnectModal() {
         window.location.reload();
       }, 1500);
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } }; message?: string })
-        ?.response?.data?.detail || (e as { message?: string }).message || "未知错误";
+      const msg =
+        (e as { response?: { data?: { detail?: string } }; message?: string })
+          ?.response?.data?.detail ||
+        (e as { message?: string }).message ||
+        "未知错误";
       setState({ kind: "error", message: `重连失败：${msg}` });
     }
   };
@@ -103,7 +114,10 @@ export function SandboxReconnectModal() {
         {(state.kind === "need_password" || state.kind === "error") && (
           <>
             <div className="text-xs text-neutral-500 mb-2">
-              主机: <span className="font-mono text-neutral-300">{config.username}@{config.host}</span>
+              主机:{" "}
+              <span className="font-mono text-neutral-300">
+                {config.username}@{config.host}
+              </span>
             </div>
             <input
               type="password"

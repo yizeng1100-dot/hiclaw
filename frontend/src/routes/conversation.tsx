@@ -57,7 +57,9 @@ function AppContent() {
   const [needsReconnect, setNeedsReconnect] = React.useState(false);
   const [reconnectPassword, setReconnectPassword] = React.useState("");
   const [reconnectLoading, setReconnectLoading] = React.useState(false);
-  const [reconnectError, setReconnectError] = React.useState<string | null>(null);
+  const [reconnectError, setReconnectError] = React.useState<string | null>(
+    null,
+  );
   const reconnectDoneRef = React.useRef(false); // prevents re-trigger after successful reconnect
   const { config, workerManagerUrl } = useRemoteWorkerStore();
 
@@ -66,22 +68,31 @@ function AppContent() {
     setReconnectLoading(true);
     setReconnectError(null);
     try {
-      await axios.post(`${workerManagerUrl}/api/machines/connect`, {
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        password: reconnectPassword,
-        mode: "host",
-        template: "openhands",
-        workspace: config.workspace,
-      }, { timeout: 60000 });
-      useRemoteWorkerStore.getState().setConfig({ password: reconnectPassword });
+      await axios.post(
+        `${workerManagerUrl}/api/machines/connect`,
+        {
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          password: reconnectPassword,
+          mode: "host",
+          template: "openhands",
+          workspace: config.workspace,
+          os_type: config.osType,
+        },
+        { timeout: 60000 },
+      );
+      useRemoteWorkerStore
+        .getState()
+        .setConfig({ password: reconnectPassword });
       reconnectDoneRef.current = true; // block useEffect from re-triggering
       setNeedsReconnect(false);
       // Refetch conversation with new tunnel
       setTimeout(() => refetch(), 1000);
     } catch (err) {
-      setReconnectError(err instanceof Error ? err.message : "Connection failed");
+      setReconnectError(
+        err instanceof Error ? err.message : "Connection failed",
+      );
     } finally {
       setReconnectLoading(false);
     }
@@ -144,7 +155,8 @@ function AppContent() {
     } else if (
       // Remote conversation with no active tunnel (STOPPED/PAUSED after restart)
       conversation.sandbox_id?.startsWith("remote-") &&
-      (conversation.status === "STOPPED" || conversation.runtime_status === null) &&
+      (conversation.status === "STOPPED" ||
+        conversation.runtime_status === null) &&
       !conversation.url &&
       config.host
     ) {
@@ -165,15 +177,20 @@ function AppContent() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="bg-neutral-800 border border-neutral-600 rounded-xl p-6 w-[380px] shadow-2xl">
-          <h3 className="text-base font-semibold text-neutral-100 mb-2">Reconnect Required</h3>
+          <h3 className="text-base font-semibold text-neutral-100 mb-2">
+            Reconnect Required
+          </h3>
           <p className="text-xs text-neutral-400 mb-3">
-            SSH connection to {config.username}@{config.host} needs to be re-established.
+            SSH connection to {config.username}@{config.host} needs to be
+            re-established.
           </p>
           <input
             type="password"
             value={reconnectPassword}
             onChange={(e) => setReconnectPassword(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleReconnect(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleReconnect();
+            }}
             placeholder="SSH Password"
             autoFocus
             className="w-full px-3 py-2 bg-neutral-900 border border-neutral-600 rounded text-neutral-200 text-sm focus:border-blue-500 focus:outline-none mb-3"

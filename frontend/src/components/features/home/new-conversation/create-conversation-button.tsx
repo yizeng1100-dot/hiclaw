@@ -1,22 +1,32 @@
 import React from "react";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
+import axios from "axios";
 import { BrandButton } from "../../settings/brand-button";
 import { useCreateConversation } from "#/hooks/mutation/use-create-conversation";
 import { useIsCreatingConversation } from "#/hooks/use-is-creating-conversation";
 // >>> CUSTOM: HiClaw <<<
 import { useRemoteWorkerStore } from "#/stores/remote-worker-store";
 import { MachineProvisioningPanel } from "#/components/features/custom/machine-provisioning-panel";
-import axios from "axios";
 // >>> END CUSTOM <<<
 
 // >>> CUSTOM: HiClaw — workspace autocomplete component <<<
 function WorkspaceInput({
-  value, onChange, config, workerManagerUrl, inputCls,
+  value,
+  onChange,
+  config,
+  workerManagerUrl,
+  inputCls,
 }: {
   value: string;
   onChange: (v: string) => void;
-  config: { host: string; port: number; username: string; password: string };
+  config: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    osType?: "linux" | "windows";
+  };
   workerManagerUrl: string;
   inputCls: string;
 }) {
@@ -34,11 +44,22 @@ function WorkspaceInput({
     setLoading(true);
     setError(null);
     try {
-      const resp = await axios.post(`${workerManagerUrl}/api/list-dirs`, {
-        host: config.host, port: config.port,
-        username: config.username, password: config.password,
-        mode: "host", template: "openhands", workspace: "",
-      }, { timeout: 15000 });
+      const resp = await axios.post(
+        `${workerManagerUrl}/api/list-dirs`,
+        {
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          password: config.password,
+          mode: "host",
+          template: "openhands",
+          workspace: "",
+          // >>> CUSTOM: HiClaw — let backend pick Linux vs Windows path enum <<<
+          os_type: config.osType || "linux",
+          // >>> END CUSTOM <<<
+        },
+        { timeout: 15000 },
+      );
       const dirs = resp.data?.dirs || [];
       setSuggestions(dirs);
       if (dirs.length === 0) setError("No directories found on remote machine");
@@ -52,8 +73,16 @@ function WorkspaceInput({
         : "Connection failed — check host IP and port";
       setError(msg);
       setSuggestions([]);
-    } finally { setLoading(false); }
-  }, [config.host, config.port, config.username, config.password, workerManagerUrl]);
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    config.host,
+    config.port,
+    config.username,
+    config.password,
+    workerManagerUrl,
+  ]);
 
   React.useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -94,7 +123,11 @@ function WorkspaceInput({
         />
         {showSuggestions && (filtered.length > 0 || loading || error) && (
           <div className="absolute left-0 right-0 bottom-full mb-1 max-h-40 overflow-y-auto bg-neutral-800 border border-neutral-600 rounded-lg shadow-lg z-50">
-            {loading && <div className="px-3 py-2 text-xs text-neutral-500">Connecting to {config.host}...</div>}
+            {loading && (
+              <div className="px-3 py-2 text-xs text-neutral-500">
+                Connecting to {config.host}...
+              </div>
+            )}
             {error && !loading && (
               <div className="px-3 py-2 text-xs text-red-400 flex items-center gap-1.5">
                 <span className="shrink-0">&#9888;</span>
@@ -125,10 +158,22 @@ export function CreateConversationButton() {
   // >>> CUSTOM: HiClaw <<<
   const [showModal, setShowModal] = React.useState(false);
   const {
-    enabled, config, workerManagerUrl,
-    machineId, machineStatus, proxyUrl, tunnelPort,
-    setEnabled, setConfig, setMachineId, setMachineStatus,
-    addProvisionEvent, setProxyUrl, setTunnelPort, setError, reset,
+    enabled,
+    config,
+    workerManagerUrl,
+    machineId,
+    machineStatus,
+    proxyUrl,
+    tunnelPort,
+    setEnabled,
+    setConfig,
+    setMachineId,
+    setMachineStatus,
+    addProvisionEvent,
+    setProxyUrl,
+    setTunnelPort,
+    setError,
+    reset,
   } = useRemoteWorkerStore();
   // >>> END CUSTOM <<<
 
@@ -146,7 +191,8 @@ export function CreateConversationButton() {
   const abortRef = React.useRef<AbortController | null>(null);
 
   React.useEffect(() => {
-    if (!machineId || machineStatus === "ready" || machineStatus === "error") return;
+    if (!machineId || machineStatus === "ready" || machineStatus === "error")
+      return;
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -179,8 +225,13 @@ export function CreateConversationButton() {
               const data = JSON.parse(json);
               if (data.step) {
                 addProvisionEvent(data);
-                if (data.step === "ssh_connect" && data.status === "completed") setMachineStatus("provisioning");
-                if (data.step === "start_agent_server" && data.status === "started") setMachineStatus("starting");
+                if (data.step === "ssh_connect" && data.status === "completed")
+                  setMachineStatus("provisioning");
+                if (
+                  data.step === "start_agent_server" &&
+                  data.status === "started"
+                )
+                  setMachineStatus("starting");
               }
               if (data.status === "ready" && data.proxy_url) {
                 setMachineStatus("ready");
@@ -195,7 +246,9 @@ export function CreateConversationButton() {
                 reader.cancel();
                 return;
               }
-            } catch { /* ignore parse errors */ }
+            } catch {
+              /* ignore parse errors */
+            }
           }
         }
       } catch (e) {
@@ -205,7 +258,10 @@ export function CreateConversationButton() {
         const maxPollMs = 10 * 60 * 1000; // 10 minutes max
         while (Date.now() - pollStart < maxPollMs) {
           try {
-            const resp = await axios.get(`${workerManagerUrl}/api/machines/${machineId}`, { timeout: 5000 });
+            const resp = await axios.get(
+              `${workerManagerUrl}/api/machines/${machineId}`,
+              { timeout: 5000 },
+            );
             const st = resp.data?.status;
             if (st === "ready") {
               setMachineStatus("ready");
@@ -229,7 +285,9 @@ export function CreateConversationButton() {
                 timestamp: latest.timestamp || new Date().toISOString(),
               });
             }
-          } catch { /* ignore poll error, retry */ }
+          } catch {
+            /* ignore poll error, retry */
+          }
           await new Promise((r) => setTimeout(r, 3000));
         }
         // Timeout
@@ -238,12 +296,21 @@ export function CreateConversationButton() {
       }
     })();
 
-    return () => { controller.abort(); };
+    return () => {
+      controller.abort();
+    };
   }, [machineId, machineStatus]);
 
   // Auto-create conversation when machine becomes ready (only if modal is open)
   React.useEffect(() => {
-    if (showModal && enabled && machineStatus === "ready" && proxyUrl && !isPending && !isSuccess) {
+    if (
+      showModal &&
+      enabled &&
+      machineStatus === "ready" &&
+      proxyUrl &&
+      !isPending &&
+      !isSuccess
+    ) {
       doCreateConversation();
     }
   }, [machineStatus, proxyUrl, showModal]);
@@ -269,15 +336,22 @@ export function CreateConversationButton() {
     if (!config.host) return;
     setError(null);
     try {
-      const resp = await axios.post(`${workerManagerUrl}/api/machines/connect`, {
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        password: config.password,
-        mode: config.mode,
-        template: config.template,
-        workspace: config.workspace,
-      }, { timeout: 60000 });
+      const resp = await axios.post(
+        `${workerManagerUrl}/api/machines/connect`,
+        {
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          password: config.password,
+          mode: config.mode,
+          template: config.template,
+          workspace: config.workspace,
+          // >>> CUSTOM: HiClaw — pick Linux vs Windows provisioner on backend <<<
+          os_type: config.osType,
+          // >>> END CUSTOM <<<
+        },
+        { timeout: 60000 },
+      );
 
       if (resp.data.status === "ready") {
         // Machine already provisioned — skip progress panel, go straight to conversation
@@ -300,7 +374,8 @@ export function CreateConversationButton() {
   const inputCls =
     "w-full px-2.5 py-2 bg-neutral-900 border border-neutral-600 rounded text-neutral-200 text-sm focus:border-blue-500 focus:outline-none";
 
-  const isProvisioning = machineStatus && !["ready", "error"].includes(machineStatus);
+  const isProvisioning =
+    machineStatus && !["ready", "error"].includes(machineStatus);
 
   return (
     <>
@@ -321,7 +396,8 @@ export function CreateConversationButton() {
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
           onClick={(e) => {
-            if (e.target === e.currentTarget && !isProvisioning) setShowModal(false);
+            if (e.target === e.currentTarget && !isProvisioning)
+              setShowModal(false);
           }}
         >
           <div className="bg-neutral-800 border border-neutral-600 rounded-xl p-6 w-[440px] max-w-[90vw] shadow-2xl">
@@ -334,32 +410,78 @@ export function CreateConversationButton() {
                 <div className="flex flex-col gap-3 mb-4">
                   <div className="flex gap-2">
                     <div className="flex-1">
-                      <label className="block text-xs text-neutral-500 mb-1">Host</label>
-                      <input type="text" value={config.host}
+                      <label className="block text-xs text-neutral-500 mb-1">
+                        Host
+                      </label>
+                      <input
+                        type="text"
+                        value={config.host}
                         onChange={(e) => setConfig({ host: e.target.value })}
-                        placeholder="192.168.1.100" className={inputCls} />
+                        placeholder="192.168.1.100"
+                        className={inputCls}
+                      />
                     </div>
                     <div className="w-20">
-                      <label className="block text-xs text-neutral-500 mb-1">Port</label>
-                      <input type="number" value={config.port}
-                        onChange={(e) => setConfig({ port: parseInt(e.target.value) || 22 })}
-                        className={inputCls} />
+                      <label className="block text-xs text-neutral-500 mb-1">
+                        Port
+                      </label>
+                      <input
+                        type="number"
+                        value={config.port}
+                        onChange={(e) =>
+                          setConfig({ port: parseInt(e.target.value) || 22 })
+                        }
+                        className={inputCls}
+                      />
                     </div>
                   </div>
                   <div className="flex gap-2">
                     <div className="flex-1">
-                      <label className="block text-xs text-neutral-500 mb-1">Username</label>
-                      <input type="text" value={config.username}
-                        onChange={(e) => setConfig({ username: e.target.value })}
-                        className={inputCls} />
+                      <label className="block text-xs text-neutral-500 mb-1">
+                        Username
+                      </label>
+                      <input
+                        type="text"
+                        value={config.username}
+                        onChange={(e) =>
+                          setConfig({ username: e.target.value })
+                        }
+                        className={inputCls}
+                      />
                     </div>
                     <div className="flex-1">
-                      <label className="block text-xs text-neutral-500 mb-1">Password</label>
-                      <input type="password" value={config.password}
-                        onChange={(e) => setConfig({ password: e.target.value })}
-                        className={inputCls} />
+                      <label className="block text-xs text-neutral-500 mb-1">
+                        Password
+                      </label>
+                      <input
+                        type="password"
+                        value={config.password}
+                        onChange={(e) =>
+                          setConfig({ password: e.target.value })
+                        }
+                        className={inputCls}
+                      />
                     </div>
                   </div>
+                  {/* >>> CUSTOM: HiClaw — OS selector (Linux vs Windows provisioner) <<< */}
+                  <div>
+                    <label className="block text-xs text-neutral-500 mb-1">
+                      Operating System
+                    </label>
+                    <select
+                      value={config.osType}
+                      onChange={(e) =>
+                        setConfig({
+                          osType: e.target.value as "linux" | "windows",
+                        })
+                      }
+                      className={inputCls}
+                    >
+                      <option value="linux">Linux</option>
+                      <option value="windows">Windows</option>
+                    </select>
+                  </div>
+                  {/* >>> END CUSTOM <<< */}
                   {/* >>> CUSTOM: HiClaw — workspace autocomplete <<< */}
                   <WorkspaceInput
                     value={config.workspace}
@@ -371,13 +493,19 @@ export function CreateConversationButton() {
                   {/* >>> END CUSTOM <<< */}
                 </div>
                 <div className="flex justify-end gap-3">
-                  <button type="button" onClick={() => setShowModal(false)}
-                    className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 rounded">
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 rounded"
+                  >
                     Cancel
                   </button>
-                  <button type="button" onClick={handleStartRemote}
+                  <button
+                    type="button"
+                    onClick={handleStartRemote}
                     disabled={!config.host}
-                    className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-600 disabled:text-neutral-400 text-white rounded-lg transition-colors">
+                    className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-600 disabled:text-neutral-400 text-white rounded-lg transition-colors"
+                  >
                     Connect
                   </button>
                 </div>
@@ -390,12 +518,20 @@ export function CreateConversationButton() {
                 <div className="flex justify-end gap-3 mt-4">
                   {machineStatus === "error" && (
                     <>
-                      <button type="button" onClick={() => { reset(); }}
-                        className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 rounded">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          reset();
+                        }}
+                        className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 rounded"
+                      >
                         Back
                       </button>
-                      <button type="button" onClick={handleStartRemote}
-                        className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-lg">
+                      <button
+                        type="button"
+                        onClick={handleStartRemote}
+                        className="px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-lg"
+                      >
                         Retry
                       </button>
                     </>

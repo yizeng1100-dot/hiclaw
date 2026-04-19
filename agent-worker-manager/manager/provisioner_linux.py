@@ -1,0 +1,898 @@
+"""Linux provisioner — deploys agent-server to Linux remotes via bash + SSH.
+
+This is the current/legacy provisioner moved verbatim into a subclass of
+`ProvisionerBase`. Zero behavior change from the previous monolithic
+`Provisioner` class in `provisioner.py`. All bash-specific commands
+(`$HOME`, `tar xzf`, `pgrep`, `chmod +x`, heredoc, `ln -sf`, etc.) stay
+inside this file.
+
+When touching this file, remember that the Windows equivalent lives in
+`provisioner_windows.py` — most methods have a Windows counterpart there
+and any fix in one may need mirroring in the other.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import AsyncGenerator
+
+from .models import ProvisionEvent, ProvisionStep
+from .provisioner_base import (
+    DEPS_DIR,
+    REMOTE_CODE_SERVER_PATH,
+    REMOTE_DEPS_PATH,
+    REMOTE_PYTHON_INSTALL_PATH,
+    ProvisionerBase,
+    _evt,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class LinuxProvisioner(ProvisionerBase):
+    """Deploys all dependencies to a remote Linux machine via SSH/SFTP.
+
+    Always pushes from app-server — does not rely on remote having internet.
+    """
+
+    async def _write_wrapper_scripts(self, venv: str, remote_python: str) -> None:
+        """Write _launcher.py and agent-server wrapper script on remote machine.
+
+        _launcher.py monkey-patches PUBLIC_SKILLS_REPO before starting agent-server,
+        redirecting the SDK's github.com clone to the internal Gitea instance.
+        """
+        await self.ssh.run(
+            f'mkdir -p {venv}/bin && '
+            f"cat > {venv}/bin/_launcher.py << 'PYEOF'\n"
+            'import os, sys, logging\n'
+            "venv_lib = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'lib')\n"
+            'if venv_lib not in sys.path:\n'
+            '    sys.path.insert(0, venv_lib)\n'
+            '#\n'
+            '# === HiClaw patches (run before agent-server imports) ===\n'
+            '#\n'
+            '# 1. Force httpx connect timeout\n'
+            'try:\n'
+            '    import httpx\n'
+            '    httpx._config.DEFAULT_TIMEOUT_CONFIG = httpx.Timeout(connect=10, read=60, write=30, pool=10)\n'
+            'except Exception: pass\n'
+            '#\n'
+            '# 2. Enable ALL litellm/httpx logging at DEBUG level\n'
+            '#    This prints full request URL, headers, and error details to stdout\n'
+            "logging.basicConfig(level=logging.DEBUG, format='%(name)s %(levelname)s %(message)s', stream=sys.stdout)\n"
+            "for name in ['LiteLLM', 'litellm', 'httpx', 'httpcore']:\n"
+            '    logging.getLogger(name).setLevel(logging.DEBUG)\n'
+            '#\n'
+            '# 3. litellm verbose mode — prints to stdout directly\n'
+            'try:\n'
+            '    import litellm\n'
+            '    litellm.set_verbose = True\n'
+            'except Exception: pass\n'
+            '#\n'
+            '# 4. Monkey-patch SDK retry log to show cause chain\n'
+            'try:\n'
+            '    from openhands.sdk.llm.utils import retry_mixin as _rm\n'
+            '    _orig = _rm.RetryMixin.log_retry_attempt\n'
+            '    def _patched(self, rs):\n'
+            '        _orig(self, rs)\n'
+            '        exc = rs.outcome.exception() if rs.outcome else None\n'
+            '        if not exc: return\n'
+            '        c = exc.__cause__\n'
+            '        d = 0\n'
+            '        while c and d < 5:\n'
+            "            print(f'[LLM_ERROR] cause[{d}] {type(c).__name__}: {c}', flush=True)\n"
+            "            c = getattr(c, '__cause__', None)\n"
+            '            d += 1\n'
+            "        if hasattr(exc, 'response') and exc.response is not None:\n"
+            '            print(f\'[LLM_ERROR] HTTP {getattr(exc.response, "status_code", "?")}: {getattr(exc.response, "text", "")[:2000]}\', flush=True)\n'
+            '    _rm.RetryMixin.log_retry_attempt = _patched\n'
+            'except Exception: pass\n'
+            '#\n'
+            "print('[HiClaw] All patches applied', flush=True)\n"
+            'from openhands.agent_server.__main__ import main\n'
+            'sys.exit(main())\n'
+            'PYEOF\n',
+            timeout=10,
+        )
+        await self.ssh.run(
+            f"cat > {venv}/bin/agent-server << 'WRAPPER_EOF'\n"
+            f'#!/bin/bash\n'
+            f'export PYTHONPATH={venv}/lib:$PYTHONPATH\n'
+            f"# Append to no_proxy (don't overwrite — keep system proxy for LLM)\n"
+            f'export no_proxy="${{no_proxy:+$no_proxy,}}localhost,127.0.0.1"\n'
+            f'export NO_PROXY="${{NO_PROXY:+$NO_PROXY,}}localhost,127.0.0.1"\n'
+            f'# >>> CUSTOM: HiClaw — Claude CLI in PATH for Claude engine mode <<<\n'
+            f'export PATH="$HOME/.local/bin:$PATH"\n'
+            f'# >>> END CUSTOM <<<\n'
+            f'exec {remote_python} {venv}/bin/_launcher.py "$@"\n'
+            f'WRAPPER_EOF\n'
+            f'chmod +x {venv}/bin/agent-server',
+            timeout=10,
+        )
+        logger.info(
+            f'[{self._host}] Wrapper scripts written: {venv}/bin/agent-server + _launcher.py'
+        )
+
+    async def provision(self) -> AsyncGenerator[ProvisionEvent, None]:
+        """Run all provisioning steps. Each step checks remote state first, skips if already done."""
+
+        # >>> CUSTOM: HiClaw — resolve remote $HOME and create temp/logs dirs <<<
+        home_out, _, _ = await self.ssh.run('echo $HOME', timeout=5)
+        remote_home = home_out.strip() or '/root'
+        remote_tmp = f'{remote_home}/.hiclaw/tmp'
+        remote_logs = f'{remote_home}/.hiclaw/logs'
+        await self.ssh.run(f'mkdir -p {remote_tmp} {remote_logs}', timeout=5)
+        # >>> END CUSTOM <<<
+
+        # ── Step 1: Python ──
+        # Check: standalone 3.12 exists? OR system python >= 3.12?
+        standalone_python = (
+            f'{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12'.replace('$HOME', '~')
+        )
+        has_standalone = await self._check_remote(f'test -f {standalone_python}')
+        remote_python = 'python3'
+        python_ok = False
+
+        if has_standalone:
+            # >>> CUSTOM: HiClaw — verify it actually works <<<
+            py_ver, _, py_ec = await self.ssh.run(
+                f'{standalone_python} --version 2>&1', timeout=5
+            )
+            if py_ec == 0 and '3.12' in py_ver:
+                remote_python = standalone_python
+                python_ok = True
+                yield _evt(
+                    ProvisionStep.CHECK_PYTHON,
+                    'completed',
+                    detail=f'Python 3.12 verified: {py_ver.strip()}',
+                )
+                logger.info(
+                    f'[{self._host}] Python 3.12 verified at {standalone_python}'
+                )
+            else:
+                # Exists but broken — clean up all Python locations
+                logger.warning(
+                    f'[{self._host}] Standalone Python broken (ec={py_ec}): {py_ver.strip()}'
+                )
+                yield _evt(
+                    ProvisionStep.CHECK_PYTHON,
+                    'started',
+                    detail='Existing Python broken, will reinstall...',
+                )
+                await self.ssh.run(
+                    f'rm -rf {REMOTE_PYTHON_INSTALL_PATH}/python '
+                    f'~/.hiclaw/agent-deps/python3-standalone',  # old path
+                    timeout=15,
+                )
+            # >>> END CUSTOM <<<
+        else:
+            yield _evt(ProvisionStep.CHECK_PYTHON, 'started')
+            sys_ok = await self._check_remote(
+                'export PATH=$HOME/.local/bin:$PATH && '
+                "python3 -c 'import sys; exit(0 if sys.version_info >= (3,12) else 1)'"
+            )
+            if sys_ok:
+                py_out, _, _ = await self.ssh.run(
+                    'export PATH=$HOME/.local/bin:$PATH && which python3', timeout=5
+                )
+                remote_python = py_out.strip() or 'python3'
+                python_ok = True
+                ver_out, _, _ = await self.ssh.run(
+                    'export PATH=$HOME/.local/bin:$PATH && python3 --version', timeout=5
+                )
+                yield _evt(
+                    ProvisionStep.CHECK_PYTHON, 'completed', detail=ver_out.strip()
+                )
+            else:
+                ver_out, _, _ = await self.ssh.run(
+                    "python3 --version 2>&1 || echo 'not found'", timeout=5
+                )
+                yield _evt(
+                    ProvisionStep.CHECK_PYTHON,
+                    'started',
+                    detail=f'{ver_out.strip()}, need >= 3.12',
+                )
+
+        if not python_ok:
+            yield _evt(
+                ProvisionStep.INSTALL_PYTHON,
+                'started',
+                detail='Deploying Python 3.12 standalone',
+            )
+            python_tar = os.path.join(DEPS_DIR, 'python3-standalone.tar.gz')
+            if os.path.exists(python_tar):
+                tar_size_mb = os.path.getsize(python_tar) // 1024 // 1024
+                last_mb = [0]
+
+                def _py_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        total_mb = total // 1024 // 1024
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(
+                            _evt(
+                                ProvisionStep.INSTALL_PYTHON,
+                                'started',
+                                detail=f'Uploading Python {sent_mb}/{total_mb}MB ({pct}%)',
+                            )
+                        )
+
+                self._broadcast(
+                    _evt(
+                        ProvisionStep.INSTALL_PYTHON,
+                        'started',
+                        detail=f'Uploading Python 3.12 ({tar_size_mb}MB)',
+                    )
+                )
+                await self.ssh.upload_file(
+                    python_tar,
+                    f'{remote_tmp}/python3-standalone.tar.gz',
+                    progress_callback=_py_progress,
+                )
+                self._broadcast(
+                    _evt(
+                        ProvisionStep.INSTALL_PYTHON, 'started', detail='Extracting...'
+                    )
+                )
+                await self.ssh.run(
+                    f'mkdir -p {REMOTE_PYTHON_INSTALL_PATH} && tar xzf {remote_tmp}/python3-standalone.tar.gz -C {REMOTE_PYTHON_INSTALL_PATH}/ && rm {remote_tmp}/python3-standalone.tar.gz',
+                    timeout=120,
+                )
+                # Override system python3/pip3 with 3.12 — put in front of PATH
+                await self.ssh.run(
+                    f'mkdir -p $HOME/.local/bin && '
+                    f'ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12 $HOME/.local/bin/python3 && '
+                    f'ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12 $HOME/.local/bin/python3.12 && '
+                    f'ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/pip3.12 $HOME/.local/bin/pip3 && '
+                    f'ln -sf {REMOTE_PYTHON_INSTALL_PATH}/python/bin/pip3.12 $HOME/.local/bin/pip3.12',
+                    timeout=5,
+                )
+                # Ensure PATH has ~/.local/bin first
+                await self.ssh.run(
+                    "grep -q '.local/bin' $HOME/.bashrc || echo 'export PATH=$HOME/.local/bin:$PATH' >> $HOME/.bashrc",
+                    timeout=5,
+                )
+                # Verify with full path
+                remote_python = f'{REMOTE_PYTHON_INSTALL_PATH}/python/bin/python3.12'
+                py_ver_out, _, ec = await self.ssh.run(
+                    f'{remote_python} --version 2>&1', timeout=5
+                )
+                if ec == 0 and '3.12' in py_ver_out:
+                    yield _evt(
+                        ProvisionStep.INSTALL_PYTHON,
+                        'completed',
+                        detail=py_ver_out.strip(),
+                    )
+                else:
+                    yield _evt(
+                        ProvisionStep.INSTALL_PYTHON,
+                        'failed',
+                        detail=f'Python verify failed (ec={ec}): {py_ver_out.strip()}',
+                    )
+                    return
+            else:
+                yield _evt(
+                    ProvisionStep.INSTALL_PYTHON,
+                    'failed',
+                    detail='python3-standalone.tar.gz not found',
+                )
+                return
+
+        # ── Step 2: Agent SDK ──
+        # Check: binary exists AND actually works (import test) AND version matches expected
+        binary = self.tmpl['binary'].replace('$HOME', '~')
+        venv = self.tmpl['venv_path']
+        has_sdk = await self._check_remote(
+            f'test -f {binary} || test -f /opt/agent-venv/bin/agent-server'
+        )
+        sdk_healthy = False
+        # >>> CUSTOM: HiClaw — track whether to force re-upload wheels <<<
+        force_reupload_wheels = False
+        # >>> END CUSTOM <<<
+        # >>> CUSTOM: HiClaw — extract expected versions from pip_package for comparison <<<
+        # pip_package example:
+        #   "openhands-agent-server==1.16.1.post2 openhands-sdk==1.16.1 openhands-tools==1.16.1"
+        # We check BOTH openhands-sdk AND openhands-agent-server because most
+        # of our fork edits live in agent-server; bumping just the SDK version
+        # would miss agent-server-only changes.
+        import re as _re
+
+        _pkg_str = self.tmpl.get('pip_package', '')
+        _m_sdk = _re.search(r'openhands-sdk==(\S+)', _pkg_str)
+        _m_srv = _re.search(r'openhands-agent-server==(\S+)', _pkg_str)
+        expected_sdk_version = _m_sdk.group(1) if _m_sdk else None
+        expected_server_version = _m_srv.group(1) if _m_srv else None
+        # >>> END CUSTOM <<<
+        if has_sdk:
+            # >>> CUSTOM: HiClaw — verify ALL critical imports work AND BOTH versions match <<<
+            # Must check openhands.tools AND a sample dependency (binaryornot) too,
+            # otherwise broken installs (missing tools or deps) will be reused.
+            # Print both sdk and agent-server versions so we can compare each.
+            verify_out, _, verify_ec = await self.ssh.run(
+                f"PYTHONPATH={venv}/lib {remote_python} -c '"
+                'import openhands.agent_server; '
+                'import openhands.sdk; '
+                'import openhands.tools; '
+                'import binaryornot; '
+                'import importlib.metadata as _m; '
+                'print("VERIFY_OK", '
+                '_m.version("openhands-sdk"), '
+                '_m.version("openhands-agent-server"))'
+                "' 2>&1",
+                timeout=60,
+            )
+            installed_sdk_version = None
+            installed_server_version = None
+            if 'VERIFY_OK' in verify_out:
+                try:
+                    _parts = verify_out.split('VERIFY_OK', 1)[1].strip().split()
+                    installed_sdk_version = _parts[0] if len(_parts) > 0 else None
+                    installed_server_version = _parts[1] if len(_parts) > 1 else None
+                except Exception:
+                    installed_sdk_version = None
+                    installed_server_version = None
+            sdk_version_matches = (
+                expected_sdk_version is not None
+                and installed_sdk_version == expected_sdk_version
+            )
+            server_version_matches = (
+                expected_server_version is not None
+                and installed_server_version == expected_server_version
+            )
+            version_matches = sdk_version_matches and server_version_matches
+            installed_version_str = (
+                f'sdk={installed_sdk_version}, server={installed_server_version}'
+            )
+            if 'VERIFY_OK' in verify_out and version_matches:
+                sdk_healthy = True
+                yield _evt(
+                    ProvisionStep.SCP_DEPENDENCIES,
+                    'skipped',
+                    detail=f'Already installed ({installed_version_str})',
+                )
+                # Always regenerate wrapper scripts (ensure monkey-patch is up to date)
+                await self._write_wrapper_scripts(venv, remote_python)
+                yield _evt(
+                    ProvisionStep.INSTALL_AGENT_SDK,
+                    'completed',
+                    detail=f'Already installed ({installed_version_str}) & verified',
+                )
+                logger.info(
+                    f'[{self._host}] SDK: {installed_version_str} already installed, wrapper regenerated'
+                )
+            else:
+                # Binary exists but broken OR outdated — clean up everything and reinstall
+                if 'VERIFY_OK' in verify_out and not version_matches:
+                    _mismatched = []
+                    if not sdk_version_matches:
+                        _mismatched.append(
+                            f'sdk: installed={installed_sdk_version}, expected={expected_sdk_version}'
+                        )
+                    if not server_version_matches:
+                        _mismatched.append(
+                            f'server: installed={installed_server_version}, expected={expected_server_version}'
+                        )
+                    reason = 'version mismatch — ' + '; '.join(_mismatched)
+                    logger.warning(f'[{self._host}] SDK {reason}, upgrading')
+                    yield _evt(
+                        ProvisionStep.INSTALL_AGENT_SDK,
+                        'started',
+                        detail=f'Upgrading: {reason}',
+                    )
+                else:
+                    logger.warning(
+                        f'[{self._host}] SDK binary broken: {verify_out.strip()[-200:]}'
+                    )
+                    yield _evt(
+                        ProvisionStep.INSTALL_AGENT_SDK,
+                        'started',
+                        detail='Existing install is broken, cleaning up and reinstalling...',
+                    )
+                # >>> CUSTOM: HiClaw — force-clean wheels too, then verify removal <<<
+                await self.ssh.run(
+                    f'rm -rf {venv} {REMOTE_DEPS_PATH}/wheels '
+                    f'/opt/agent-venv '  # legacy path
+                    f'~/.hiclaw/agent-deps/python3-standalone',  # old python path
+                    timeout=30,
+                )
+                # Verify cleanup actually removed the wheels dir
+                check_cleanup, _, _ = await self.ssh.run(
+                    f'test -d {REMOTE_DEPS_PATH}/wheels && echo STILL_THERE || echo CLEAN',
+                    timeout=5,
+                )
+                if 'STILL_THERE' in check_cleanup:
+                    # Force re-create as empty so the upload path runs
+                    await self.ssh.run(
+                        f'rm -rf {REMOTE_DEPS_PATH}/wheels && mkdir -p {REMOTE_DEPS_PATH}',
+                        timeout=10,
+                    )
+                # >>> END CUSTOM <<<
+                logger.info(f'[{self._host}] Cleaned up old SDK install')
+                yield _evt(
+                    ProvisionStep.INSTALL_AGENT_SDK,
+                    'started',
+                    detail='Cleanup done. Re-uploading and reinstalling...',
+                )
+                # >>> CUSTOM: HiClaw — mark that we MUST re-upload after broken install <<<
+                force_reupload_wheels = True
+            # >>> END CUSTOM <<<
+
+        if not sdk_healthy:
+            # >>> CUSTOM: HiClaw — re-upload wheels if forced OR not present <<<
+            has_wheels = (
+                False
+                if force_reupload_wheels
+                else await self._check_remote(f'test -d {REMOTE_DEPS_PATH}/wheels')
+            )
+            if has_wheels:
+                yield _evt(
+                    ProvisionStep.SCP_DEPENDENCIES,
+                    'skipped',
+                    detail='Wheels already on remote',
+                )
+                logger.info(
+                    f'[{self._host}] SDK wheels already on remote, skipping upload'
+                )
+            # >>> END CUSTOM <<<
+            else:
+                wheels_dir = os.path.join(DEPS_DIR, 'wheels')
+                if not os.path.isdir(wheels_dir):
+                    yield _evt(
+                        ProvisionStep.SCP_DEPENDENCIES,
+                        'failed',
+                        detail='wheels/ not found in deps/',
+                    )
+                    return
+                import subprocess
+
+                wheels_archive = '/tmp/_wheels_upload.tar.gz'
+                subprocess.run(
+                    f'tar czf {wheels_archive} -C {DEPS_DIR} wheels/',
+                    shell=True,
+                    check=True,
+                    timeout=30,
+                )
+                archive_size_mb = os.path.getsize(wheels_archive) // 1024 // 1024
+                yield _evt(
+                    ProvisionStep.SCP_DEPENDENCIES,
+                    'started',
+                    detail=f'Uploading {archive_size_mb}MB',
+                )
+                last_mb = [0]
+
+                def _on_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(
+                            _evt(
+                                ProvisionStep.SCP_DEPENDENCIES,
+                                'started',
+                                detail=f'{sent_mb}/{archive_size_mb}MB ({pct}%)',
+                            )
+                        )
+
+                await self.ssh.upload_file(
+                    wheels_archive,
+                    f'{remote_tmp}/agent-wheels.tar.gz',
+                    progress_callback=_on_progress,
+                )
+                await self.ssh.run(
+                    f'mkdir -p {REMOTE_DEPS_PATH} && '
+                    f'tar xzf {remote_tmp}/agent-wheels.tar.gz -C {REMOTE_DEPS_PATH}/ && '
+                    f'rm -f {remote_tmp}/agent-wheels.tar.gz',
+                    timeout=60,
+                )
+                os.remove(wheels_archive)
+                yield _evt(
+                    ProvisionStep.SCP_DEPENDENCIES,
+                    'completed',
+                    detail=f'{archive_size_mb}MB uploaded',
+                )
+
+            # Install SDK from wheels
+            yield _evt(
+                ProvisionStep.INSTALL_AGENT_SDK,
+                'started',
+                detail='Installing from wheels',
+            )
+
+            # Pip commands need no_proxy to avoid corporate proxy interference
+            pip_env = 'no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1'
+
+            # Step 2a: Ensure pip is available
+            yield _evt(
+                ProvisionStep.INSTALL_AGENT_SDK, 'started', detail='Setting up pip...'
+            )
+            await self.ssh.run(
+                f'{pip_env} {remote_python} -m ensurepip --upgrade 2>/dev/null || true',
+                timeout=30,
+            )
+            await self.ssh.run(
+                f'{pip_env} {remote_python} -m pip install --break-system-packages --upgrade '
+                f'--no-index --find-links {REMOTE_DEPS_PATH}/wheels/ '
+                f'pip setuptools wheel 2>&1 || true',
+                timeout=60,
+            )
+
+            # Step 2b: Install all NON-openhands wheels first (deps only).
+            # Excluding openhands_* here avoids the namespace package corruption
+            # that happens when pip --target installs multiple wheels sharing the
+            # same top-level package. The openhands wheels are installed
+            # individually in pass 2.
+            yield _evt(
+                ProvisionStep.INSTALL_AGENT_SDK,
+                'started',
+                detail='Installing packages (pass 1/2)...',
+            )
+            # >>> CUSTOM: HiClaw — see pass 2 notes below; same flags/timeout
+            # hardening applied here. <<<
+            stdout_all, stderr, ec = await self.ssh.run(
+                f'cd {REMOTE_DEPS_PATH}/wheels && '
+                f"NON_OH=$(ls *.whl | grep -v '^openhands_' | tr '\\n' ' ') && "
+                f'{pip_env} {remote_python} -m pip install --break-system-packages --upgrade '
+                f'--no-cache-dir --disable-pip-version-check '
+                f'--ignore-installed --prefer-binary --target {venv}/lib '
+                f'--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ '
+                f'$NON_OH 2>&1; echo EXIT_CODE=$?',
+                timeout=1200,
+            )
+            logger.info(f'[{self._host}] Pip pass 1 tail: {stdout_all[-800:]}')
+            # >>> END CUSTOM <<<
+
+            # >>> CUSTOM: HiClaw — clean only openhands namespace before pass 2 <<<
+            # Pass 1 no longer installs openhands_* (excluded by grep) but a
+            # previous failed run might have left stale files. Clean only the
+            # openhands namespace; do NOT remove binaryornot — it was just
+            # installed in pass 1 and pass 2 uses --no-deps.
+            await self.ssh.run(
+                f'rm -rf {venv}/lib/openhands '
+                f'{venv}/lib/openhands_aci* '
+                f'{venv}/lib/openhands_sdk* '
+                f'{venv}/lib/openhands_tools* '
+                f'{venv}/lib/openhands_agent_server*',
+                timeout=15,
+            )
+            # >>> END CUSTOM <<<
+
+            # Step 2c: Install ALL openhands wheels in a SINGLE pip command.
+            # pip --target with shared namespace packages (openhands.*) needs all
+            # wheels passed at once. Sequential pip install commands break the
+            # namespace because pip cleans the existing namespace dir each call.
+            # Single command lets pip merge all subpackages correctly.
+            #
+            # >>> CUSTOM: HiClaw — pass 2 used to -q + 600s, which silently hung
+            # on slow remotes and gave no useful log on timeout. Now:
+            # - Drop -q so pip streams per-wheel progress into stdout (we tail
+            #   it on failure).
+            # - Add --no-cache-dir so pip doesn't try to write to ~/.cache/pip
+            #   (slow on some containers, and pointless for --target install).
+            # - Add --disable-pip-version-check so we don't spend time checking
+            #   pypi.org for a pip upgrade.
+            # - Bump timeout to 1200s (20 min) as a safety net for genuinely
+            #   slow disks.
+            yield _evt(
+                ProvisionStep.INSTALL_AGENT_SDK,
+                'started',
+                detail='Installing packages (pass 2/2)...',
+            )
+            stdout2, stderr2, _ = await self.ssh.run(
+                f'{pip_env} {remote_python} -m pip install --break-system-packages '
+                f'--no-cache-dir --disable-pip-version-check '
+                f'--prefer-binary --target {venv}/lib '
+                f'--no-index --no-deps --find-links {REMOTE_DEPS_PATH}/wheels/ '
+                f'{REMOTE_DEPS_PATH}/wheels/openhands_sdk-*.whl '
+                f'{REMOTE_DEPS_PATH}/wheels/openhands_tools-*.whl '
+                f'{REMOTE_DEPS_PATH}/wheels/openhands_aci-*.whl '
+                f'{REMOTE_DEPS_PATH}/wheels/openhands_agent_server-*.whl '
+                f'2>&1; echo EXIT_CODE=$?',
+                timeout=1200,
+            )
+            ec2 = 0 if 'EXIT_CODE=0' in stdout2 else 1
+            logger.info(f'[{self._host}] Pip pass 2 tail: {stdout2[-800:]}')
+            # >>> END CUSTOM <<<
+
+            # Step 2d: Verify core import works
+            check_out, _, _ = await self.ssh.run(
+                f'PYTHONPATH={venv}/lib {remote_python} -c \'import openhands.agent_server; print("OK")\' 2>&1',
+                timeout=10,
+            )
+            if 'OK' not in check_out:
+                yield _evt(
+                    ProvisionStep.INSTALL_AGENT_SDK,
+                    'failed',
+                    detail=f'Core import failed: {check_out.strip()[-1000:]}\n\npip output: {(stdout2 + stderr2).strip()[-1000:]}',
+                )
+                return
+            if ec2 != 0:
+                logger.warning(
+                    f'[{self._host}] Some optional packages failed, but core SDK OK'
+                )
+            # >>> CUSTOM: HiClaw — wrapper script that patches PUBLIC_SKILLS_REPO <<<
+            # Uses a Python launcher script instead of `python -m openhands.agent_server`
+            # so we can monkey-patch the SDK constant before the server starts.
+            # Write wrapper scripts (launcher + shell wrapper)
+            await self._write_wrapper_scripts(venv, remote_python)
+            # >>> END CUSTOM <<<
+
+            # >>> CUSTOM: HiClaw — final verification: can agent-server actually run? <<<
+            verify_out, _, verify_ec = await self.ssh.run(
+                f"PYTHONPATH={venv}/lib {remote_python} -c '"
+                'import openhands.agent_server; '
+                'import openhands.sdk; '
+                'import openhands.tools; '
+                'import binaryornot; '
+                'print("VERIFY_OK")'
+                "' 2>&1",
+                timeout=15,
+            )
+            if 'VERIFY_OK' not in verify_out:
+                # Diagnostic: list what's actually in the venv to understand what pip did
+                ls_out, _, _ = await self.ssh.run(
+                    f"echo '=== openhands/ contents ==='; "
+                    f'ls {venv}/lib/openhands/ 2>&1; '
+                    f"echo '=== openhands_*.dist-info ==='; "
+                    f'ls -d {venv}/lib/openhands_* 2>&1; '
+                    f"echo '=== binaryornot ==='; "
+                    f'ls -d {venv}/lib/binaryornot* 2>&1; '
+                    f"echo '=== pip output tail ==='; "
+                    f'echo {stdout2[-800:]!r}',
+                    timeout=10,
+                )
+                yield _evt(
+                    ProvisionStep.INSTALL_AGENT_SDK,
+                    'failed',
+                    detail=f'Post-install verify failed: {verify_out.strip()[-300:]}\n\nDiagnostic:\n{ls_out.strip()[-1500:]}',
+                )
+                return
+            # Also verify the binary wrapper works
+            binary_check, _, binary_ec = await self.ssh.run(
+                f'{venv}/bin/agent-server --help 2>&1 | head -3', timeout=10
+            )
+            if (
+                binary_ec != 0
+                and 'usage' not in binary_check.lower()
+                and 'error' not in binary_check.lower()
+            ):
+                yield _evt(
+                    ProvisionStep.INSTALL_AGENT_SDK,
+                    'failed',
+                    detail=f'agent-server binary check failed (ec={binary_ec}): {binary_check.strip()[-500:]}',
+                )
+                return
+            logger.info(f'[{self._host}] SDK install verified: imports OK, binary OK')
+            # >>> END CUSTOM <<<
+
+            yield _evt(ProvisionStep.INSTALL_AGENT_SDK, 'completed')
+
+        # ── Step 2.3: Claude CLI (optional) ──
+        # >>> CUSTOM: HiClaw — deploy Claude CLI for Claude engine mode <<<
+        claude_bundle = os.path.join(DEPS_DIR, 'claude-cli-bundle.tar.gz')
+        if os.path.exists(claude_bundle):
+            has_claude = await self._check_remote(
+                f'test -f {remote_home}/.local/bin/claude'
+            )
+            if has_claude:
+                yield _evt(
+                    ProvisionStep.INSTALL_CLAUDE_CLI,
+                    'skipped',
+                    detail='Already installed',
+                )
+                logger.info(f'[{self._host}] Claude CLI already installed, skipping')
+            else:
+                bundle_size_mb = os.path.getsize(claude_bundle) // 1024 // 1024
+                yield _evt(
+                    ProvisionStep.INSTALL_CLAUDE_CLI,
+                    'started',
+                    detail=f'Uploading Claude CLI ({bundle_size_mb}MB)',
+                )
+                logger.info(
+                    f'[{self._host}] Uploading Claude CLI bundle ({bundle_size_mb}MB)'
+                )
+                last_mb = [0]
+
+                def _on_claude_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(
+                            _evt(
+                                ProvisionStep.INSTALL_CLAUDE_CLI,
+                                'started',
+                                detail=f'Uploading {sent_mb}/{bundle_size_mb}MB ({pct}%)',
+                            )
+                        )
+
+                await self.ssh.upload_file(
+                    claude_bundle,
+                    f'{remote_tmp}/claude-cli-bundle.tar.gz',
+                    progress_callback=_on_claude_progress,
+                )
+                await self.ssh.run(
+                    f'mkdir -p {remote_home}/.local && '
+                    f'tar xzf {remote_tmp}/claude-cli-bundle.tar.gz -C {remote_home}/.local/ && '
+                    f'rm -f {remote_tmp}/claude-cli-bundle.tar.gz && '
+                    f'chmod +x {remote_home}/.local/share/claude/versions/* && '
+                    f'{remote_home}/.local/bin/claude --version 2>&1 || true',
+                    timeout=60,
+                )
+                installed = await self._check_remote(
+                    f'test -f {remote_home}/.local/bin/claude'
+                )
+                if installed:
+                    yield _evt(
+                        ProvisionStep.INSTALL_CLAUDE_CLI,
+                        'completed',
+                        detail='Claude CLI installed',
+                    )
+                    logger.info(f'[{self._host}] Claude CLI installed successfully')
+                else:
+                    yield _evt(
+                        ProvisionStep.INSTALL_CLAUDE_CLI,
+                        'failed',
+                        detail='Install verification failed',
+                    )
+                    logger.warning(
+                        f'[{self._host}] Claude CLI install verification failed'
+                    )
+        else:
+            logger.debug(
+                f'[{self._host}] No claude-cli-bundle.tar.gz, skipping Claude CLI'
+            )
+        # >>> END CUSTOM <<<
+
+        # ── Step 2.5: Deploy public skills to user skills dir ──
+        # >>> CUSTOM: HiClaw — transfer extensions via SSH to ~/.openhands/skills/ <<<
+        # Deploy skills as "user skills" so SDK loads them directly from filesystem.
+        # App-server passes load_public=false for remote workers, preventing any
+        # git clone/fetch from GitHub. Zero network dependency for skills.
+        extensions_bundle = os.path.join(DEPS_DIR, 'openhands-extensions.bundle')
+        if os.path.exists(extensions_bundle):
+            user_skills = f'{remote_home}/.openhands/skills'
+            has_skills = await self._check_remote(
+                f"find {user_skills} -name '*.md' -type f 2>/dev/null | head -1 | grep -q ."
+            )
+            if not has_skills:
+                bundle_size_kb = os.path.getsize(extensions_bundle) // 1024
+                logger.info(
+                    f'[{self._host}] Uploading public skills bundle ({bundle_size_kb}KB) to user skills dir'
+                )
+                await self.ssh.upload_file(
+                    extensions_bundle,
+                    f'{remote_tmp}/openhands-extensions.bundle',
+                )
+                await self.ssh.run(
+                    f'git clone {remote_tmp}/openhands-extensions.bundle {remote_tmp}/_extensions 2>&1 && '
+                    f'mkdir -p {user_skills} && '
+                    f'cp -r {remote_tmp}/_extensions/skills/* {user_skills}/ 2>/dev/null; '
+                    f'rm -rf {remote_tmp}/_extensions {remote_tmp}/openhands-extensions.bundle',
+                    timeout=30,
+                )
+                _ok = await self._check_remote(
+                    f"find {user_skills} -name '*.md' -type f 2>/dev/null | head -1 | grep -q ."
+                )
+                logger.info(
+                    f'[{self._host}] Public skills deploy: {"OK" if _ok else "FAILED"}'
+                )
+            else:
+                logger.info(
+                    f'[{self._host}] User skills already exist, skipping upload'
+                )
+        else:
+            logger.info(
+                f'[{self._host}] No extensions bundle at {extensions_bundle}, skipping'
+            )
+        # >>> END CUSTOM <<<
+
+        # ── Step 3: code-server ──
+        # Check: code-server binary exists?
+        cs_path = REMOTE_CODE_SERVER_PATH.replace('$HOME', '~')
+        has_cs = await self._check_remote(f'test -f {cs_path}/bin/code-server')
+        if has_cs:
+            yield _evt(
+                ProvisionStep.INSTALL_CODE_SERVER,
+                'completed',
+                detail='Already installed',
+            )
+            logger.info(f'[{self._host}] code-server already installed, skipping')
+        else:
+            CS_FILE = 'code-server.tar.gz'
+            cs_tar = os.path.join(DEPS_DIR, CS_FILE)
+            if os.path.exists(cs_tar):
+                cs_size_mb = os.path.getsize(cs_tar) // 1024 // 1024
+                yield _evt(
+                    ProvisionStep.INSTALL_CODE_SERVER,
+                    'started',
+                    detail=f'Uploading ({cs_size_mb}MB)',
+                )
+                last_mb = [0]
+
+                def _cs_progress(sent, total):
+                    sent_mb = sent // 1024 // 1024
+                    if sent_mb > last_mb[0]:
+                        last_mb[0] = sent_mb
+                        pct = int(sent * 100 / total) if total else 0
+                        self._broadcast(
+                            _evt(
+                                ProvisionStep.INSTALL_CODE_SERVER,
+                                'started',
+                                detail=f'Uploading {sent_mb}/{cs_size_mb}MB ({pct}%)',
+                            )
+                        )
+
+                await self.ssh.upload_file(
+                    cs_tar, f'{remote_tmp}/{CS_FILE}', progress_callback=_cs_progress
+                )
+                self._broadcast(
+                    _evt(
+                        ProvisionStep.INSTALL_CODE_SERVER,
+                        'started',
+                        detail='Extracting...',
+                    )
+                )
+                await self.ssh.run(
+                    f'mkdir -p {REMOTE_CODE_SERVER_PATH} && '
+                    f'tar xzf {remote_tmp}/{CS_FILE} -C {REMOTE_CODE_SERVER_PATH} --strip-components=1 && '
+                    f'mkdir -p $HOME/.local/bin && ln -sf {REMOTE_CODE_SERVER_PATH}/bin/code-server $HOME/.local/bin/code-server && '
+                    f'rm -f {remote_tmp}/{CS_FILE}',
+                    timeout=60,
+                )
+                if await self._check_remote(
+                    f'test -f {REMOTE_CODE_SERVER_PATH}/bin/code-server'
+                ):
+                    yield _evt(ProvisionStep.INSTALL_CODE_SERVER, 'completed')
+                else:
+                    yield _evt(
+                        ProvisionStep.INSTALL_CODE_SERVER,
+                        'failed',
+                        detail='Extraction failed',
+                    )
+            else:
+                yield _evt(
+                    ProvisionStep.INSTALL_CODE_SERVER,
+                    'skipped',
+                    detail='code-server.tar.gz not in deps/',
+                )
+
+    # ------------------------------------------------------------
+    # Abstract method impls used by machine_manager health checks
+    # ------------------------------------------------------------
+
+    async def start_agent_server(
+        self,
+        port: int,
+        env_vars: str,
+        log_file: str,
+    ) -> None:
+        """Launch agent-server on Linux via bash background process.
+
+        machine_manager.py historically built the launch command inline and
+        called `ssh.run_background()` directly. We keep that exact code path
+        here by re-implementing it in the provisioner so machine_manager can
+        call the abstract method on the base class.
+        """
+        binary = self.tmpl['binary']  # e.g. $HOME/.hiclaw/agent-venv/bin/agent-server
+        # cd to $HOME so agent-server's auto-cwd is a predictable place.
+        cmd = f'cd $HOME && {env_vars}{binary} --port {port}'
+        await self.ssh.run_background(cmd, log_file=log_file)
+        logger.info(f'[{self._host}] Started agent-server on :{port}')
+
+    async def is_agent_server_alive(self, port: int) -> bool:
+        """Linux uses pgrep -f to find the agent-server process by its
+        command-line pattern. Returns True if found."""
+        out, _, _ = await self.ssh.run(
+            f"pgrep -f 'agent.server.*--port {port}' > /dev/null && echo ALIVE || echo DEAD",
+            timeout=5,
+        )
+        return 'ALIVE' in out
+
+    async def kill_agent_server(self, port: int) -> None:
+        """Force-kill the agent-server process on Linux via pkill -9 -f."""
+        await self.ssh.run(
+            f"pkill -9 -f 'agent.server.*--port {port}' 2>/dev/null || true",
+            timeout=5,
+        )

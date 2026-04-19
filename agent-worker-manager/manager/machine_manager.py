@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import logging
+import os
 import random
 
 import httpx
@@ -19,15 +19,19 @@ from .models import (
     WorkerMode,
     compute_machine_id,
 )
-from .provisioner import Provisioner, TEMPLATES
+from .provisioner import TEMPLATES, make_provisioner
 from .ssh_client import SSHClient
 
 logger = logging.getLogger(__name__)
 
 # >>> CUSTOM: HiClaw — persist machine state to disk <<<
-HICLAW_DIR = os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))
+HICLAW_DIR = os.environ.get(
+    'HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw')
+)
 STATE_FILE = os.path.join(HICLAW_DIR, 'machines-state.json')
-CREDS_FILE = os.path.join(HICLAW_DIR, 'machines-credentials.json')  # 0600 perm, separate from state
+CREDS_FILE = os.path.join(
+    HICLAW_DIR, 'machines-credentials.json'
+)  # 0600 perm, separate from state
 
 
 def _save_credentials(creds: dict[str, dict]) -> None:
@@ -93,23 +97,26 @@ def _load_machines_state() -> dict[str, MachineInfo]:
     except Exception as e:
         logger.warning(f'Failed to load machine state: {e}')
         return {}
+
+
 # >>> END CUSTOM <<<
 
 
 def _pick_port() -> int:
     """Pick a random available port in range 20000-50000."""
     import socket
+
     for _ in range(20):
         port = random.randint(20000, 50000)
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(("0.0.0.0", port))
+                s.bind(('0.0.0.0', port))
                 return port
         except OSError:
             continue
     # Fallback: let OS pick
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("0.0.0.0", 0))
+        s.bind(('0.0.0.0', 0))
         return s.getsockname()[1]
 
 
@@ -129,7 +136,9 @@ class MachineManager:
         self._provision_locks: dict[str, asyncio.Lock] = {}
 
     # >>> CUSTOM: HiClaw — reconnect to previously saved machines <<<
-    async def reconnect_saved_machines(self, passwords: dict[str, str] | None = None) -> int:
+    async def reconnect_saved_machines(
+        self, passwords: dict[str, str] | None = None
+    ) -> int:
         """Reconnect to machines that were saved before restart.
 
         For each machine in PAUSED state (restored from disk), attempt to:
@@ -145,8 +154,11 @@ class MachineManager:
         Returns:
             Number of machines successfully reconnected.
         """
-        paused = {mid: m for mid, m in self._machines.items()
-                  if m.status == MachineStatus.PAUSED}
+        paused = {
+            mid: m
+            for mid, m in self._machines.items()
+            if m.status == MachineStatus.PAUSED
+        }
         if not paused:
             return 0
 
@@ -164,7 +176,9 @@ class MachineManager:
                 if not password:
                     password = os.environ.get('HICLAW_SSH_PASSWORD')
                 if not password:
-                    logger.warning(f'No password for machine {machine_id} ({machine.host}), skipping reconnect')
+                    logger.warning(
+                        f'No password for machine {machine_id} ({machine.host}), skipping reconnect'
+                    )
                     continue
 
                 # SSH connect
@@ -180,13 +194,17 @@ class MachineManager:
                 is_running = 'running' in stdout.lower() or ('Up' in stdout)
 
                 if not is_running:
-                    logger.info(f'Machine {machine_id} ({machine.host}): agent-server not running, skipping')
+                    logger.info(
+                        f'Machine {machine_id} ({machine.host}): agent-server not running, skipping'
+                    )
                     await ssh.close()
                     continue
 
                 # Re-establish SSH tunnel
                 local_port = _pick_port()
-                tunnel = await ssh.forward_local_port(local_port, machine.agent_server_port)
+                tunnel = await ssh.forward_local_port(
+                    local_port, machine.agent_server_port
+                )
                 self._ssh_clients[machine_id] = ssh
                 self._local_ports[machine_id] = local_port
                 self._listeners[machine_id] = tunnel
@@ -194,7 +212,9 @@ class MachineManager:
                 # Verify health
                 try:
                     async with httpx.AsyncClient() as client:
-                        resp = await client.get(f'http://localhost:{local_port}/health', timeout=5)
+                        resp = await client.get(
+                            f'http://localhost:{local_port}/health', timeout=5
+                        )
                         if resp.status_code != 200:
                             raise Exception(f'Health check failed: {resp.status_code}')
                 except Exception as e:
@@ -210,7 +230,9 @@ class MachineManager:
                 # Also try to re-establish code-server tunnel
                 try:
                     cs_local_port = _pick_port()
-                    cs_tunnel = await ssh.forward_local_port(cs_local_port, machine.code_server_port)
+                    await ssh.forward_local_port(
+                        cs_local_port, machine.code_server_port
+                    )
                     machine.code_server_tunnel_port = cs_local_port
                     machine.vscode_url = f'http://localhost:{cs_local_port}'
                 except Exception:
@@ -219,15 +241,20 @@ class MachineManager:
                 self._event_queues[machine_id] = []
                 self._provision_locks[machine_id] = asyncio.Lock()
                 reconnected += 1
-                logger.info(f'Machine {machine_id} ({machine.host}) reconnected: tunnel localhost:{local_port} → {machine.agent_server_port}')
+                logger.info(
+                    f'Machine {machine_id} ({machine.host}) reconnected: tunnel localhost:{local_port} → {machine.agent_server_port}'
+                )
 
             except Exception as e:
-                logger.warning(f'Failed to reconnect machine {machine_id} ({machine.host}): {e}')
+                logger.warning(
+                    f'Failed to reconnect machine {machine_id} ({machine.host}): {e}'
+                )
 
         if reconnected > 0:
             _save_machines_state(self._machines)
             logger.info(f'Reconnected {reconnected}/{len(paused)} machines')
         return reconnected
+
     # >>> END CUSTOM <<<
 
     async def connect_machine(self, req: ConnectMachineRequest) -> MachineInfo:
@@ -249,31 +276,39 @@ class MachineManager:
                             f"pgrep -f 'agent.server.*--port {machine.agent_server_port}' > /dev/null && echo ALIVE || echo DEAD",
                             timeout=5,
                         )
-                        if "ALIVE" not in proc_out:
-                            logger.warning(f"[{machine.host}] Agent-server process not found on remote")
+                        if 'ALIVE' not in proc_out:
+                            logger.warning(
+                                f'[{machine.host}] Agent-server process not found on remote'
+                            )
                         else:
                             # 2. Tunnel check: can we reach it through the tunnel?
                             try:
                                 if machine.tunnel_port:
                                     async with httpx.AsyncClient() as client:
                                         resp = await client.get(
-                                            f"http://localhost:{machine.tunnel_port}/health",
+                                            f'http://localhost:{machine.tunnel_port}/health',
                                             timeout=5,
                                         )
                                         still_healthy = resp.status_code == 200
                                 if not still_healthy:
-                                    logger.warning(f"[{machine.host}] Agent-server process alive but tunnel broken, will re-provision")
+                                    logger.warning(
+                                        f'[{machine.host}] Agent-server process alive but tunnel broken, will re-provision'
+                                    )
                             except Exception as e:
-                                logger.warning(f"[{machine.host}] Tunnel health check failed: {e}")
+                                logger.warning(
+                                    f'[{machine.host}] Tunnel health check failed: {e}'
+                                )
                     except Exception as e:
-                        logger.warning(f"[{machine.host}] SSH check failed: {e}")
+                        logger.warning(f'[{machine.host}] SSH check failed: {e}')
                 else:
-                    logger.warning(f"[{machine.host}] SSH connection lost")
+                    logger.warning(f'[{machine.host}] SSH connection lost')
 
                 if not still_healthy:
-                    logger.warning(f"[{machine.host}] Machine was READY but unhealthy, re-provisioning...")
+                    logger.warning(
+                        f'[{machine.host}] Machine was READY but unhealthy, re-provisioning...'
+                    )
                     machine.status = MachineStatus.ERROR
-                    machine.error = "Agent server not responding, reconnecting..."
+                    machine.error = 'Agent server not responding, reconnecting...'
                     await self._cleanup_machine(machine_id)
                     # Fall through to create new machine
                 else:
@@ -282,24 +317,40 @@ class MachineManager:
                     ssh = self._ssh_clients.get(machine_id)
                     # >>> CUSTOM: HiClaw — full reconnect health checks <<<
                     if ssh and ssh.connected:
+
                         async def _run_checks():
                             try:
                                 await self._reconnect_health_checks(ssh, machine, req)
                             except Exception as exc:
-                                logger.error(f"[{machine.host}] Reconnect health checks crashed: {exc}", exc_info=True)
+                                logger.error(
+                                    f'[{machine.host}] Reconnect health checks crashed: {exc}',
+                                    exc_info=True,
+                                )
+
                         asyncio.create_task(_run_checks())
                     else:
-                        logger.warning(f"Machine {machine_id} reuse: SSH not connected, skipping health checks")
+                        logger.warning(
+                            f'Machine {machine_id} reuse: SSH not connected, skipping health checks'
+                        )
                     # >>> END CUSTOM <<<
                     return machine
-            if machine.status in (MachineStatus.CONNECTING, MachineStatus.PROVISIONING, MachineStatus.STARTING):
+            if machine.status in (
+                MachineStatus.CONNECTING,
+                MachineStatus.PROVISIONING,
+                MachineStatus.STARTING,
+            ):
                 # Already in progress — caller should subscribe to SSE
                 return machine
             if machine.status == MachineStatus.ERROR:
                 await self._cleanup_machine(machine_id)
-            # >>> CUSTOM: HiClaw — handle PAUSED machines (restored from disk) <<<
-            if machine.status == MachineStatus.PAUSED:
-                logger.info(f"Machine {machine_id} is PAUSED (restored from disk), re-provisioning...")
+            # >>> CUSTOM: HiClaw — DISCONNECTED machines (restored from disk) <<<
+            # NOTE: MachineStatus has no PAUSED value; legacy CUSTOM code
+            # referenced it and crashed with AttributeError. DISCONNECTED
+            # is the real "needs re-provision" state.
+            if machine.status == MachineStatus.DISCONNECTED:
+                logger.info(
+                    f'Machine {machine_id} is DISCONNECTED (restored from disk), re-provisioning...'
+                )
                 await self._cleanup_machine(machine_id)
                 # Fall through to create new machine entry and re-provision
             # >>> END CUSTOM <<<
@@ -313,6 +364,9 @@ class MachineManager:
             mode=req.mode,
             template=req.template,
             workspace=req.workspace,
+            # >>> CUSTOM: HiClaw — sticky OS type so reconnect/restore picks the same provisioner <<<
+            os_type=req.os_type,
+            # >>> END CUSTOM <<<
             agent_server_port=req.agent_server_port,
         )
         self._machines[machine_id] = machine
@@ -371,14 +425,16 @@ class MachineManager:
             except asyncio.QueueFull:
                 pass
 
-    async def _run_provisioning(self, machine_id: str, req: ConnectMachineRequest) -> None:
+    async def _run_provisioning(
+        self, machine_id: str, req: ConnectMachineRequest
+    ) -> None:
         """Full provisioning flow: SSH → provision → start → tunnel."""
         machine = self._machines[machine_id]
 
         async with self._provision_locks[machine_id]:
             try:
                 # Step 1: SSH connect
-                evt = ProvisionEvent(step=ProvisionStep.SSH_CONNECT, status="started")
+                evt = ProvisionEvent(step=ProvisionStep.SSH_CONNECT, status='started')
                 self._broadcast_event(machine_id, evt)
                 machine.status = MachineStatus.CONNECTING
 
@@ -392,35 +448,53 @@ class MachineManager:
                 await ssh.connect()
                 self._ssh_clients[machine_id] = ssh
 
-                evt = ProvisionEvent(step=ProvisionStep.SSH_CONNECT, status="completed")
+                evt = ProvisionEvent(step=ProvisionStep.SSH_CONNECT, status='completed')
                 self._broadcast_event(machine_id, evt)
 
                 # Step 2: Provision (check/install deps)
                 machine.status = MachineStatus.PROVISIONING
-                provisioner = Provisioner(
-                    ssh, template=req.template,
-                    broadcast_fn=lambda evt, mid=machine_id: self._broadcast_event(mid, evt),
+                # >>> CUSTOM: HiClaw — pick Linux vs Windows provisioner based
+                # on the request's os_type. Default is Linux, existing
+                # behavior unchanged. <<<
+                provisioner = make_provisioner(
+                    ssh,
+                    os_type=req.os_type,
+                    template=req.template,
+                    broadcast_fn=lambda evt, mid=machine_id: self._broadcast_event(
+                        mid, evt
+                    ),
                 )
+                # >>> END CUSTOM <<<
                 # >>> CUSTOM: HiClaw — track if SDK was reinstalled to force agent-server restart <<<
                 sdk_was_reinstalled = False
                 # >>> END CUSTOM <<<
                 async for evt in provisioner.provision():
                     self._broadcast_event(machine_id, evt)
-                    if evt.status == "failed":
-                        raise RuntimeError(f"Provisioning failed at {evt.step}: {evt.detail}")
+                    if evt.status == 'failed':
+                        raise RuntimeError(
+                            f'Provisioning failed at {evt.step}: {evt.detail}'
+                        )
                     # >>> CUSTOM: HiClaw <<<
-                    if evt.step == ProvisionStep.INSTALL_AGENT_SDK and evt.status == "completed" and "Already installed" not in evt.detail:
+                    if (
+                        evt.step == ProvisionStep.INSTALL_AGENT_SDK
+                        and evt.status == 'completed'
+                        and 'Already installed' not in evt.detail
+                    ):
                         sdk_was_reinstalled = True
-                        logger.info(f"[{machine.host}] SDK was reinstalled, will force restart agent-server")
+                        logger.info(
+                            f'[{machine.host}] SDK was reinstalled, will force restart agent-server'
+                        )
                     # >>> END CUSTOM <<<
 
                 # Step 3: Clone skills repo
-                evt = ProvisionEvent(step=ProvisionStep.CLONE_SKILLS, status="started")
+                evt = ProvisionEvent(step=ProvisionStep.CLONE_SKILLS, status='started')
                 self._broadcast_event(machine_id, evt)
 
                 await self._clone_skills_repo(ssh, machine)
 
-                evt = ProvisionEvent(step=ProvisionStep.CLONE_SKILLS, status="completed")
+                evt = ProvisionEvent(
+                    step=ProvisionStep.CLONE_SKILLS, status='completed'
+                )
                 self._broadcast_event(machine_id, evt)
 
                 # Read CoMagic token from remote (always, regardless of agent-server state)
@@ -430,21 +504,25 @@ class MachineManager:
                 )
                 try:
                     import json as _json
+
                     _comagic = _json.loads(token_out.strip())
                     if _comagic.get('token'):
                         machine.comagic_token = _comagic['token']
                     if _comagic.get('xUserId'):
                         machine.comagic_user_id = _comagic['xUserId']
                     if _comagic.get('token'):
-                        logger.info(f"CoMagic token loaded for {machine.host}")
+                        logger.info(f'CoMagic token loaded for {machine.host}')
                 except Exception:
                     pass
 
                 # Step 4: Health check first — if agent-server already running and healthy, skip start
                 machine.status = MachineStatus.STARTING
                 port = machine.agent_server_port
-                evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="started",
-                                     detail="Checking existing agent-server...")
+                evt = ProvisionEvent(
+                    step=ProvisionStep.HEALTH_CHECK,
+                    status='started',
+                    detail='Checking existing agent-server...',
+                )
                 self._broadcast_event(machine_id, evt)
 
                 already_healthy = False
@@ -453,7 +531,7 @@ class MachineManager:
                         f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 http://localhost:{port}/health",
                         timeout=5,
                     )
-                    if h_out.strip() == "200":
+                    if h_out.strip() == '200':
                         # Verify workspace matches
                         ps_out, _, _ = await ssh.run(
                             f"ps aux | grep 'agent.server.*--port {port}' | grep -v grep | head -1",
@@ -461,102 +539,162 @@ class MachineManager:
                         )
                         if machine.workspace in ps_out:
                             already_healthy = True
-                            logger.info(f"[{machine.host}] Agent-server already healthy on port {port}, reusing")
+                            logger.info(
+                                f'[{machine.host}] Agent-server already healthy on port {port}, reusing'
+                            )
                         else:
-                            logger.info(f"[{machine.host}] Agent-server on port {port} has wrong workspace, will restart")
+                            logger.info(
+                                f'[{machine.host}] Agent-server on port {port} has wrong workspace, will restart'
+                            )
                 except Exception:
                     pass
 
                 # >>> CUSTOM: HiClaw — force restart if SDK was reinstalled <<<
                 if already_healthy and sdk_was_reinstalled:
-                    logger.info(f"[{machine.host}] SDK updated, killing old agent-server for restart")
-                    await ssh.run(f"pkill -9 -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5)
+                    logger.info(
+                        f'[{machine.host}] SDK updated, killing old agent-server for restart'
+                    )
+                    await ssh.run(
+                        f"pkill -9 -f 'agent.server.*--port {port}' 2>/dev/null || true",
+                        timeout=5,
+                    )
                     already_healthy = False
                 # >>> END CUSTOM <<<
 
                 if already_healthy:
-                    evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed",
-                                         detail="Already running")
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.HEALTH_CHECK,
+                        status='completed',
+                        detail='Already running',
+                    )
                     self._broadcast_event(machine_id, evt)
-                    evt = ProvisionEvent(step=ProvisionStep.START_AGENT_SERVER, status="completed",
-                                         detail="Already running")
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.START_AGENT_SERVER,
+                        status='completed',
+                        detail='Already running',
+                    )
                     self._broadcast_event(machine_id, evt)
                 else:
                     # Not healthy — kill old process, start fresh
-                    evt = ProvisionEvent(step=ProvisionStep.START_AGENT_SERVER, status="started")
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.START_AGENT_SERVER, status='started'
+                    )
                     self._broadcast_event(machine_id, evt)
 
                     await self._start_agent_server(ssh, machine)
 
-                    evt = ProvisionEvent(step=ProvisionStep.START_AGENT_SERVER, status="completed")
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.START_AGENT_SERVER, status='completed'
+                    )
                     self._broadcast_event(machine_id, evt)
 
                     # Now wait for health
                     import time as _time
+
                     _hc_start = _time.monotonic()
-                    evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="started",
-                                         detail="Waiting for agent-server to start...")
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.HEALTH_CHECK,
+                        status='started',
+                        detail='Waiting for agent-server to start...',
+                    )
                     self._broadcast_event(machine_id, evt)
 
                     await self._wait_healthy(ssh, machine)
 
                     _hc_elapsed = int(_time.monotonic() - _hc_start)
-                    evt = ProvisionEvent(step=ProvisionStep.HEALTH_CHECK, status="completed",
-                                         detail=f"Healthy ({_hc_elapsed}s)")
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.HEALTH_CHECK,
+                        status='completed',
+                        detail=f'Healthy ({_hc_elapsed}s)',
+                    )
                     self._broadcast_event(machine_id, evt)
-                    logger.info(f"[{machine.host}] Health check took {_hc_elapsed}s")
+                    logger.info(f'[{machine.host}] Health check took {_hc_elapsed}s')
 
                 # Step 5: Start code-server (if installed)
                 import time as _time
+
                 _cs_start = _time.monotonic()
-                evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="started",
-                                     detail="Starting code-server...")
+                evt = ProvisionEvent(
+                    step=ProvisionStep.INSTALL_CODE_SERVER,
+                    status='started',
+                    detail='Starting code-server...',
+                )
                 self._broadcast_event(machine_id, evt)
                 await self._start_code_server(ssh, machine)
                 _cs_elapsed = int(_time.monotonic() - _cs_start)
                 if machine.code_server_port:
-                    evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="completed",
-                                         detail=f"Running on port {machine.code_server_port} ({_cs_elapsed}s)")
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.INSTALL_CODE_SERVER,
+                        status='completed',
+                        detail=f'Running on port {machine.code_server_port} ({_cs_elapsed}s)',
+                    )
                 else:
-                    evt = ProvisionEvent(step=ProvisionStep.INSTALL_CODE_SERVER, status="skipped",
-                                         detail=f"Not installed ({_cs_elapsed}s)")
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.INSTALL_CODE_SERVER,
+                        status='skipped',
+                        detail=f'Not installed ({_cs_elapsed}s)',
+                    )
                 self._broadcast_event(machine_id, evt)
-                logger.info(f"[{machine.host}] code-server step took {_cs_elapsed}s")
+                logger.info(f'[{machine.host}] code-server step took {_cs_elapsed}s')
 
                 # Step 6: SSH tunnels
-                evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="started",
-                                     detail="Creating SSH tunnels...")
+                evt = ProvisionEvent(
+                    step=ProvisionStep.SETUP_TUNNEL,
+                    status='started',
+                    detail='Creating SSH tunnels...',
+                )
                 self._broadcast_event(machine_id, evt)
 
                 try:
                     # Tunnel for agent-server
                     local_port = _pick_port()
-                    logger.info(f"[{machine.host}] Creating agent-server tunnel: localhost:{local_port} → remote:{machine.agent_server_port}")
-                    listener = await ssh.forward_local_port(machine.agent_server_port, local_port)
+                    logger.info(
+                        f'[{machine.host}] Creating agent-server tunnel: localhost:{local_port} → remote:{machine.agent_server_port}'
+                    )
+                    listener = await ssh.forward_local_port(
+                        machine.agent_server_port, local_port
+                    )
                     self._listeners[machine_id] = listener
                     self._local_ports[machine_id] = local_port
                     machine.tunnel_port = local_port
-                    machine.proxy_url = f"http://localhost:{local_port}"
+                    machine.proxy_url = f'http://localhost:{local_port}'
 
                     # Tunnel for code-server (if running) — per-user dynamic port
                     if machine.code_server_port:
                         cs_local_port = _pick_port()
-                        logger.info(f"[{machine.host}] Creating code-server tunnel: localhost:{cs_local_port} → remote:{machine.code_server_port}")
+                        logger.info(
+                            f'[{machine.host}] Creating code-server tunnel: localhost:{cs_local_port} → remote:{machine.code_server_port}'
+                        )
                         try:
-                            cs_listener = await ssh.forward_local_port(machine.code_server_port, cs_local_port)
-                            self._listeners[f"{machine_id}_cs"] = cs_listener
+                            cs_listener = await ssh.forward_local_port(
+                                machine.code_server_port, cs_local_port
+                            )
+                            self._listeners[f'{machine_id}_cs'] = cs_listener
                             machine.code_server_tunnel_port = cs_local_port
-                            machine.vscode_url = f"http://localhost:{cs_local_port}"
+                            machine.vscode_url = f'http://localhost:{cs_local_port}'
                         except Exception as cs_e:
-                            logger.warning(f"[{machine.host}] Code-server tunnel failed (non-fatal): {cs_e}")
+                            logger.warning(
+                                f'[{machine.host}] Code-server tunnel failed (non-fatal): {cs_e}'
+                            )
 
-                    evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="completed",
-                                         detail=f"agent:localhost:{local_port}" + (f" vscode:localhost:{machine.code_server_tunnel_port}" if machine.vscode_url else ""))
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.SETUP_TUNNEL,
+                        status='completed',
+                        detail=f'agent:localhost:{local_port}'
+                        + (
+                            f' vscode:localhost:{machine.code_server_tunnel_port}'
+                            if machine.vscode_url
+                            else ''
+                        ),
+                    )
                     self._broadcast_event(machine_id, evt)
                 except Exception as tunnel_e:
-                    logger.error(f"[{machine.host}] Tunnel creation failed: {tunnel_e}")
-                    evt = ProvisionEvent(step=ProvisionStep.SETUP_TUNNEL, status="failed",
-                                         detail=str(tunnel_e)[:500])
+                    logger.error(f'[{machine.host}] Tunnel creation failed: {tunnel_e}')
+                    evt = ProvisionEvent(
+                        step=ProvisionStep.SETUP_TUNNEL,
+                        status='failed',
+                        detail=str(tunnel_e)[:500],
+                    )
                     self._broadcast_event(machine_id, evt)
                     raise
 
@@ -564,57 +702,76 @@ class MachineManager:
                 machine.status = MachineStatus.READY
                 machine.active_conversations = 1
                 _save_machines_state(self._machines)  # >>> CUSTOM: HiClaw <<<
-                logger.info(f"Machine {machine_id} ready: {req.host}:{machine.agent_server_port} → localhost:{local_port}")
+                logger.info(
+                    f'Machine {machine_id} ready: {req.host}:{machine.agent_server_port} → localhost:{local_port}'
+                )
 
             except Exception as e:
                 machine.status = MachineStatus.ERROR
                 machine.error = str(e) or repr(e)
                 _save_machines_state(self._machines)  # >>> CUSTOM: HiClaw <<<
-                logger.error(f"Machine {machine_id} provisioning failed: {e}", exc_info=True)
+                logger.error(
+                    f'Machine {machine_id} provisioning failed: {e}', exc_info=True
+                )
 
     async def _clone_skills_repo(self, ssh: SSHClient, machine: MachineInfo) -> None:
         """Clone or update HiClaw skills repo via SSH reverse tunnel + git daemon."""
-        skills_dir = f"{machine.workspace}/.hiclaw/skills"
+        skills_dir = f'{machine.workspace}/.hiclaw/skills'
         GIT_PORT = 19418
 
         # Start git daemon on app-server (needed for both clone and pull)
         import subprocess
+
         git_daemon = subprocess.Popen(
-            ["git", "daemon", "--reuseaddr", f"--port={GIT_PORT}",
-             "--export-all", "--enable=receive-pack",
-             f"--base-path={os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))}", os.environ.get('HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw'))],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [
+                'git',
+                'daemon',
+                '--reuseaddr',
+                f'--port={GIT_PORT}',
+                '--export-all',
+                '--enable=receive-pack',
+                f'--base-path={os.environ.get("HICLAW_DIR", os.path.join(os.path.expanduser("~"), ".hiclaw"))}',
+                os.environ.get(
+                    'HICLAW_DIR', os.path.join(os.path.expanduser('~'), '.hiclaw')
+                ),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         try:
             # Create reverse tunnel: remote:19418 → app-server:19418
-            listener = await ssh._conn.forward_remote_port("", GIT_PORT, "localhost", GIT_PORT)
+            listener = await ssh._conn.forward_remote_port(
+                '', GIT_PORT, 'localhost', GIT_PORT
+            )
 
             # Check if already cloned
-            stdout, _, ec = await ssh.run(f"test -d {skills_dir}/.git && echo YES || echo NO", timeout=5)
+            stdout, _, ec = await ssh.run(
+                f'test -d {skills_dir}/.git && echo YES || echo NO', timeout=5
+            )
 
-            if stdout.strip() == "YES":
+            if stdout.strip() == 'YES':
                 # Pull latest — merge, don't reset (preserve local edits)
                 await ssh.run(
-                    f"cd {skills_dir} && git pull --rebase origin master 2>/dev/null || git pull origin master || true",
+                    f'cd {skills_dir} && git pull --rebase origin master 2>/dev/null || git pull origin master || true',
                     timeout=30,
                 )
-                logger.info(f"Skills repo updated on {machine.host}")
+                logger.info(f'Skills repo updated on {machine.host}')
             else:
                 # Fresh clone
-                await ssh.run(f"mkdir -p {machine.workspace}/.hiclaw", timeout=5)
+                await ssh.run(f'mkdir -p {machine.workspace}/.hiclaw', timeout=5)
                 await ssh.run(
-                    f"cd {machine.workspace}/.hiclaw && "
-                    f"git clone git://localhost:{GIT_PORT}/skills-repo.git skills",
+                    f'cd {machine.workspace}/.hiclaw && '
+                    f'git clone git://localhost:{GIT_PORT}/skills-repo.git skills',
                     timeout=60,
                 )
                 await ssh.run(
-                    f"cd {skills_dir} && "
+                    f'cd {skills_dir} && '
                     f"git config user.email 'user@hiclaw' && "
                     f"git config user.name 'HiClaw User'",
                     timeout=5,
                 )
-                logger.info(f"Skills repo cloned to {skills_dir} on {machine.host}")
+                logger.info(f'Skills repo cloned to {skills_dir} on {machine.host}')
 
             listener.close()
         finally:
@@ -629,24 +786,29 @@ class MachineManager:
         2. Kill any leftover process on the port
         3. Start fresh
         """
-        tmpl = TEMPLATES.get(machine.template, TEMPLATES["openhands"])
-        binary = tmpl["binary"]
+        tmpl = TEMPLATES.get(machine.template, TEMPLATES['openhands'])
+        binary = tmpl['binary']
         port = machine.agent_server_port
 
         # Find actual binary — check new path first, fall back to legacy
-        stdout, _, _ = await ssh.run(f"test -f {binary} && echo FOUND || echo MISSING", timeout=5)
-        if stdout.strip() != "FOUND":
-            stdout2, _, _ = await ssh.run("test -f /opt/agent-venv/bin/agent-server && echo FOUND || echo MISSING", timeout=5)
-            if stdout2.strip() == "FOUND":
-                binary = "/opt/agent-venv/bin/agent-server"
-                logger.info(f"[{machine.host}] Using legacy binary path: {binary}")
+        stdout, _, _ = await ssh.run(
+            f'test -f {binary} && echo FOUND || echo MISSING', timeout=5
+        )
+        if stdout.strip() != 'FOUND':
+            stdout2, _, _ = await ssh.run(
+                'test -f /opt/agent-venv/bin/agent-server && echo FOUND || echo MISSING',
+                timeout=5,
+            )
+            if stdout2.strip() == 'FOUND':
+                binary = '/opt/agent-venv/bin/agent-server'
+                logger.info(f'[{machine.host}] Using legacy binary path: {binary}')
 
         # Step 1: Check if something is already listening on the port
         health_out, _, health_ec = await ssh.run(
             f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' --max-time 3 http://localhost:{port}/health",
             timeout=5,
         )
-        port_healthy = health_out.strip() == "200"
+        port_healthy = health_out.strip() == '200'
 
         if port_healthy:
             # >>> CUSTOM: HiClaw — reuse agent-server regardless of workspace <<<
@@ -655,68 +817,83 @@ class MachineManager:
             # Check if running agent-server has correct FILE_STORE_PATH=$HOME/.hiclaw
             # If not (old version, or not set), kill and restart with correct config
             check_stdout, _, _ = await ssh.run(
-                f"ps aux | grep 'agent.server.*--port {port}' | grep -v grep | head -1", timeout=5)
-            home_out, _, _ = await ssh.run("echo $HOME", timeout=3)
-            remote_home = home_out.strip() or "/root"
-            correct_store = f"FILE_STORE_PATH={remote_home}/.hiclaw"
+                f"ps aux | grep 'agent.server.*--port {port}' | grep -v grep | head -1",
+                timeout=5,
+            )
+            home_out, _, _ = await ssh.run('echo $HOME', timeout=3)
+            remote_home = home_out.strip() or '/root'
+            correct_store = f'FILE_STORE_PATH={remote_home}/.hiclaw'
             if check_stdout and correct_store not in check_stdout:
-                logger.info(f"[{machine.host}] Agent-server missing '{correct_store}' in cmd, restarting")
-                await ssh.run(f"pkill -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5)
-                await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
+                logger.info(
+                    f"[{machine.host}] Agent-server missing '{correct_store}' in cmd, restarting"
+                )
+                await ssh.run(
+                    f"pkill -f 'agent.server.*--port {port}' 2>/dev/null || true",
+                    timeout=5,
+                )
+                await ssh.run(f'fuser -k {port}/tcp 2>/dev/null || true', timeout=5)
                 await asyncio.sleep(2)
             else:
-                logger.info(f"[{machine.host}] Agent-server healthy with correct config on port {port}, reusing")
-                await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
+                logger.info(
+                    f'[{machine.host}] Agent-server healthy with correct config on port {port}, reusing'
+                )
+                await ssh.run(f'mkdir -p {machine.workspace}', timeout=5)
                 return
             # >>> END CUSTOM <<<
         else:
             # Port not healthy — kill any leftover agent-server process on this port
-            await ssh.run(f"pkill -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5)
+            await ssh.run(
+                f"pkill -f 'agent.server.*--port {port}' 2>/dev/null || true", timeout=5
+            )
             # Also kill anything else holding the port
-            await ssh.run(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
+            await ssh.run(f'fuser -k {port}/tcp 2>/dev/null || true', timeout=5)
             await asyncio.sleep(1)
 
         # Step 2: Ensure workspace and log dirs exist
-        await ssh.run(f"mkdir -p {machine.workspace} $HOME/.hiclaw/logs $HOME/.hiclaw/tmp")
+        await ssh.run(
+            f'mkdir -p {machine.workspace} $HOME/.hiclaw/logs $HOME/.hiclaw/tmp'
+        )
 
         # Step 3: Start in background
-        log_file = f"$HOME/.hiclaw/logs/agent-server-{machine.id}.log"
+        log_file = f'$HOME/.hiclaw/logs/agent-server-{machine.id}.log'
         # no_proxy: corporate proxies intercept localhost + app-server IP connections
         app_ip = os.environ.get('HICLAW_APP_IP', '')
         if not app_ip:
             # Try to detect app-server IP from SSH connection (remote sees us as this IP)
             try:
-                ip_out, _, _ = await ssh.run("echo $SSH_CLIENT | awk '{print $1}'", timeout=3)
+                ip_out, _, _ = await ssh.run(
+                    "echo $SSH_CLIENT | awk '{print $1}'", timeout=3
+                )
                 app_ip = ip_out.strip()
             except Exception:
                 pass
-        no_proxy_list = f"localhost,127.0.0.1{f',{app_ip}' if app_ip else ''}"
-        env_vars = f"no_proxy={no_proxy_list} NO_PROXY={no_proxy_list} "
+        no_proxy_list = f'localhost,127.0.0.1{f",{app_ip}" if app_ip else ""}'
+        env_vars = f'no_proxy={no_proxy_list} NO_PROXY={no_proxy_list} '
         # >>> CUSTOM: HiClaw — inherit proxy settings from remote machine <<<
         # LLM requests may need to go through a corporate proxy.
         # Read the remote machine's system proxy config and pass it to agent-server.
         try:
             proxy_out, _, _ = await ssh.run(
-                "echo http_proxy=$http_proxy; echo https_proxy=$https_proxy; "
-                "echo HTTP_PROXY=$HTTP_PROXY; echo HTTPS_PROXY=$HTTPS_PROXY",
+                'echo http_proxy=$http_proxy; echo https_proxy=$https_proxy; '
+                'echo HTTP_PROXY=$HTTP_PROXY; echo HTTPS_PROXY=$HTTPS_PROXY',
                 timeout=3,
             )
             for line in proxy_out.strip().split('\n'):
                 if '=' in line:
                     key, val = line.split('=', 1)
                     if val and val != key:  # has a value
-                        env_vars += f"{key}={val} "
-                        logger.info(f"[{machine.host}] Inherited proxy: {key}={val}")
+                        env_vars += f'{key}={val} '
+                        logger.info(f'[{machine.host}] Inherited proxy: {key}={val}')
         except Exception as e:
-            logger.warning(f"[{machine.host}] Failed to read proxy config: {e}")
+            logger.warning(f'[{machine.host}] Failed to read proxy config: {e}')
         # >>> END CUSTOM <<<
         # >>> CUSTOM: HiClaw — use user home for FILE_STORE_PATH (not workspace-specific) <<<
         # This allows one agent-server to serve multiple workspaces
-        env_vars += f"FILE_STORE_PATH=$HOME/.hiclaw "
+        env_vars += 'FILE_STORE_PATH=$HOME/.hiclaw '
         # LLM completion logs go to ~/.hiclaw/logs/ (SDK reads LOG_DIR env var)
-        env_vars += "LOG_DIR=$HOME/.hiclaw/logs "
+        env_vars += 'LOG_DIR=$HOME/.hiclaw/logs '
         # Conversations data (events, chat history) stored in .hiclaw/conversations/
-        env_vars += "OH_CONVERSATIONS_PATH=$HOME/.hiclaw/conversations "
+        env_vars += 'OH_CONVERSATIONS_PATH=$HOME/.hiclaw/conversations '
         # >>> CUSTOM: HiClaw — pass secret key for encrypting API keys in persisted conversations <<<
         _secret_key = os.environ.get('OH_SECRET_KEY', '')
         if _secret_key:
@@ -724,20 +901,20 @@ class MachineManager:
         # >>> CUSTOM: HiClaw — disable SDK's public skills git fetch (we pre-load via SSH bundle) <<<
         # Skills are uploaded to ~/.openhands/skills/ (user skills dir) by provisioner/reconnect.
         # Tell agent-server to skip public skills loading (which tries git fetch from GitHub).
-        env_vars += "OH_LOAD_PUBLIC_SKILLS=false "
+        env_vars += 'OH_LOAD_PUBLIC_SKILLS=false '
         # Use local model cost map — prevents litellm from fetching from GitHub
-        env_vars += "LITELLM_LOCAL_MODEL_COST_MAP=true "
+        env_vars += 'LITELLM_LOCAL_MODEL_COST_MAP=true '
         # Enable detailed litellm logging so LLM errors show full response body
-        env_vars += "LITELLM_LOG=DEBUG "
-        env_vars += "SET_VERBOSE=True "
+        env_vars += 'LITELLM_LOG=DEBUG '
+        env_vars += 'SET_VERBOSE=True '
         # >>> CUSTOM: HiClaw — let Claude Code CLI run as root (machines are ephemeral sandboxes) <<<
         # Claude CLI refuses --dangerously-skip-permissions when uid=0 unless
         # IS_SANDBOX=1 or CLAUDE_CODE_BUBBLEWRAP is set. Remote machines ARE sandboxes.
-        env_vars += "IS_SANDBOX=1 "
+        env_vars += 'IS_SANDBOX=1 '
         # >>> END CUSTOM <<<
         # >>> END CUSTOM <<<
         if os.environ.get('HICLAW_LLM_DEBUG'):
-            env_vars += "HICLAW_LLM_DEBUG=1 "
+            env_vars += 'HICLAW_LLM_DEBUG=1 '
         # Read CoMagic token from remote machine's ~/.comagic/userToken.json
         token_out, _, _ = await ssh.run(
             "cat ~/.comagic/userToken.json 2>/dev/null || echo '{}'",
@@ -745,6 +922,7 @@ class MachineManager:
         )
         try:
             import json
+
             comagic = json.loads(token_out.strip())
             if comagic.get('token'):
                 env_vars += f"COMAGIC_TOKEN='{comagic['token']}' "
@@ -753,37 +931,55 @@ class MachineManager:
                 env_vars += f"COMAGIC_USER_ID='{comagic['xUserId']}' "
                 machine.comagic_user_id = comagic['xUserId']
             if comagic.get('token'):
-                logger.info(f"CoMagic token loaded for {machine.host}")
+                logger.info(f'CoMagic token loaded for {machine.host}')
         except Exception:
             pass
-        # >>> CUSTOM: HiClaw — cd to $HOME, not workspace (one agent-server for all workspaces) <<<
-        cmd = f"cd $HOME && {env_vars}{binary} --port {port}"
-        await ssh.run_background(cmd, log_file=log_file)
-        logger.info(f"Started agent-server on {machine.host}:{port}")
+        # >>> CUSTOM: HiClaw — delegate final spawn to the OS-specific provisioner <<<
+        # Linux uses bash `cd $HOME && {env_vars}{binary} --port {port}` via
+        # ssh.run_background (unchanged from before). Windows will write a
+        # .cmd wrapper and use Start-Process. machine.os_type is sticky so
+        # we pick the right implementation on every reconnect.
+        #
+        # Note: the binary path is overridden onto the template dict here so
+        # the provisioner uses the same fallback-resolved value (handles the
+        # legacy /opt/agent-venv/bin path).
+        provisioner = make_provisioner(
+            ssh,
+            os_type=machine.os_type,
+            template=machine.template,
+        )
+        provisioner.tmpl = dict(provisioner.tmpl, binary=binary)
+        await provisioner.start_agent_server(
+            port=port,
+            env_vars=env_vars,
+            log_file=log_file,
+        )
+        logger.info(f'Started agent-server on {machine.host}:{port}')
+        # >>> END CUSTOM <<<
 
     async def _start_code_server(self, ssh: SSHClient, machine: MachineInfo) -> None:
         """Start code-server on the remote machine if installed."""
         # Find code-server binary — single SSH command checks all paths
         out, _, _ = await ssh.run(
-            "for p in ~/.hiclaw/code-server/bin/code-server ~/.local/bin/code-server; do "
-            "[ -f \"$p\" ] && echo \"$p\" && exit 0; done; "
+            'for p in ~/.hiclaw/code-server/bin/code-server ~/.local/bin/code-server; do '
+            '[ -f "$p" ] && echo "$p" && exit 0; done; '
             "command -v code-server 2>/dev/null || echo ''",
             timeout=5,
         )
         cs_bin = out.strip()
         if not cs_bin:
-            logger.info(f"code-server not installed on {machine.host}, skipping")
+            logger.info(f'code-server not installed on {machine.host}, skipping')
             machine.code_server_port = 0
             return
 
-        logger.info(f"[{machine.host}] Found code-server at: {cs_bin}")
+        logger.info(f'[{machine.host}] Found code-server at: {cs_bin}')
 
         # Set dark theme to match container VS Code
         await ssh.run(
-            "mkdir -p ~/.local/share/code-server/User && "
+            'mkdir -p ~/.local/share/code-server/User && '
             "cat > ~/.local/share/code-server/User/settings.json << 'VSEOF'\n"
             '{"workbench.colorTheme":"Default Dark Modern","workbench.startupEditor":"none","telemetry.telemetryLevel":"off"}\n'
-            "VSEOF",
+            'VSEOF',
             timeout=5,
         )
 
@@ -794,21 +990,28 @@ class MachineManager:
         _user_hash = hash(machine.username) % 100
         cs_port = 8443 + _user_hash  # e.g., g0003848 → 8443+N, z0002323 → 8443+M
         machine.code_server_port = cs_port
-        logger.info(f"[{machine.host}] code-server port for {machine.username}: {cs_port}")
+        logger.info(
+            f'[{machine.host}] code-server port for {machine.username}: {cs_port}'
+        )
 
         # Check if already running on this user's port
-        stdout, _, ec = await ssh.run(f"no_proxy=localhost,127.0.0.1 curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}", timeout=5)
-        if stdout.strip() == "200":
-            logger.info(f"[{machine.host}] code-server already running on port {cs_port}")
+        stdout, _, ec = await ssh.run(
+            f"no_proxy=localhost,127.0.0.1 curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}",
+            timeout=5,
+        )
+        if stdout.strip() == '200':
+            logger.info(
+                f'[{machine.host}] code-server already running on port {cs_port}'
+            )
             return
 
         # >>> CUSTOM: HiClaw — start code-server at $HOME so all workspaces are accessible <<<
-        log_file = f"$HOME/.hiclaw/logs/code-server-{machine.id}.log"
+        log_file = f'$HOME/.hiclaw/logs/code-server-{machine.id}.log'
         cmd = (
-            f"no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 "
-            f"{cs_bin} --port {cs_port} --host 0.0.0.0 "
-            f"--auth none --disable-telemetry --disable-workspace-trust "
-            f"$HOME"
+            f'no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1 '
+            f'{cs_bin} --port {cs_port} --host 0.0.0.0 '
+            f'--auth none --disable-telemetry --disable-workspace-trust '
+            f'$HOME'
         )
         # >>> END CUSTOM <<<
         await ssh.run_background(cmd, log_file=log_file)
@@ -821,15 +1024,27 @@ class MachineManager:
                 f"no_proxy=localhost,127.0.0.1 curl -s --max-time 2 -o /dev/null -w '%{{http_code}}' http://localhost:{cs_port}",
                 timeout=5,
             )
-            if stdout.strip() == "200":
-                logger.info(f"code-server started on {machine.host}:{cs_port}")
+            if stdout.strip() == '200':
+                logger.info(f'code-server started on {machine.host}:{cs_port}')
                 return
-        logger.warning(f"code-server may not have started on {machine.host}:{cs_port}")
+        logger.warning(f'code-server may not have started on {machine.host}:{cs_port}')
 
-    async def _wait_healthy(self, ssh: SSHClient, machine: MachineInfo, timeout: int = 180) -> None:
-        """Wait for agent-server to become healthy."""
+    async def _wait_healthy(
+        self, ssh: SSHClient, machine: MachineInfo, timeout: int = 180
+    ) -> None:
+        """Wait for agent-server to become healthy.
+
+        Uses provisioner's platform-aware methods (is_agent_server_alive,
+        tail_agent_log) so this works on both Linux and Windows.
+        """
         port = machine.agent_server_port
-        log_file = f"$HOME/.hiclaw/logs/agent-server-{machine.id}.log"
+        log_file = f'$HOME/.hiclaw/logs/agent-server-{machine.id}.log'
+        # Platform-aware provisioner for log reads + liveness checks
+        provisioner = make_provisioner(
+            ssh,
+            os_type=machine.os_type,
+            template=machine.template,
+        )
         start = asyncio.get_event_loop().time()
         attempt = 0
         # Wait a few seconds before first check — agent-server needs time to import modules
@@ -839,20 +1054,21 @@ class MachineManager:
             elapsed = int(asyncio.get_event_loop().time() - start)
 
             # Check if process is still alive — fail fast if it crashed
-            proc_out, _, _ = await ssh.run(
-                f"pgrep -f 'agent.server --port {port}' >/dev/null 2>&1 && echo ALIVE || echo DEAD",
-                timeout=5,
-            )
-            if proc_out.strip() == "DEAD":
+            alive = await provisioner.is_agent_server_alive(port)
+            if not alive:
                 # Process crashed — read log tail for error details
-                log_out, _, _ = await ssh.run(f"tail -30 {log_file} 2>/dev/null", timeout=5)
-                error_detail = log_out.strip()[-1000:] if log_out.strip() else "No log output"
-                self._broadcast_event(machine.id, ProvisionEvent(
-                    step=ProvisionStep.HEALTH_CHECK, status="started",
-                    detail=f"agent-server crashed! Log: {error_detail[:500]}",
-                ))
+                error_detail = await provisioner.tail_agent_log(log_file, lines=30)
+                error_detail = error_detail[-1000:] if error_detail else 'No log output'
+                self._broadcast_event(
+                    machine.id,
+                    ProvisionEvent(
+                        step=ProvisionStep.HEALTH_CHECK,
+                        status='started',
+                        detail=f'agent-server crashed! Log: {error_detail[:500]}',
+                    ),
+                )
                 raise RuntimeError(
-                    f"agent-server process died. Last log:\n{error_detail}"
+                    f'agent-server process died. Last log:\n{error_detail}'
                 )
 
             try:
@@ -861,33 +1077,47 @@ class MachineManager:
                     timeout=5,
                 )
                 code = stdout.strip()
-                if code == "200":
+                if code == '200':
                     return
                 # Broadcast progress so frontend knows it's still trying
                 if attempt % 3 == 0:
-                    self._broadcast_event(machine.id, ProvisionEvent(
-                        step=ProvisionStep.HEALTH_CHECK, status="started",
-                        detail=f"Waiting... ({elapsed}s, HTTP {code})",
-                    ))
-                    logger.info(f"[{machine.host}] Health check attempt {attempt}: HTTP {code} ({elapsed}s)")
+                    self._broadcast_event(
+                        machine.id,
+                        ProvisionEvent(
+                            step=ProvisionStep.HEALTH_CHECK,
+                            status='started',
+                            detail=f'Waiting... ({elapsed}s, HTTP {code})',
+                        ),
+                    )
+                    logger.info(
+                        f'[{machine.host}] Health check attempt {attempt}: HTTP {code} ({elapsed}s)'
+                    )
             except Exception as e:
                 if attempt % 3 == 0:
-                    self._broadcast_event(machine.id, ProvisionEvent(
-                        step=ProvisionStep.HEALTH_CHECK, status="started",
-                        detail=f"Waiting... ({elapsed}s, {type(e).__name__})",
-                    ))
-                    logger.info(f"[{machine.host}] Health check attempt {attempt}: {e} ({elapsed}s)")
+                    self._broadcast_event(
+                        machine.id,
+                        ProvisionEvent(
+                            step=ProvisionStep.HEALTH_CHECK,
+                            status='started',
+                            detail=f'Waiting... ({elapsed}s, {type(e).__name__})',
+                        ),
+                    )
+                    logger.info(
+                        f'[{machine.host}] Health check attempt {attempt}: {e} ({elapsed}s)'
+                    )
             await asyncio.sleep(3)
         # Timed out — grab log for debugging
-        log_out, _, _ = await ssh.run(f"tail -30 {log_file} 2>/dev/null", timeout=5)
+        log_out = await provisioner.tail_agent_log(log_file, lines=30)
         raise TimeoutError(
-            f"Agent-server health check timed out after {timeout}s. "
-            f"Last log:\n{log_out.strip()[-1000:]}"
+            f'Agent-server health check timed out after {timeout}s. '
+            f'Last log:\n{log_out[-1000:]}'
         )
 
     # ─── Query / Lifecycle ──────────────────────────────
 
-    async def _reconnect_health_checks(self, ssh: SSHClient, machine: MachineInfo, req: ConnectMachineRequest) -> None:
+    async def _reconnect_health_checks(
+        self, ssh: SSHClient, machine: MachineInfo, req: ConnectMachineRequest
+    ) -> None:
         """Run all health checks when reusing an existing READY machine.
 
         Checks (in background, non-blocking):
@@ -898,64 +1128,70 @@ class MachineManager:
         """
         _host = machine.host
         try:
-            logger.info(f"[{_host}] Reconnect health checks starting")
+            logger.info(f'[{_host}] Reconnect health checks starting')
 
             # 1. Workspace
             if req.workspace != machine.workspace:
-                logger.info(f"[{_host}] Workspace changed: {machine.workspace} → {req.workspace}")
+                logger.info(
+                    f'[{_host}] Workspace changed: {machine.workspace} → {req.workspace}'
+                )
                 machine.workspace = req.workspace
-            await ssh.run(f"mkdir -p {machine.workspace}", timeout=5)
+            await ssh.run(f'mkdir -p {machine.workspace}', timeout=5)
 
             # 2. Code-server health
             if machine.code_server_port:
                 try:
                     cs_out, _, _ = await ssh.run(
                         f"no_proxy=localhost,127.0.0.1 curl -s -o /dev/null -w '%{{http_code}}' "
-                        f"--max-time 3 http://localhost:{machine.code_server_port}/healthz",
+                        f'--max-time 3 http://localhost:{machine.code_server_port}/healthz',
                         timeout=5,
                     )
-                    if cs_out.strip() != "200":
-                        logger.warning(f"[{_host}] Code-server not healthy, restarting")
+                    if cs_out.strip() != '200':
+                        logger.warning(f'[{_host}] Code-server not healthy, restarting')
                         await self._start_code_server(ssh, machine)
                     else:
-                        logger.info(f"[{_host}] Code-server healthy")
+                        logger.info(f'[{_host}] Code-server healthy')
                 except Exception as e:
-                    logger.warning(f"[{_host}] Code-server check failed: {e}")
+                    logger.warning(f'[{_host}] Code-server check failed: {e}')
 
             # 3. Public skills → deploy to ~/.openhands/skills/ (user skills dir)
             # SDK loads user skills directly from filesystem, no git involved.
             # App-server passes load_public=false for remote workers, so SDK
             # won't try git fetch from GitHub at all.
-            _home_out, _, _ = await ssh.run("echo $HOME", timeout=3)
-            _remote_home = _home_out.strip() or "/root"
-            _user_skills = f"{_remote_home}/.openhands/skills"
-            _remote_tmp = f"{_remote_home}/.hiclaw/tmp"
+            _home_out, _, _ = await ssh.run('echo $HOME', timeout=3)
+            _remote_home = _home_out.strip() or '/root'
+            _user_skills = f'{_remote_home}/.openhands/skills'
+            _remote_tmp = f'{_remote_home}/.hiclaw/tmp'
 
             # Check if user skills dir has any .md files (actual skills)
             _has_skills, _, _ = await ssh.run(
                 f"find {_user_skills} -name '*.md' -type f 2>/dev/null | head -1 | grep -q . && echo YES || echo NO",
                 timeout=5,
             )
-            logger.info(f"[{_host}] User skills check: {_has_skills.strip()}")
-            if "YES" not in _has_skills:
+            logger.info(f'[{_host}] User skills check: {_has_skills.strip()}')
+            if 'YES' not in _has_skills:
                 extensions_bundle = os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)), "deps", "openhands-extensions.bundle"
+                    os.path.dirname(os.path.dirname(__file__)),
+                    'deps',
+                    'openhands-extensions.bundle',
                 )
-                logger.info(f"[{_host}] Bundle: {extensions_bundle}, exists={os.path.exists(extensions_bundle)}")
+                logger.info(
+                    f'[{_host}] Bundle: {extensions_bundle}, exists={os.path.exists(extensions_bundle)}'
+                )
                 if os.path.exists(extensions_bundle):
-                    await ssh.run(f"mkdir -p {_remote_tmp}", timeout=5)
-                    logger.info(f"[{_host}] Uploading public skills bundle via SSH...")
+                    await ssh.run(f'mkdir -p {_remote_tmp}', timeout=5)
+                    logger.info(f'[{_host}] Uploading public skills bundle via SSH...')
                     await ssh.upload_file(
                         extensions_bundle,
-                        f"{_remote_tmp}/openhands-extensions.bundle",
+                        f'{_remote_tmp}/openhands-extensions.bundle',
                     )
                     # Clone to temp, then copy skills/ contents to user skills dir
                     clone_out, _, clone_ec = await ssh.run(
-                        f"rm -rf {_remote_tmp}/_extensions && "
-                        f"git clone {_remote_tmp}/openhands-extensions.bundle {_remote_tmp}/_extensions 2>&1 && "
-                        f"mkdir -p {_user_skills} && "
-                        f"cp -r {_remote_tmp}/_extensions/skills/* {_user_skills}/ 2>/dev/null; "
-                        f"rm -rf {_remote_tmp}/_extensions {_remote_tmp}/openhands-extensions.bundle",
+                        f'rm -rf {_remote_tmp}/_extensions && '
+                        f'git clone {_remote_tmp}/openhands-extensions.bundle {_remote_tmp}/_extensions 2>&1 && '
+                        f'mkdir -p {_user_skills} && '
+                        f'cp -r {_remote_tmp}/_extensions/skills/* {_user_skills}/ 2>/dev/null; '
+                        f'rm -rf {_remote_tmp}/_extensions {_remote_tmp}/openhands-extensions.bundle',
                         timeout=30,
                     )
                     # Verify
@@ -963,18 +1199,24 @@ class MachineManager:
                         f"find {_user_skills} -name '*.md' -type f 2>/dev/null | head -1 | grep -q . && echo OK || echo FAIL",
                         timeout=5,
                     )
-                    logger.info(f"[{_host}] Public skills deploy to user dir: {_verify.strip()} (clone ec={clone_ec})")
-                    if "FAIL" in _verify:
-                        logger.warning(f"[{_host}] Clone output: {clone_out.strip()[:500]}")
+                    logger.info(
+                        f'[{_host}] Public skills deploy to user dir: {_verify.strip()} (clone ec={clone_ec})'
+                    )
+                    if 'FAIL' in _verify:
+                        logger.warning(
+                            f'[{_host}] Clone output: {clone_out.strip()[:500]}'
+                        )
                 else:
-                    logger.warning(f"[{_host}] No bundle at {extensions_bundle}")
+                    logger.warning(f'[{_host}] No bundle at {extensions_bundle}')
 
             # 4. Custom skills sync
             await self._clone_skills_repo(ssh, machine)
-            logger.info(f"[{_host}] Reconnect health checks done")
+            logger.info(f'[{_host}] Reconnect health checks done')
 
         except Exception as e:
-            logger.warning(f"[{_host}] Reconnect health checks failed: {e}", exc_info=True)
+            logger.warning(
+                f'[{_host}] Reconnect health checks failed: {e}', exc_info=True
+            )
 
     def get_machine(self, machine_id: str) -> MachineInfo | None:
         return self._machines.get(machine_id)
@@ -999,19 +1241,19 @@ class MachineManager:
 
         # Check 1: SSH session alive
         if not ssh or not ssh.connected:
-            logger.warning(f"[{machine.host}] SSH client missing or disconnected")
+            logger.warning(f'[{machine.host}] SSH client missing or disconnected')
             machine.status = MachineStatus.DISCONNECTED
-            machine.error = "SSH connection lost"
+            machine.error = 'SSH connection lost'
             _save_machines_state(self._machines)
             return False
 
         # Check 2: SSH responds to a noop command quickly
         try:
-            await asyncio.wait_for(ssh.run("true", timeout=3), timeout=4)
+            await asyncio.wait_for(ssh.run('true', timeout=3), timeout=4)
         except Exception as e:
-            logger.warning(f"[{machine.host}] SSH ping failed: {e}")
+            logger.warning(f'[{machine.host}] SSH ping failed: {e}')
             machine.status = MachineStatus.DISCONNECTED
-            machine.error = f"SSH unresponsive: {e}"
+            machine.error = f'SSH unresponsive: {e}'
             _save_machines_state(self._machines)
             return False
 
@@ -1020,19 +1262,21 @@ class MachineManager:
             try:
                 async with httpx.AsyncClient() as client:
                     resp = await client.get(
-                        f"http://localhost:{machine.tunnel_port}/health",
+                        f'http://localhost:{machine.tunnel_port}/health',
                         timeout=3,
                     )
                     if resp.status_code != 200:
-                        logger.warning(f"[{machine.host}] Tunnel health returned {resp.status_code}")
+                        logger.warning(
+                            f'[{machine.host}] Tunnel health returned {resp.status_code}'
+                        )
                         machine.status = MachineStatus.DISCONNECTED
-                        machine.error = f"Tunnel returned HTTP {resp.status_code}"
+                        machine.error = f'Tunnel returned HTTP {resp.status_code}'
                         _save_machines_state(self._machines)
                         return False
             except Exception as e:
-                logger.warning(f"[{machine.host}] Tunnel health probe failed: {e}")
+                logger.warning(f'[{machine.host}] Tunnel health probe failed: {e}')
                 machine.status = MachineStatus.DISCONNECTED
-                machine.error = f"Tunnel unreachable: {e}"
+                machine.error = f'Tunnel unreachable: {e}'
                 _save_machines_state(self._machines)
                 return False
 
@@ -1049,13 +1293,13 @@ class MachineManager:
         """
         creds = self._credentials.get(machine_id)
         if not creds:
-            return False, "no_saved_credentials"
+            return False, 'no_saved_credentials'
 
         machine = self._machines.get(machine_id)
         if not machine:
-            return False, "machine_not_found"
+            return False, 'machine_not_found'
 
-        logger.info(f"[{machine.host}] Auto-reconnecting using saved credentials...")
+        logger.info(f'[{machine.host}] Auto-reconnecting using saved credentials...')
         # Clean up stale state first
         await self._cleanup_machine(machine_id)
         # Remove machine entry so connect_machine creates fresh
@@ -1070,16 +1314,19 @@ class MachineManager:
                 username=creds['username'],
                 password=creds.get('password'),
                 private_key=creds.get('private_key'),
-                mode=WorkerMode(mode_value) if not isinstance(mode_value, WorkerMode) else mode_value,
+                mode=WorkerMode(mode_value)
+                if not isinstance(mode_value, WorkerMode)
+                else mode_value,
                 template=creds.get('template', 'openhands'),
                 workspace=creds.get('workspace', ''),
                 agent_server_port=creds.get('agent_server_port', 8000),
             )
             await self.connect_machine(req)
-            return True, "reconnecting"
+            return True, 'reconnecting'
         except Exception as e:
-            logger.error(f"[{machine.host}] Auto-reconnect failed: {e}", exc_info=True)
-            return False, f"reconnect_failed: {e}"
+            logger.error(f'[{machine.host}] Auto-reconnect failed: {e}', exc_info=True)
+            return False, f'reconnect_failed: {e}'
+
     # >>> END CUSTOM <<<
 
     def get_ssh_client(self, machine_id: str) -> SSHClient | None:
@@ -1104,11 +1351,14 @@ class MachineManager:
         try:
             if ssh and ssh.connected and machine:
                 if machine.mode == WorkerMode.DOCKER:
-                    await ssh.run(f"docker rm -f agent-server-{machine_id}", timeout=30)
+                    await ssh.run(f'docker rm -f agent-server-{machine_id}', timeout=30)
                 else:
-                    await ssh.run(f"pkill -f 'agent.server --port {machine.agent_server_port}' || true", timeout=10)
+                    await ssh.run(
+                        f"pkill -f 'agent.server --port {machine.agent_server_port}' || true",
+                        timeout=10,
+                    )
         except Exception as e:
-            logger.warning(f"Cleanup error for machine {machine_id}: {e}")
+            logger.warning(f'Cleanup error for machine {machine_id}: {e}')
 
         self._local_ports.pop(machine_id, None)
         listener = self._listeners.pop(machine_id, None)
@@ -1123,4 +1373,4 @@ class MachineManager:
         self._event_queues.pop(machine_id, None)
         self._provision_locks.pop(machine_id, None)
         _save_machines_state(self._machines)  # >>> CUSTOM: HiClaw <<<
-        logger.info(f"Machine {machine_id} cleaned up")
+        logger.info(f'Machine {machine_id} cleaned up')

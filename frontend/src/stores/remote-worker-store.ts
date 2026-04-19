@@ -1,6 +1,8 @@
 // >>> CUSTOM: HiClaw — remote machine store <<<
 import { create } from "zustand";
 
+export type OsType = "linux" | "windows";
+
 export interface RemoteMachineConfig {
   host: string;
   port: number;
@@ -9,6 +11,9 @@ export interface RemoteMachineConfig {
   mode: "docker" | "host";
   workspace: string;
   template: string;
+  // >>> CUSTOM: HiClaw — OS of the remote worker; picks Linux vs Windows provisioner
+  osType: OsType;
+  // >>> END CUSTOM <<<
 }
 
 export interface ProvisionEvent {
@@ -34,21 +39,31 @@ function loadSavedConfig(): Partial<RemoteMachineConfig> {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) return JSON.parse(saved);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return {};
 }
 
 function saveConfig(config: RemoteMachineConfig) {
   try {
     // Save everything including password for convenience
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      host: config.host,
-      port: config.port,
-      username: config.username,
-      password: config.password,
-      workspace: config.workspace,
-    }));
-  } catch { /* ignore */ }
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: config.password,
+        workspace: config.workspace,
+        // >>> CUSTOM: HiClaw — persist OS type so user doesn't re-pick every time
+        osType: config.osType,
+        // >>> END CUSTOM <<<
+      }),
+    );
+  } catch {
+    /* ignore */
+  }
 }
 
 const savedConfig = loadSavedConfig();
@@ -89,6 +104,10 @@ export const useRemoteWorkerStore = create<RemoteMachineStore>((set) => ({
     mode: "host",
     workspace: savedConfig.workspace || "",
     template: "openhands",
+    // >>> CUSTOM: HiClaw — default to Linux; falls back to linux if stored
+    // value is missing or unexpected <<<
+    osType: savedConfig.osType === "windows" ? "windows" : "linux",
+    // >>> END CUSTOM <<<
   },
   // Route through app-server proxy so browser doesn't need direct access to 9090
   workerManagerUrl: "/runtime/manager",

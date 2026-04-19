@@ -14,7 +14,15 @@ function WorkspaceAutocomplete({
 }: {
   value: string;
   onChange: (v: string) => void;
-  config: { host: string; port: number; username: string; password: string };
+  config: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    // >>> CUSTOM: HiClaw — OS type so backend picks Linux/Windows enumerator <<<
+    osType?: "linux" | "windows";
+    // >>> END CUSTOM <<<
+  };
 }) {
   const [suggestions, setSuggestions] = React.useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = React.useState(false);
@@ -34,6 +42,9 @@ function WorkspaceAutocomplete({
           port: config.port,
           username: config.username,
           password: config.password,
+          // >>> CUSTOM: HiClaw — let backend pick Linux vs Windows path enum <<<
+          os_type: config.osType || "linux",
+          // >>> END CUSTOM <<<
         }),
       });
       if (resp.ok) {
@@ -45,12 +56,21 @@ function WorkspaceAutocomplete({
     } finally {
       setLoading(false);
     }
-  }, [config.host, config.port, config.username, config.password]);
+  }, [
+    config.host,
+    config.port,
+    config.username,
+    config.password,
+    config.osType,
+  ]);
 
   // Close on click outside
   React.useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(e.target as Node)
+      ) {
         setShowSuggestions(false);
       }
     };
@@ -88,7 +108,9 @@ function WorkspaceAutocomplete({
       {showSuggestions && (filtered.length > 0 || loading) && (
         <div className="absolute bottom-full left-0 right-0 mb-1 max-h-48 overflow-y-auto bg-neutral-800 border border-neutral-600 rounded-lg shadow-lg z-50">
           {loading && (
-            <div className="px-3 py-2 text-xs text-neutral-500">Loading directories...</div>
+            <div className="px-3 py-2 text-xs text-neutral-500">
+              Loading directories...
+            </div>
           )}
           {filtered.map((dir) => (
             <button
@@ -118,7 +140,9 @@ export function RemoteWorkerPanel() {
           onChange={(e) => setEnabled(e.target.checked)}
           className="accent-blue-500 w-3.5 h-3.5"
         />
-        <span className="text-xs font-medium text-neutral-300">Remote Machine</span>
+        <span className="text-xs font-medium text-neutral-300">
+          Remote Machine
+        </span>
       </label>
 
       {enabled && (
@@ -135,7 +159,9 @@ export function RemoteWorkerPanel() {
             <input
               type="number"
               value={config.port}
-              onChange={(e) => setConfig({ port: parseInt(e.target.value) || 22 })}
+              onChange={(e) =>
+                setConfig({ port: parseInt(e.target.value) || 22 })
+              }
               placeholder="Port"
               className="w-16 px-3 py-1.5 bg-tertiary border border-neutral-600 rounded-lg text-sm text-content placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition"
             />
@@ -157,14 +183,32 @@ export function RemoteWorkerPanel() {
               className="flex-1 px-3 py-1.5 bg-tertiary border border-neutral-600 rounded-lg text-sm text-content placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition"
             />
           </div>
-          {/* Row 3: Mode + Workspace with autocomplete */}
-          <div className="flex gap-2">
+          {/* Row 3: OS selector + Mode + Workspace */}
+          <div className="flex gap-2 items-center">
+            {/* eslint-disable-next-line i18next/no-literal-string */}
+            <span className="text-[10px] text-neutral-500 shrink-0">OS</span>
+            <select
+              value={config.osType}
+              onChange={(e) =>
+                setConfig({ osType: e.target.value as "linux" | "windows" })
+              }
+              className="w-20 px-2 py-1.5 bg-tertiary border border-neutral-600 rounded-lg text-sm text-content focus:outline-none focus:border-blue-500 transition"
+            >
+              {/* eslint-disable-next-line i18next/no-literal-string */}
+              <option value="linux">Linux</option>
+              {/* eslint-disable-next-line i18next/no-literal-string */}
+              <option value="windows">Windows</option>
+            </select>
             <select
               value={config.mode}
-              onChange={(e) => setConfig({ mode: e.target.value as "docker" | "host" })}
+              onChange={(e) =>
+                setConfig({ mode: e.target.value as "docker" | "host" })
+              }
               className="w-24 px-2 py-1.5 bg-tertiary border border-neutral-600 rounded-lg text-sm text-content focus:outline-none focus:border-blue-500 transition"
             >
+              {/* eslint-disable-next-line i18next/no-literal-string */}
               <option value="host">Host</option>
+              {/* eslint-disable-next-line i18next/no-literal-string */}
               <option value="docker">Docker</option>
             </select>
             <WorkspaceAutocomplete
